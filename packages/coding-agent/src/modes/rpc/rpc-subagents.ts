@@ -198,6 +198,7 @@ export class RpcSubagentRegistry {
 			assignment: existing?.assignment,
 			sessionFile,
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
+			parentSubagentId: payload.parentSubagentId ?? existing?.parentSubagentId,
 			lastUpdate: Date.now(),
 			progress: existing?.progress,
 		};
@@ -232,6 +233,7 @@ export class RpcSubagentRegistry {
 			sessionFile,
 			lastUpdate: Date.now(),
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
+			parentSubagentId: payload.parentSubagentId ?? existing?.parentSubagentId,
 			progress,
 		});
 		if (this.#subscriptionLevel !== "off") {

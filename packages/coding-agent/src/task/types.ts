@@ -71,6 +71,8 @@ export interface SubagentProgressPayload {
 	agentSource: AgentSource;
 	task: string;
 	parentToolCallId?: string;
+	/** Registry id of the spawning subagent for nested spawns; absent at the root. */
+	parentSubagentId?: string;
 	assignment?: string;
 	progress: AgentProgress;
 	sessionFile?: string;
@@ -93,6 +95,8 @@ export interface SubagentLifecyclePayload {
 	status: "started" | "completed" | "failed" | "aborted";
 	sessionFile?: string;
 	parentToolCallId?: string;
+	/** Registry id of the spawning subagent for nested spawns; absent at the root. */
+	parentSubagentId?: string;
 	index: number;
 	/**
 	 * Spawn runs as a detached background job: the parent turn keeps working

@@ -3758,6 +3758,10 @@ export class AgentSession {
 		this.#recordSessionExit(options.reason ?? "dispose");
 		this.#cancelExitRecorder?.();
 		this.#cancelExitRecorder = undefined;
+		if (this.#todoAutoClearTimer) {
+			clearTimeout(this.#todoAutoClearTimer);
+			this.#todoAutoClearTimer = undefined;
+		}
 		try {
 			await emitSessionShutdownEvent(this.#extensionRunner);
 		} catch (error) {
@@ -6039,6 +6043,54 @@ export class AgentSession {
 
 	setTodoPhases(phases: TodoPhase[]): void {
 		this.#todo.setPhases(phases);
+		this.#syncTodoAutoClearTimer();
+	}
+
+	// ── tasks.todoClearDelay (session-side auto-clear) ─────────────────────
+	// Previously the auto-clear timer lived only in the TUI (interactive-mode),
+	// so RPC/GUI sessions never cleared closed todos — and the todo_auto_clear
+	// wire event both UIs already handle had no emitter. Now the session owns
+	// it: closed tasks are dropped after the configured delay and the event
+	// fires on the bus for every client.
+	#todoAutoClearTimer: NodeJS.Timeout | undefined;
+
+	#syncTodoAutoClearTimer(): void {
+		if (this.#todoAutoClearTimer) {
+			clearTimeout(this.#todoAutoClearTimer);
+			this.#todoAutoClearTimer = undefined;
+		}
+		const delaySeconds = this.settings.get("tasks.todoClearDelay");
+		if (!Number.isFinite(delaySeconds) || delaySeconds < 0) return;
+		const hasClosed = this.#todo.phases.some(phase =>
+			phase.tasks.some(task => task.status === "completed" || task.status === "abandoned"),
+		);
+		if (!hasClosed) return;
+		if (delaySeconds === 0) {
+			this.#autoClearClosedTodos();
+			return;
+		}
+		this.#todoAutoClearTimer = setTimeout(() => {
+			this.#todoAutoClearTimer = undefined;
+			this.#autoClearClosedTodos();
+		}, delaySeconds * 1000);
+		this.#todoAutoClearTimer.unref?.();
+	}
+
+	#autoClearClosedTodos(): void {
+		const phases = this.#todo.phases;
+		const next: TodoPhase[] = [];
+		let removed = 0;
+		for (const phase of phases) {
+			const tasks = phase.tasks.filter(task => {
+				const closed = task.status === "completed" || task.status === "abandoned";
+				if (closed) removed++;
+				return !closed;
+			});
+			if (tasks.length > 0) next.push({ ...phase, tasks });
+		}
+		if (removed === 0) return;
+		this.#todo.setPhases(next);
+		this.#emit({ type: "todo_auto_clear" });
 	}
 
 	#buildReplanTitleContext(): string {

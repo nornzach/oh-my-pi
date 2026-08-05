@@ -428,6 +428,10 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle plan mode (agent plans before executing)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
+		// No text-mode `handle` on purpose: RPC/ACP hosts drive plan mode through
+		// the dedicated `set_plan_mode` command + `plan_approval` flow
+		// (rpc-plan.ts), the RPC-native equivalent of this toggle. Giving `/plan`
+		// a `handle` would create a second, divergent entry path.
 		getTuiAutocompleteDescription: runtime => {
 			if (!runtime.ctx.settings.get("plan.enabled" as SettingPath)) return "Plan: disabled in settings";
 			if (runtime.ctx.planModeEnabled) {
@@ -531,6 +535,23 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Queue a message for after the agent yields",
 		inlineHint: "<message>",
 		allowArgs: true,
+		// Text-mode (ACP/RPC) path. Mirrors the TUI's #queueForYield decision:
+		// queue on the agent's follow-up queue while a turn (or compaction, or a
+		// backlog of queued messages) is in flight; start immediately as a normal
+		// prompt when idle. The TUI keeps its richer editor-aware handleTui
+		// (pending-image attach, `->`/`=>` multi-message split, compaction store).
+		handle: async (command, runtime) => {
+			const message = command.args.trim();
+			if (!message) {
+				await runtime.output("Usage: /queue <message>");
+				return;
+			}
+			if (runtime.session.isStreaming || runtime.session.isCompacting || runtime.session.queuedMessageCount > 0) {
+				await runtime.session.followUp(message);
+				return;
+			}
+			return { prompt: message };
+		},
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleQueueCommand(command.args);
 		},

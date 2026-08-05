@@ -17,6 +17,8 @@ import { $env, isRecord, readLines, Snowflake } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
+	type ExtensionAskDialogQuestion,
+	type ExtensionAskDialogResult,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
@@ -25,20 +27,42 @@ import {
 } from "../../extensibility/extensions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
-import { type Theme, theme } from "../../modes/theme/theme";
+import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
+import { sttClient } from "../../stt/asr-client";
+import { resolveSttModelSpec } from "../../stt/models";
+import { DEFAULT_TTS_VOICE } from "../../tts/models";
+import { ttsClient } from "../../tts/tts-client";
+import { decodeWav, encodeWav } from "../../tts/wav";
 import type { EventBus } from "../../utils/event-bus";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { initializeExtensions } from "../runtime-init";
+import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
+import { buildRpcProvidersResult, buildRpcSettingsSchema, buildRpcUsageResult } from "./rpc-extensions";
+import {
+	buildRpcHooksResult,
+	buildRpcMarketplacesResult,
+	buildRpcMcpServersResult,
+	buildRpcMemoryReport,
+	buildRpcPluginsResult,
+	buildRpcPromptTemplatesResult,
+	buildRpcSkillsResult,
+} from "./rpc-domains";
+import { applyRpcHookEnabled, applyRpcMcpAction, applyRpcPluginEnabled, applyRpcSkillEnabled } from "./rpc-actions";
+import { MODEL_ROLES, getKnownRoleIds, getRoleInfo, type ModelRole } from "../../config/model-roles";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { RpcGoalModeController, RpcLoopModeController, RpcVibeModeController } from "./rpc-modes";
+import { RpcPlanApprovalController } from "./rpc-plan";
+import { buildRpcSessionTree } from "./rpc-session-tree";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import type {
 	RpcCommand,
@@ -101,15 +125,16 @@ type RpcOutput = (
 
 export type RpcSessionChangeCommand = Extract<
 	RpcCommand,
-	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" }
+	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" } | { type: "fork" }
 >;
 
 export type RpcSessionChangeResult =
 	| { type: "new_session"; data: { cancelled: boolean } }
 	| { type: "switch_session"; data: { cancelled: boolean } }
-	| { type: "branch"; data: { text: string; cancelled: boolean } };
+	| { type: "branch"; data: { text: string; cancelled: boolean } }
+	| { type: "fork"; data: { cancelled: boolean } };
 
-export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch">;
+export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true };
@@ -304,17 +329,19 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 /**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * Bash commands are dispatched in the background so the caller can keep reading
- * subsequent frames while a shell command is still running. This lets a client
- * send `abort_bash` while a long-running `bash` is in flight. Response
- * correlation is preserved via each command's `id`; ordering across concurrent
- * commands is not guaranteed and clients MUST match on `id`.
+ * Bash and eval commands are dispatched in the background so the caller can
+ * keep reading subsequent frames while a shell command or eval cell is still
+ * running. This lets a client send `abort_bash`/`abort_eval` while a
+ * long-running execution is in flight. Response correlation is preserved via
+ * each command's `id`; ordering across concurrent commands is not guaranteed
+ * and clients MUST match on `id`.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
- *   background (`bash`). Otherwise a promise that resolves once the response
- *   for the command has been emitted via `output`. Errors from `handleCommand`
- *   on non-`bash` commands propagate; the caller is expected to wrap them.
+ *   background (`bash`/`eval`). Otherwise a promise that resolves once the
+ *   response for the command has been emitted via `output`. Errors from
+ *   `handleCommand` on non-background commands propagate; the caller is
+ *   expected to wrap them.
  */
 export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps): Promise<void> | undefined {
 	if (dispatchRpcControlFrame(parsed, deps)) return undefined;
@@ -324,17 +351,17 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// the union here.
 	const command = parsed as RpcCommand;
 
-	// `bash` can run for a long time. Dispatch it in the background so a
-	// subsequent `abort_bash` frame can be read and handled without waiting
-	// for the shell command to finish on its own. The response is emitted
-	// when `handleCommand` resolves; clients correlate via `command.id`.
-	if (command.type === "bash") {
+	// `bash`/`eval` can run for a long time. Dispatch them in the background so
+	// a subsequent `abort_bash`/`abort_eval` frame can be read and handled
+	// without waiting for the execution to finish on its own. The response is
+	// emitted when `handleCommand` resolves; clients correlate via `command.id`.
+	if (command.type === "bash" || command.type === "eval") {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
-				deps.output(deps.errorResponse(command.id, "bash", message));
+				deps.output(deps.errorResponse(command.id, command.type, message));
 			}
 		})();
 		deps.trackBackgroundTask?.(task);
@@ -364,7 +391,7 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
-			if (command.type === "bash") {
+			if (command.type === "bash" || command.type === "eval") {
 				dispatchRpcInputFrame(command, this.#deps);
 				return;
 			}
@@ -488,6 +515,12 @@ export async function handleRpcSessionChange(
 			const result = await session.branch(command.entryId);
 			if (!result.cancelled) subagentRegistry?.clear();
 			return { type: "branch", data: { text: result.selectedText, cancelled: result.cancelled } };
+		}
+
+		case "fork": {
+			const cancelled = !(await session.fork());
+			if (!cancelled) subagentRegistry?.clear();
+			return { type: "fork", data: { cancelled } };
 		}
 	}
 	throw new Error("Unsupported RPC session change command");
@@ -687,15 +720,6 @@ export async function runRpcMode(
 			// stdout gone (host exited) — nothing left to deliver; keep the queue alive.
 			.catch(() => {});
 	};
-	writeFrames(
-		frameEncoder.encodeFrames({
-			type: "ready",
-			protocolVersion: 1,
-			supportedProtocolVersions: [1, 2],
-			maxFrameBytes: MAX_RPC_FRAME_BYTES,
-			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		}),
-	);
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeFrames(frameEncoder.encodeFrames(obj));
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
@@ -724,6 +748,21 @@ export async function runRpcMode(
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
 	const subagentRegistry = eventBus ? new RpcSubagentRegistry(eventBus, output) : undefined;
+	const planApprovalController = new RpcPlanApprovalController({
+		session,
+		output,
+		onError: err => output(error(undefined, "plan_approval", err.message)),
+	});
+	const vibeModeController = new RpcVibeModeController(session);
+	const goalModeController = new RpcGoalModeController({
+		session,
+		onError: err => output(error(undefined, "goal", err.message)),
+	});
+	const loopModeController = new RpcLoopModeController({
+		session,
+		output,
+		onError: err => output(error(undefined, "loop", err.message)),
+	});
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -787,6 +826,27 @@ export async function runRpcMode(
 				undefined,
 				{ method: "input", title, placeholder, timeout: dialogOptions?.timeout },
 				response => parseValueDialogResponse(response, dialogOptions),
+			);
+		}
+
+		askDialog(
+			questions: ExtensionAskDialogQuestion[],
+			dialogOptions?: ExtensionUIDialogOptions,
+		): Promise<ExtensionAskDialogResult | undefined> {
+			return requestRpcDialog(
+				this.pendingRequests,
+				this.output,
+				dialogOptions,
+				undefined,
+				{ method: "askDialog", questions, timeout: dialogOptions?.timeout },
+				response => {
+					if ("cancelled" in response && response.cancelled) {
+						if (response.timedOut) dialogOptions?.onTimeout?.();
+						return undefined;
+					}
+					if ("askDialog" in response) return response.askDialog;
+					return undefined;
+				},
 			);
 		}
 
@@ -952,6 +1012,39 @@ export async function runRpcMode(
 	session.subscribe(event => {
 		output(event);
 	});
+	// Plan proposals and mode lifecycle ride a second subscription: plan
+	// proposals emit `plan_proposal` and silently stop the proposal turn while
+	// the host reviews; goal/loop drive their TUI-mirrored transitions.
+	session.subscribe(event => {
+		void planApprovalController.handleSessionEvent(event).catch(err => {
+			output(error(undefined, "plan_approval", err instanceof Error ? err.message : String(err)));
+		});
+		void goalModeController.handleSessionEvent(event).catch(err => {
+			output(error(undefined, "goal", err instanceof Error ? err.message : String(err)));
+		});
+		if (event.type === "agent_end") loopModeController.onAgentEnd();
+	});
+	// A resumed session may already carry plan mode from the journal.
+	planApprovalController.syncArmed();
+
+	// plan.defaultOnStartup: the TUI and print mode arm plan mode on a fresh
+	// boot session; the RPC boot path missed it, so GUI sessions never
+	// inherited the default (audit finding — session behavior trapped in the
+	// TUI). Mirrors print-mode's arming, minus the abort-after-proposal hook.
+	if (
+		session.settings.get("plan.defaultOnStartup") &&
+		session.settings.get("plan.enabled") &&
+		session.sessionManager.buildSessionContext().messages.length === 0 &&
+		!session.sessionManager.getEntries().some(entry => entry.type === "mode_change") &&
+		!session.getPlanModeState()?.enabled
+	) {
+		const planFilePath = session.getPlanReferencePath() || "local://PLAN.md";
+		const previousTools = session.getEnabledToolNames();
+		const planTools = session.hasBuiltInTool("write") ? [...new Set([...previousTools, "write"])] : previousTools;
+		await session.setActiveToolsByName(planTools);
+		session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
+		session.sessionManager.appendModeChange("plan", { planFilePath });
+	}
 
 	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
 	const reloadPluginState = async () => {
@@ -971,6 +1064,36 @@ export async function runRpcMode(
 	});
 	await emitAvailableCommandsUpdate();
 
+	// Send ready frame AFTER extension initialization so the GUI only sees
+	// "ready" when the command loop is actually able to process commands.
+	// Previously this was sent before initializeExtensions, which meant a
+	// crash or hang during extension setup left the GUI thinking the sidecar
+	// was responsive when it was not.
+	writeFrames(
+		frameEncoder.encodeFrames({
+			type: "ready",
+			protocolVersion: 1,
+			supportedProtocolVersions: [1, 2],
+			maxFrameBytes: MAX_RPC_FRAME_BYTES,
+			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+		}),
+	);
+
+	// Bound the background-discovery await used by model-listing commands.
+	// The RPC command queue is serial, so an unbounded
+	// `awaitBackgroundRefresh()` that stalls (headless provider/MCP discovery
+	// hanging) wedges every later command — including unrelated session
+	// switches and health probes — until the sidecar restarts. Racing it
+	// against a short timeout lets the command return current (possibly
+	// partial) models and unblock the queue; the refresh keeps running in the
+	// background and the next listing will reflect it once it completes.
+	const DISCOVERY_WAIT_MS = 4_000;
+	const awaitDiscoveryBounded = (): Promise<void> =>
+		Promise.race([
+			session.modelRegistry.awaitBackgroundRefresh(),
+			new Promise<void>(resolve => setTimeout(resolve, DISCOVERY_WAIT_MS)),
+		]);
+
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
@@ -987,6 +1110,9 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
+				// TUI captures every submitted prompt as the loop prompt while loop
+				// mode is enabled (input-controller's setLoopPrompt).
+				loopModeController.onHostPrompt(command.message);
 				const skillResult = await tryRunRpcSkillCommand(session, command.message, command.streamingBehavior);
 				if (skillResult) {
 					return success(id, "prompt", skillResult);
@@ -1048,12 +1174,16 @@ export async function runRpcMode(
 			}
 
 			case "abort": {
+				// TUI Esc pauses the loop before aborting the current iteration.
+				loopModeController.pause();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return success(id, "abort");
 			}
 
 			case "abort_and_prompt": {
+				loopModeController.pause();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				loopModeController.onHostPrompt(command.message);
 				session
 					.prompt(command.message, { images: command.images })
 					.catch(e => output(error(id, "abort_and_prompt", e.message)));
@@ -1062,9 +1192,11 @@ export async function runRpcMode(
 
 			case "new_session":
 			case "switch_session":
-			case "branch": {
+			case "branch":
+			case "fork": {
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
 				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
+				planApprovalController.syncArmed();
 				return success(id, result.type, result.data);
 			}
 
@@ -1076,15 +1208,19 @@ export async function runRpcMode(
 				const state: RpcSessionState = {
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
+					thinkingConfigured: session.configuredThinkingLevel(),
+					availableThinkingLevels: [...session.getAvailableThinkingLevels()],
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
 					steeringMode: session.steeringMode,
 					followUpMode: session.followUpMode,
 					interruptMode: session.interruptMode,
 					sessionFile: session.sessionFile,
+					cwd: session.sessionManager.getCwd(),
 					sessionId: session.sessionId,
 					sessionName: session.sessionName,
 					autoCompactionEnabled: session.autoCompactionEnabled,
+					autoRetryEnabled: session.autoRetryEnabled,
 					queuedMessageCount: session.queuedMessageCount,
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
@@ -1098,7 +1234,8 @@ export async function runRpcMode(
 						parameters: isZodSchema(tool.parameters) ? zodToWireSchema(tool.parameters) : tool.parameters,
 						examples: tool.examples,
 					})),
-					contextUsage: session.getContextUsage(),
+				contextUsage: session.getContextUsage(),
+					planModeEnabled: session.getPlanModeState()?.enabled ?? false,
 				};
 				return success(id, "get_state", state);
 			}
@@ -1191,7 +1328,7 @@ export async function runRpcMode(
 					// populate seconds after session ready. Models already in
 					// the bundled catalog skip this await entirely so the RPC
 					// queue is not stalled behind unrelated discovery.
-					await session.modelRegistry.awaitBackgroundRefresh();
+					await awaitDiscoveryBounded();
 					models = session.getAvailableModels();
 					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
 				}
@@ -1211,7 +1348,7 @@ export async function runRpcMode(
 			}
 
 			case "get_available_models": {
-				await session.modelRegistry.awaitBackgroundRefresh();
+				await awaitDiscoveryBounded();
 				const models = session.getAvailableModels();
 				return success(id, "get_available_models", { models });
 			}
@@ -1250,6 +1387,17 @@ export async function runRpcMode(
 			case "set_interrupt_mode": {
 				session.setInterruptMode(command.mode);
 				return success(id, "set_interrupt_mode");
+			}
+
+			case "dequeue": {
+				// TUI Alt+Up parity (restoreQueuedMessagesToEditor): pull user-authored
+				// queued steer/follow-up messages back out so the host can restore them
+				// into its composer. Plain (non-forInterrupt) clearQueue semantics:
+				// non-user internal steers stay queued for the continuing stream. The
+				// TUI-only compactionQueuedMessages store has no RPC counterpart — RPC
+				// steer/follow_up always enqueue on the agent queues drained here.
+				const { steering, followUp } = session.clearQueue();
+				return success(id, "dequeue", { messages: [...steering, ...followUp] });
 			}
 
 			// =================================================================
@@ -1295,6 +1443,44 @@ export async function runRpcMode(
 			}
 
 			// =================================================================
+			// Eval
+			// =================================================================
+
+			case "eval": {
+				// Same user-eval path as the TUI `$`/`$$` composer modes
+				// (AgentSession.executePython → EvalRunner): records the execution
+				// message in session history, so the pythonExecution event flows to
+				// the host like any other session event. Background-dispatched (see
+				// dispatchRpcInputFrame) so a long cell never wedges the command queue.
+				const language = command.language ?? "python";
+				if (language !== "python") {
+					return error(
+						id,
+						"eval",
+						`Interactive eval supports only "python" today (got "${language}"); other backends are agent-tool-only`,
+					);
+				}
+				const result = await session.executePython(command.code, undefined, {
+					excludeFromContext: command.excluded === true,
+				});
+				return success(id, "eval", {
+					language,
+					code: command.code,
+					output: result.output,
+					exitCode: result.exitCode,
+					cancelled: result.cancelled,
+					truncated: result.truncated,
+					excluded: command.excluded === true,
+				});
+			}
+
+			case "abort_eval": {
+				// TUI Esc parity (input-controller's isEvalRunning branch).
+				session.abortEval();
+				return success(id, "abort_eval");
+			}
+
+			// =================================================================
 			// Session
 			// =================================================================
 
@@ -1313,6 +1499,83 @@ export async function runRpcMode(
 				return success(id, "get_branch_messages", { messages });
 			}
 
+			case "get_session_tree": {
+				return success(id, "get_session_tree", buildRpcSessionTree(session));
+			}
+
+			case "get_themes": {
+				const themes = await getAvailableThemesWithPaths();
+				return success(id, "get_themes", { themes });
+			}
+
+			case "get_theme_colors": {
+				try {
+					const colors = await getResolvedThemeColors(command.name);
+					return success(id, "get_theme_colors", { name: command.name, colors });
+				} catch (err) {
+					return error(id, "get_theme_colors", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_transcript": {
+				// Full display history (all messages on the active branch), NOT the
+				// LLM context window that get_messages returns.
+				const transcript = session.buildTranscriptSessionContext();
+				return success(id, "get_transcript", { messages: transcript.messages });
+			}
+
+			case "transcribe_audio": {
+				// GUI mic dictation: the host ships a canonical 16 kHz mono PCM16
+				// WAV buffer (the STT pipeline's native rate — see the wire type).
+				try {
+					const { samples, sampleRate } = decodeWav(Buffer.from(command.audioBase64, "base64"));
+					if (sampleRate !== 16_000) {
+						return error(
+							id,
+							"transcribe_audio",
+							`Unsupported sample rate ${sampleRate} Hz — transcribe_audio expects 16 kHz mono PCM16 WAV`,
+						);
+					}
+					if (samples.length === 0) return success(id, "transcribe_audio", { text: "" });
+					// Same resolution as the TUI stt-controller: stale/legacy keys
+					// fall back to the SoTA default rather than failing.
+					const modelKey = resolveSttModelSpec(session.settings.get("stt.modelName") as string | undefined).key;
+					const language = session.settings.get("stt.language") as string | undefined;
+					const text = await sttClient.transcribe(modelKey, samples, { language: language || undefined });
+					return success(id, "transcribe_audio", { text });
+				} catch (err: unknown) {
+					return error(id, "transcribe_audio", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "synthesize_speech": {
+				// GUI speech output: synthesize to an in-memory WAV buffer instead
+				// of device playback. Model/voice resolution mirrors the TUI
+				// vocalizer (local model + `speech.voice` override).
+				try {
+					const text = command.text.trim();
+					if (!text) return success(id, "synthesize_speech", { audioBase64: "", mimeType: "audio/wav" });
+					const modelKey = session.settings.get("tts.localModel");
+					const voice = session.settings.get("speech.voice") || DEFAULT_TTS_VOICE;
+					const audio = await ttsClient.synthesize(modelKey, text, { voice });
+					if (!audio) {
+						return error(
+							id,
+							"synthesize_speech",
+							"Local TTS model is unavailable — download it from the TUI speech settings first",
+							"tts_unavailable",
+						);
+					}
+					const wav = encodeWav(audio.pcm, audio.sampleRate);
+					return success(id, "synthesize_speech", {
+						audioBase64: Buffer.from(wav).toString("base64"),
+						mimeType: "audio/wav",
+					});
+				} catch (err: unknown) {
+					return error(id, "synthesize_speech", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "get_last_assistant_text": {
 				const text = session.getLastAssistantText();
 				return success(id, "get_last_assistant_text", { text });
@@ -1328,6 +1591,21 @@ export async function runRpcMode(
 					return error(id, "set_session_name", "Session name cannot be empty");
 				}
 				return success(id, "set_session_name");
+			}
+
+			case "set_entry_label": {
+				// TUI tree-selector Shift+L parity: set/clear a label on any entry.
+				const entryId = command.entryId.trim();
+				if (!entryId) {
+					return error(id, "set_entry_label", "Entry id cannot be empty");
+				}
+				const label = typeof command.label === "string" && command.label.trim() ? command.label.trim() : undefined;
+				try {
+					session.sessionManager.appendLabelChange(entryId, label);
+				} catch (cause) {
+					return error(id, "set_entry_label", cause instanceof Error ? cause.message : String(cause));
+				}
+				return success(id, "set_entry_label");
 			}
 
 			case "handoff": {
@@ -1441,15 +1719,311 @@ export async function runRpcMode(
 				}
 			}
 
+			// =================================================================
+			// Extension Features (usage / settings / providers)
+			// =================================================================
+
+			case "logout": {
+				try {
+					await session.modelRegistry.authStorage.logout(command.providerId);
+					return success(id, "logout", { providerId: command.providerId });
+				} catch (err: unknown) {
+					return error(id, "logout", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_usage": {
+				try {
+					const result = await buildRpcUsageResult(session);
+					return success(id, "get_usage", result);
+				} catch (err: unknown) {
+					return error(id, "get_usage", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_settings_schema": {
+				const result = buildRpcSettingsSchema(session.settings);
+				return success(id, "get_settings_schema", result);
+			}
+
+			case "get_settings": {
+				const paths = command.paths ?? Object.keys(SETTINGS_SCHEMA);
+				const values: Record<string, unknown> = {};
+				for (const p of paths) {
+					if (p in SETTINGS_SCHEMA) {
+						values[p] = session.settings.get(p as SettingPath);
+					}
+				}
+				return success(id, "get_settings", { values });
+			}
+
+			case "set_setting": {
+				if (!(command.path in SETTINGS_SCHEMA)) {
+					return error(id, "set_setting", `Unknown setting path: ${command.path}`);
+				}
+				try {
+					session.settings.set(command.path as SettingPath, command.value as never);
+					await session.settings.flush();
+					// Live-apply runtime keys to the running session — previously only
+					// the TUI selector did this, so RPC edits looked broken until restart.
+					await applyRuntimeSetting(session, command.path, command.value);
+					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					return success(id, "set_setting", { path: command.path, value: command.value });
+				} catch (err: unknown) {
+					return error(id, "set_setting", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_providers": {
+				try {
+					const result = buildRpcProvidersResult(session);
+					return success(id, "get_providers", result);
+				} catch (err: unknown) {
+					return error(id, "get_providers", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_plan_mode": {
+				if (command.enabled) {
+					session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+				} else {
+					session.setPlanModeState(undefined);
+				}
+				planApprovalController.syncArmed();
+				const state = session.getPlanModeState();
+				return success(id, "set_plan_mode", {
+					enabled: state?.enabled ?? false,
+					planFilePath: state?.planFilePath,
+				});
+			}
+
+			case "plan_approval": {
+				try {
+					const result = await planApprovalController.resolve(command);
+					return success(id, "plan_approval", result);
+				} catch (err: unknown) {
+					return error(id, "plan_approval", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// =================================================================
+			// Session Modes (vibe / goal / loop)
+			// =================================================================
+
+			case "get_vibe_mode": {
+				return success(id, "get_vibe_mode", { enabled: vibeModeController.enabled });
+			}
+
+			case "set_vibe_mode": {
+				try {
+					return success(id, "set_vibe_mode", await vibeModeController.setEnabled(command.enabled));
+				} catch (err: unknown) {
+					return error(id, "set_vibe_mode", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_goal": {
+				return success(id, "get_goal", goalModeController.state);
+			}
+
+			case "set_goal": {
+				try {
+					return success(id, "set_goal", await goalModeController.setGoal(command));
+				} catch (err: unknown) {
+					return error(id, "set_goal", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_loop_mode": {
+				return success(id, "get_loop_mode", loopModeController.state);
+			}
+
+			case "set_loop_mode": {
+				try {
+					return success(id, "set_loop_mode", loopModeController.setEnabled(command.enabled, command.args));
+				} catch (err: unknown) {
+					return error(id, "set_loop_mode", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_plan_mode": {
+				const state = session.getPlanModeState();
+				return success(id, "get_plan_mode", {
+					enabled: state?.enabled ?? false,
+					planFilePath: state?.planFilePath,
+				});
+			}
+
+			case "get_model_roles": {
+				const roleIds = getKnownRoleIds(session.settings);
+				const roles = roleIds.map(roleId => {
+					const info = getRoleInfo(roleId, session.settings);
+					const model = session.settings.getModelRole(roleId);
+					const source = session.settings.getModelRoleSource(roleId);
+					return {
+						id: roleId,
+						name: info.name,
+						tag: info.tag,
+						color: info.color,
+						model: model ?? undefined,
+						source,
+					};
+				});
+				return success(id, "get_model_roles", { roles });
+			}
+
+			case "set_model_role": {
+				try {
+					session.settings.setModelRole(command.role, command.modelId ?? undefined);
+					await session.settings.flush();
+					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					return success(id, "set_model_role", { role: command.role, modelId: command.modelId });
+				} catch (err: unknown) {
+					return error(id, "set_model_role", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_model_role_metadata": {
+				const builtIn = Object.entries(MODEL_ROLES).map(([id, info]) => ({
+					id,
+					name: info.name,
+					tag: info.tag,
+					color: info.color,
+					hidden: info.hidden || undefined,
+				}));
+				const customTags = session.settings.get("modelTags") as Record<string, { name?: string; color?: string; hidden?: boolean }> | undefined;
+				const custom = customTags
+					? Object.entries(customTags)
+							.filter(([id]) => !(id in MODEL_ROLES))
+							.map(([id, tag]) => ({
+								id,
+								name: tag.name ?? id,
+								tag: id.toUpperCase(),
+								color: tag.color ?? "default",
+								hidden: tag.hidden || undefined,
+							}))
+					: [];
+				return success(id, "get_model_role_metadata", { roles: [...builtIn, ...custom] });
+			}
+
+			// =================================================================
+			// Domain Inspection (skills / hooks / mcp / plugins / templates / memory)
+			// =================================================================
+
+			case "get_skills": {
+				try {
+					const result = await buildRpcSkillsResult(session);
+					return success(id, "get_skills", result);
+				} catch (err: unknown) {
+					return error(id, "get_skills", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_hooks": {
+				try {
+					const result = await buildRpcHooksResult(session);
+					return success(id, "get_hooks", result);
+				} catch (err: unknown) {
+					return error(id, "get_hooks", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_mcp_servers": {
+				try {
+					const result = await buildRpcMcpServersResult(session);
+					return success(id, "get_mcp_servers", result);
+				} catch (err: unknown) {
+					return error(id, "get_mcp_servers", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_plugins": {
+				try {
+					const result = await buildRpcPluginsResult(session);
+					return success(id, "get_plugins", result);
+				} catch (err: unknown) {
+					return error(id, "get_plugins", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_marketplaces": {
+				try {
+					const result = await buildRpcMarketplacesResult(session);
+					return success(id, "get_marketplaces", result);
+				} catch (err: unknown) {
+					return error(id, "get_marketplaces", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_prompt_templates": {
+				try {
+					const result = buildRpcPromptTemplatesResult(session);
+					return success(id, "get_prompt_templates", result);
+				} catch (err: unknown) {
+					return error(id, "get_prompt_templates", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_memory_report": {
+				try {
+					const result = await buildRpcMemoryReport(session);
+					return success(id, "get_memory_report", result);
+				} catch (err: unknown) {
+					return error(id, "get_memory_report", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// =================================================================
+			// Domain Actions (mutating)
+			// =================================================================
+
+			case "set_skill_enabled": {
+				try {
+					const result = await applyRpcSkillEnabled(session, command.name, command.enabled);
+					await reloadPluginState();
+					return success(id, "set_skill_enabled", result);
+				} catch (err: unknown) {
+					return error(id, "set_skill_enabled", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_hook_enabled": {
+				try {
+					const result = await applyRpcHookEnabled(session, command.hookId, command.enabled);
+					return success(id, "set_hook_enabled", result);
+				} catch (err: unknown) {
+					return error(id, "set_hook_enabled", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_plugin_enabled": {
+				try {
+					const result = await applyRpcPluginEnabled(session, command.pluginId, command.enabled, command.scope);
+					await reloadPluginState();
+					return success(id, "set_plugin_enabled", result);
+				} catch (err: unknown) {
+					return error(id, "set_plugin_enabled", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "mcp_action": {
+				try {
+					const result = await applyRpcMcpAction(session, command.name, command.action, command.scope);
+					return success(id, "mcp_action", result);
+				} catch (err: unknown) {
+					return error(id, "mcp_action", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
-				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
 		}
 	};
 
 	// Deferred shutdown (pi.shutdown() from an extension) must not kill the
-	// process while a background-dispatched bash still owes the client its
+	// process while a background-dispatched bash/eval still owes the client its
 	// response frame. The coordinator drains tracked tasks before exiting and
 	// re-checks the request as each task settles.
 	const shutdownCoordinator = new RpcShutdownCoordinator({
@@ -1482,11 +2056,12 @@ export async function runRpcMode(
 	});
 
 	// Keep the stdin reader moving: side-channel frames dispatch immediately,
-	// ordinary commands serialize through inputDispatcher, and bash remains
-	// background-dispatched so abort_bash can overtake it. Frames are read
-	// line-by-line and parsed here (not via readJsonl) so a single malformed
-	// line is reported as an error frame and the loop keeps running instead of
-	// throwing out of the generator and killing the whole process (issue #5194).
+	// ordinary commands serialize through inputDispatcher, and bash/eval remain
+	// background-dispatched so abort_bash/abort_eval can overtake them. Frames
+	// are read line-by-line and parsed here (not via readJsonl) so a single
+	// malformed line is reported as an error frame and the loop keeps running
+	// instead of throwing out of the generator and killing the whole process
+	// (issue #5194).
 	const decoder = new TextDecoder();
 	for await (const line of readLines(input ?? Bun.stdin.stream())) {
 		const text = decoder.decode(line).trim();
