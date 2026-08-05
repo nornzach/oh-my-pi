@@ -158,6 +158,90 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Timeouts", "Privacy"],
 };
 
+/**
+ * Settings whose ONLY consumer is TUI chrome (terminal renderer, status line,
+ * editor, boot screens, audio). They are shared-config and must stay editable
+ * everywhere, but non-TUI clients (GUI, ACP) should badge them so users don't
+ * expect an effect those clients can't deliver. Runtime/agent-behavior keys
+ * never belong here, even when the TUI is their primary UI (e.g.
+ * tui.renderMermaid also feeds the cached system prompt — excluded).
+ */
+export const TUI_ONLY_SETTING_PATHS: Record<string, true> = {
+	// Appearance: terminal renderer, status line, inline images.
+	symbolPreset: true,
+	"statusLine.separator": true,
+	"statusLine.sessionAccent": true,
+	"statusLine.transparent": true,
+	"statusLine.compactThinkingLevel": true,
+	"statusLine.showHookStatus": true,
+	"terminal.showImages": true,
+	"images.autoResize": true,
+	"images.blockImages": true,
+	"tui.textSizing": true,
+	"tui.codexResetFireworks": true,
+	"tui.hyperlinks": true,
+	"tui.scrollbackRebuild": true,
+	"tui.imeSafeCursor": true,
+	"display.shimmer": true,
+	"display.smoothStreaming": true,
+	"display.hideToolActivity": true,
+	"display.cacheMissMarker": true,
+	showHardwareCursor: true,
+	"task.showResolvedModelBadge": true,
+	// Interaction: TUI editor widgets and boot screens.
+	autocompleteMaxVisible: true,
+	emojiAutocomplete: true,
+	doubleEscapeAction: true,
+	treeFilterMode: true,
+	"paste.largeMenuThreshold": true,
+	"startup.quiet": true,
+	"startup.showSplash": true,
+	"startup.setupWizard": true,
+	"startup.changelogMode": true,
+	// Providers: TUI-only audio output (TTS/voice).
+	"live.voice": true,
+	"speech.enhanced": true,
+	"providers.tts": true,
+	"tts.localVoice": true,
+	// Deep-audit additions: footer git segment, TUI read-result preview, and
+	// the TUI-driven idle recap feature.
+	"git.enabled": true,
+	"read.toolResultPreview": true,
+	"recap.enabled": true,
+	"recap.idleSeconds": true,
+};
+
+/**
+ * Settings cached at Agent/AgentSession construction (sdk.ts closure
+ * constants, tool/prompt registration): a change only takes effect on
+ * sidecar/session restart — in EVERY client, TUI included. Badge them so a
+ * GUI edit isn't expected to apply live. (autolearn's controller, the LSP
+ * pool, tool descriptors/prompt layout, fabricated-result guard, image/speech
+ * tool registration, MCP debounce, Kimi wire format, per-level thinking
+ * budgets.)
+ */
+export const RESTART_REQUIRED_SETTING_PATHS: Record<string, true> = {
+	"autolearn.enabled": true,
+	"lsp.shared": true,
+	"lsp.lazy": true,
+	"tools.format": true,
+	inlineToolDescriptors: true,
+	includeWorkspaceTree: true,
+	"tools.intentTracing": true,
+	"tools.abortOnFabricatedResult": true,
+	"speechgen.enabled": true,
+	"generate_image.enabled": true,
+	"mcp.notificationDebounceMs": true,
+	"providers.kimiApiFormat": true,
+	"secrets.enabled": true,
+	"thinkingBudgets.minimal": true,
+	"thinkingBudgets.low": true,
+	"thinkingBudgets.medium": true,
+	"thinkingBudgets.high": true,
+	"thinkingBudgets.xhigh": true,
+	"thinkingBudgets.max": true,
+};
+
 /** Status line segment identifiers */
 export type StatusLineSegmentId =
 	| "pi"
@@ -4425,7 +4509,7 @@ export const SETTINGS_SCHEMA = {
 
 	"goal.continuationModes": {
 		type: "array",
-		default: ["interactive"],
+		default: ["interactive"] as Array<"interactive" | "rpc">,
 		ui: {
 			tab: "tasks",
 			group: "Modes",

@@ -62,17 +62,11 @@ import {
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
 import {
 	AUTO_THINKING,
-	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
 } from "../../thinking";
-import {
-	isSearchProviderId,
-	setExcludedSearchProviders,
-	setImageProviderOrder,
-	setSearchProviderOrder,
-	type ToolSession,
-} from "../../tools";
+import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
+import { type ToolSession } from "../../tools";
 import { AskTool, type AskToolDetails, type AskToolInput } from "../../tools/ask";
 import { shortenPath } from "../../tools/render-utils";
 import { ToolAbortError } from "../../tools/tool-errors";
@@ -440,42 +434,45 @@ export class SelectorController {
 				this.ctx.statusLine.setAutoCompactEnabled(value as boolean);
 				break;
 			case "advisor.enabled":
-				this.ctx.session.setAdvisorEnabled(value as boolean);
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
+					this.ctx.showError(`Failed to apply advisor setting: ${err}`);
+				});
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
 				break;
 			case "steeringMode":
-				this.ctx.session.setSteeringMode(value as "all" | "one-at-a-time");
-				break;
 			case "followUpMode":
-				this.ctx.session.setFollowUpMode(value as "all" | "one-at-a-time");
-				break;
 			case "interruptMode":
-				this.ctx.session.setInterruptMode(value as "immediate" | "wait");
+			case "omitThinking":
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
+					this.ctx.showError(`Failed to apply ${id}: ${err}`);
+				});
 				break;
 			case "thinkingLevel":
 			case "defaultThinkingLevel":
-				this.ctx.session.setThinkingLevel(value as ConfiguredThinkingLevel, true);
+				void applyRuntimeSetting(this.ctx.session, "defaultThinkingLevel", value).catch(err => {
+					this.ctx.showError(`Failed to apply thinking level: ${err}`);
+				});
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
 				break;
 			case "personality":
-				void this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
 					this.ctx.showError(`Failed to apply personality: ${err}`);
 				});
 				break;
 			case "tools.xdevDocs":
-				void this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
 					this.ctx.showError(`Failed to apply xd:// prompt docs setting: ${err}`);
 				});
 				break;
 			case "memory.backend":
-				void this.ctx.session.applyMemoryBackend().catch(err => {
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
 					this.ctx.showError(`Failed to apply memory backend: ${err}`);
 				});
 				break;
 			case "inspect_image.mode":
-				void this.ctx.session.applyInspectImageModeChange().catch(err => {
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
 					this.ctx.showError(`Failed to apply vision mode: ${err}`);
 				});
 				break;
@@ -538,16 +535,14 @@ export class SelectorController {
 				}
 				this.ctx.ui.resetDisplay();
 				break;
-			case "omitThinking":
-				this.ctx.session.agent.hideThinkingSummary = value as boolean;
-				break;
-			case "display.cacheMissMarker":
+			case "display.cacheMissMarker": {
 				// Rebuild re-runs the usage-based detection under the new setting so
 				// markers appear/disappear; full reset retires any already committed
 				// to native scrollback (mirrors hideThinking).
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.ui.resetDisplay();
 				break;
+			}
 			case "display.collapseCompacted":
 				// Rebuild swaps between the collapsed tail and the full inline
 				// history; full reset retires blocks already committed to native
@@ -567,7 +562,7 @@ export class SelectorController {
 
 			case "tui.renderMermaid":
 				setMarkdownMermaidRendering(value as boolean);
-				this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
 					this.ctx.showError(`Failed to apply Mermaid rendering setting: ${err}`);
 				});
 				this.ctx.rebuildChatFromMessages();
@@ -599,34 +594,15 @@ export class SelectorController {
 				});
 				break;
 			}
-			case "temperature": {
-				const temp = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.temperature = temp >= 0 ? temp : undefined;
-				break;
-			}
-			case "topP": {
-				const topP = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.topP = topP >= 0 ? topP : undefined;
-				break;
-			}
-			case "topK": {
-				const topK = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.topK = topK >= 0 ? topK : undefined;
-				break;
-			}
-			case "minP": {
-				const minP = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.minP = minP >= 0 ? minP : undefined;
-				break;
-			}
-			case "presencePenalty": {
-				const presencePenalty = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.presencePenalty = presencePenalty >= 0 ? presencePenalty : undefined;
-				break;
-			}
+			case "temperature":
+			case "topP":
+			case "topK":
+			case "minP":
+			case "presencePenalty":
 			case "repetitionPenalty": {
-				const repetitionPenalty = typeof value === "number" ? value : Number(value);
-				this.ctx.session.agent.repetitionPenalty = repetitionPenalty >= 0 ? repetitionPenalty : undefined;
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
+					this.ctx.showError(`Failed to apply ${id}: ${err}`);
+				});
 				break;
 			}
 			case "git.enabled":
@@ -668,24 +644,13 @@ export class SelectorController {
 
 			// Provider settings - update runtime preferences
 			case "providers.webSearchOrder":
-				if (Array.isArray(value)) {
-					setSearchProviderOrder(value.filter(isSearchProviderId));
-				}
-				break;
 			case "providers.webSearchExclude":
-				if (Array.isArray(value)) {
-					setExcludedSearchProviders(value.filter(isSearchProviderId));
-				}
-				break;
 			case "providers.imageOrder":
-				if (Array.isArray(value)) {
-					setImageProviderOrder(value.filter((entry): entry is string => typeof entry === "string"));
-				}
-				break;
-
 			// MCP update injection - live subscribe/unsubscribe
 			case "mcp.notifications":
-				this.ctx.mcpManager?.setNotificationsEnabled(value as boolean);
+				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
+					this.ctx.showError(`Failed to apply ${id}: ${err}`);
+				});
 				break;
 
 			// All other settings are handled by the definitions (get/set on SettingsManager)

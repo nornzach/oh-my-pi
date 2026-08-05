@@ -445,6 +445,9 @@ function buildExecutorOptions(
 		parentTelemetry: session.getTelemetry?.(),
 		parentEvalSessionId: request.shareEvalSession === false ? undefined : (session.getEvalSessionId?.() ?? undefined),
 		parentAgentId: session.getAgentId?.() ?? MAIN_AGENT_ID,
+		// Nested-spawn parentage for DAG surfaces; undefined for root spawns
+		// (the main session's getAgentId is null).
+		parentSubagentId: session.getAgentId?.() ?? undefined,
 		parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
 	};
 }

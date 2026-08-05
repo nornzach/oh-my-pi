@@ -354,6 +354,13 @@ export interface ExecutorOptions {
 	id: string;
 	parentToolCallId?: string;
 	/**
+	 * Registry id of the subagent whose session spawned this run (nested spawn);
+	 * absent for root spawns from the main session. Threaded onto lifecycle and
+	 * progress payloads so DAG surfaces can draw true parent→child edges instead
+	 * of inferring nesting from `parentToolCallId` ownership.
+	 */
+	parentSubagentId?: string;
+	/**
 	 * Spawn runs as a detached background job (parent turn not blocked on it).
 	 * Rides the subagent lifecycle/progress payloads so HUD-style surfaces can
 	 * skip spawns the transcript already renders inline. See
@@ -918,6 +925,7 @@ interface RunMonitorArgs {
 	onProgress?: (progress: AgentProgress) => void;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	parentSubagentId?: string;
 	detached?: boolean;
 	sessionFile?: string;
 	/** Soft assistant-request budget; 0 disables the guard. */
@@ -1237,6 +1245,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				agentSource: agent.source,
 				task,
 				parentToolCallId: args.parentToolCallId,
+			parentSubagentId: args.parentSubagentId,
 				detached: args.detached,
 				assignment,
 				progress: { ...progress },
@@ -2089,6 +2098,7 @@ interface FinalizeRunArgs {
 	artifactsDir?: string;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	parentSubagentId?: string;
 	detached?: boolean;
 	sessionFile?: string;
 	startTime: number;
@@ -2199,6 +2209,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			id,
 			agent: agent.name,
 			parentToolCallId: args.parentToolCallId,
+			parentSubagentId: args.parentSubagentId,
 			detached: args.detached,
 			agentSource: agent.source,
 			description: progress.description,
@@ -2254,6 +2265,7 @@ export interface IrcWakeTurnMonitorOptions {
 	modelRole?: string;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	parentSubagentId?: string;
 	/** Fallback session file when the registry ref carries none. */
 	sessionFile?: string;
 	maxRuntimeMs?: number;
@@ -2299,6 +2311,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			modelRole: options.modelRole,
 			eventBus: options.eventBus,
 			parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 			detached: true,
 			sessionFile,
 			softRequestBudget: 0,
@@ -2311,6 +2324,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				id,
 				agent: agent.name,
 				parentToolCallId: options.parentToolCallId,
+				parentSubagentId: options.parentSubagentId,
 				detached: true,
 				agentSource: agent.source,
 				description: options.description,
@@ -2361,6 +2375,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					artifactsDir: options.artifactsDir,
 					eventBus: options.eventBus,
 					parentToolCallId: options.parentToolCallId,
+					parentSubagentId: options.parentSubagentId,
 					detached: true,
 					sessionFile,
 					startTime: turnStartTime,
@@ -2495,6 +2510,7 @@ export interface FollowUpTurnOptions {
 	onProgress?: (progress: AgentProgress) => void;
 	eventBus?: EventBus;
 	parentToolCallId?: string;
+	parentSubagentId?: string;
 	/** When set, the turn's raw output is (re)written to `<artifactsDir>/<id>.md` so `agent://<id>` tracks the latest turn. */
 	artifactsDir?: string;
 	/** Wall-clock cap in ms for this turn; 0 disables. */
@@ -2531,6 +2547,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		onProgress: options.onProgress,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 		detached: true,
 		sessionFile,
 		softRequestBudget: 0,
@@ -2543,6 +2560,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			id,
 			agent: agent.name,
 			parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 			detached: true,
 			agentSource: agent.source,
 			description: options.description,
@@ -2584,6 +2602,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 		detached: true,
 		sessionFile,
 		startTime,
@@ -2729,6 +2748,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 		detached: options.detached,
 		sessionFile: subtaskSessionFile,
 		softRequestBudget,
@@ -2761,6 +2781,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			modelRole,
 			eventBus: options.eventBus,
 			parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 			sessionFile: subtaskSessionFile,
 			maxRuntimeMs,
 			outputSchema,
@@ -3121,6 +3142,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					id,
 					agent: agent.name,
 					parentToolCallId: options.parentToolCallId,
+					parentSubagentId: options.parentSubagentId,
 					detached: options.detached,
 					agentSource: agent.source,
 					description: options.description,
@@ -3425,6 +3447,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		artifactsDir: options.artifactsDir,
 		eventBus: options.eventBus,
 		parentToolCallId: options.parentToolCallId,
+		parentSubagentId: options.parentSubagentId,
 		detached: options.detached,
 		sessionFile: subtaskSessionFile,
 		startTime,

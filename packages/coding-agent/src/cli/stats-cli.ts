@@ -59,6 +59,8 @@ export interface StatsCommandArgs {
 	port: number;
 	json: boolean;
 	summary: boolean;
+	/** Run the dashboard server without opening a browser (headless / embedded use). */
+	noOpen: boolean;
 }
 
 // =============================================================================
@@ -78,6 +80,7 @@ export function parseStatsArgs(args: string[]): StatsCommandArgs | undefined {
 		port: 3847,
 		json: false,
 		summary: false,
+		noOpen: false,
 	};
 
 	for (let i = 1; i < args.length; i++) {
@@ -86,6 +89,8 @@ export function parseStatsArgs(args: string[]): StatsCommandArgs | undefined {
 			result.json = true;
 		} else if (arg === "--summary" || arg === "-s") {
 			result.summary = true;
+		} else if (arg === "--no-open") {
+			result.noOpen = true;
 		} else if ((arg === "--port" || arg === "-p") && i + 1 < args.length) {
 			result.port = parseInt(args[++i], 10);
 		} else if (arg.startsWith("--port=")) {
@@ -140,8 +145,10 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	const url = `http://${hostname}:${port}`;
 	console.log(chalk.green(`Dashboard available at: ${url}`));
 
-	// Open browser
-	openPath(url);
+	// Open browser unless running headless (e.g. embedded by the GUI)
+	if (!cmd.noOpen) {
+		openPath(url);
+	}
 
 	console.log("Press Ctrl+C to stop\n");
 
@@ -211,6 +218,7 @@ ${chalk.bold("Options:")}
   -p, --port <port>  Port for the dashboard server (default: 3847)
   -j, --json         Output stats as JSON and exit
   -s, --summary      Print summary to console and exit
+      --no-open      Start the server without opening a browser
   -h, --help         Show this help message
 
 ${chalk.bold("Examples:")}

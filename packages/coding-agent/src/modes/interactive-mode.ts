@@ -473,7 +473,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
-	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
@@ -1977,46 +1976,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setTodos(next);
 	}
 
-	#cancelTodoAutoClearTimer(): void {
-		if (!this.#todoAutoClearTimer) return;
-		clearTimeout(this.#todoAutoClearTimer);
-		this.#todoAutoClearTimer = undefined;
-	}
-
-	#isClosedTodo(task: TodoItem): boolean {
-		return task.status === "completed" || task.status === "abandoned";
-	}
-
-	#hasClosedTodos(phases: TodoPhase[]): boolean {
-		return phases.some(phase => phase.tasks.some(task => this.#isClosedTodo(task)));
-	}
-
-	#removeClosedTodos(phases: TodoPhase[]): TodoPhase[] {
-		const next: TodoPhase[] = [];
-		for (const phase of phases) {
-			const tasks = phase.tasks.filter(task => !this.#isClosedTodo(task));
-			if (tasks.length > 0) next.push({ name: phase.name, tasks });
-		}
-		return next;
-	}
-
-	#syncTodoAutoClearTimer(): void {
-		this.#cancelTodoAutoClearTimer();
-		const delaySeconds = this.settings.get("tasks.todoClearDelay");
-		if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || !this.#hasClosedTodos(this.todoPhases)) return;
-		if (delaySeconds === 0) {
-			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
-			return;
-		}
-
-		this.#todoAutoClearTimer = setTimeout(() => {
-			this.#todoAutoClearTimer = undefined;
-			this.todoPhases = this.#removeClosedTodos(this.todoPhases);
-			this.#renderTodoList();
-			this.ui.requestRender();
-		}, delaySeconds * 1000);
-		this.#todoAutoClearTimer.unref?.();
-	}
+	/**
+	 * Auto-clear of closed todos is session-owned now (AgentSession arms the
+	 * tasks.todoClearDelay timer and emits todo_auto_clear; the event handler
+	 * reloads the UI) — previously TUI-only, so RPC/GUI sessions never cleared.
+	 */
 
 	/**
 	 * Render the ctrl+p model-role cycle chip track into its own anchored
@@ -2079,7 +2043,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerUiSyncNeedsTodoReconcile = false;
 			this.#reconcileTodosWithSubagents();
 		}
-		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.#renderSubagentList();
 		this.ui.requestRender();
@@ -2189,7 +2152,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #loadTodoList(): Promise<void> {
 		this.todoPhases = this.session.getTodoPhases();
-		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 	}
 
@@ -3975,7 +3937,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#cleanupMicAnimation();
 		this.#liveCommandController.dispose();
-		this.#cancelTodoAutoClearTimer();
 		this.#cancelObserverUiSyncTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
@@ -4949,7 +4910,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
-		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}

@@ -56,3 +56,41 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array
 function writeAscii(view: DataView, offset: number, text: string): void {
 	for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
 }
+
+/**
+ * Parse a canonical PCM WAV byte buffer back into Float32 samples (the inverse
+ * of {@link encodeWav}, used by the RPC voice transport). Only the subset the
+ * transport emits is accepted: RIFF/WAVE with a fixed 44-byte header, PCM
+ * (format 1), mono, 16-bit samples. Throws on any deviation so callers can
+ * surface a wire-format error instead of transcribing garbage.
+ */
+export function decodeWav(bytes: Uint8Array): { samples: Float32Array; sampleRate: number } {
+	if (bytes.length < WAV_HEADER_BYTES) throw new Error("WAV buffer too short for a 44-byte header");
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	if (readAscii(view, 0, 4) !== "RIFF" || readAscii(view, 8, 4) !== "WAVE") throw new Error("Not a RIFF/WAVE buffer");
+	if (readAscii(view, 12, 4) !== "fmt " || readAscii(view, 36, 4) !== "data")
+		throw new Error("WAV buffer is not in canonical fmt+data layout");
+	const format = view.getUint16(20, true);
+	const channels = view.getUint16(22, true);
+	const sampleRate = view.getUint32(24, true);
+	const bitsPerSample = view.getUint16(34, true);
+	if (format !== PCM16_FORMAT) throw new Error(`Unsupported WAV encoding: format ${format} (only PCM is accepted)`);
+	if (channels !== 1) throw new Error(`Unsupported WAV channel count: ${channels} (only mono is accepted)`);
+	if (bitsPerSample !== BITS_PER_SAMPLE)
+		throw new Error(`Unsupported WAV bit depth: ${bitsPerSample} (only 16-bit PCM is accepted)`);
+	const dataBytes = Math.min(view.getUint32(40, true), bytes.length - WAV_HEADER_BYTES);
+	const sampleCount = Math.floor(dataBytes / (BITS_PER_SAMPLE / 8));
+	const samples = new Float32Array(sampleCount);
+	let offset = WAV_HEADER_BYTES;
+	for (let i = 0; i < sampleCount; i += 1) {
+		samples[i] = view.getInt16(offset, true) / -INT16_MIN;
+		offset += 2;
+	}
+	return { samples, sampleRate };
+}
+
+function readAscii(view: DataView, offset: number, length: number): string {
+	let text = "";
+	for (let i = 0; i < length; i += 1) text += String.fromCharCode(view.getUint8(offset + i));
+	return text;
+}

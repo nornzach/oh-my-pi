@@ -13,6 +13,7 @@ export default class Stats extends Command {
 		port: Flags.integer({ char: "p", description: "Port for the dashboard server", default: 3847 }),
 		json: Flags.boolean({ char: "j", description: "Output stats as JSON", default: false }),
 		summary: Flags.boolean({ char: "s", description: "Print summary to console", default: false }),
+		"no-open": Flags.boolean({ description: "Start the server without opening a browser", default: false }),
 	};
 
 	async run(): Promise<void> {
@@ -22,6 +23,7 @@ export default class Stats extends Command {
 			port: flags.port,
 			json: flags.json,
 			summary: flags.summary,
+			noOpen: flags["no-open"],
 		};
 
 		await initTheme();
