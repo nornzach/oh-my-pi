@@ -160,10 +160,10 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 
 /**
  * Settings whose ONLY consumer is TUI chrome (terminal renderer, status line,
- * editor, boot screens, audio). They are shared-config and must stay editable
- * everywhere, but non-TUI clients (GUI, ACP) should badge them so users don't
- * expect an effect those clients can't deliver. Runtime/agent-behavior keys
- * never belong here, even when the TUI is their primary UI (e.g.
+ * editor, boot screens, audio). They remain in the shared schema so clients
+ * that intentionally manage TUI configuration can expose them; other clients
+ * should hide them or clearly state that they have no local effect.
+ * Runtime/agent-behavior keys never belong here, even when the TUI is their primary UI (e.g.
  * tui.renderMermaid also feeds the cached system prompt — excluded).
  */
 export const TUI_ONLY_SETTING_PATHS: Record<string, true> = {
@@ -217,8 +217,8 @@ export const TUI_ONLY_SETTING_PATHS: Record<string, true> = {
  * sidecar/session restart — in EVERY client, TUI included. Badge them so a
  * GUI edit isn't expected to apply live. (autolearn's controller, the LSP
  * pool, tool descriptors/prompt layout, fabricated-result guard, image/speech
- * tool registration, MCP debounce, Kimi wire format, per-level thinking
- * budgets.)
+ * tool registration, MCP debounce, Kimi wire format, TTSR rule buckets and
+ * manager settings, per-level thinking budgets.)
  */
 export const RESTART_REQUIRED_SETTING_PATHS: Record<string, true> = {
 	"autolearn.enabled": true,
@@ -234,6 +234,13 @@ export const RESTART_REQUIRED_SETTING_PATHS: Record<string, true> = {
 	"mcp.notificationDebounceMs": true,
 	"providers.kimiApiFormat": true,
 	"secrets.enabled": true,
+	"ttsr.enabled": true,
+	"ttsr.contextMode": true,
+	"ttsr.interruptMode": true,
+	"ttsr.repeatMode": true,
+	"ttsr.repeatGap": true,
+	"ttsr.builtinRules": true,
+	"ttsr.disabledRules": true,
 	"thinkingBudgets.minimal": true,
 	"thinkingBudgets.low": true,
 	"thinkingBudgets.medium": true,
@@ -670,7 +677,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Theme",
 			label: "Dark Theme",
-			description: "Theme used when the terminal has a dark background",
+			description: "Theme palette used for dark appearance in both the TUI and GUI",
 			options: "runtime",
 		},
 	},
@@ -682,7 +689,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Theme",
 			label: "Light Theme",
-			description: "Theme used when the terminal has a light background",
+			description: "Theme palette used for light appearance in both the TUI and GUI",
 			options: "runtime",
 		},
 	},
@@ -723,8 +730,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			group: "Status Line",
-			label: "Status Line Preset",
-			description: "Pre-built status line configurations",
+			label: "Status Preset",
+			description: "Status layout shared by the TUI status line and GUI footer",
 			options: [
 				{ value: "default", label: "Default", description: "Model, path, git, context, tokens, cost" },
 				{ value: "minimal", label: "Minimal", description: "Path and git only" },
@@ -988,8 +995,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			group: "Display",
-			label: "Native Terminal Progress",
-			description: "Emit OSC 9;4 indeterminate progress while the agent or context maintenance is running",
+			label: "Native Run Progress",
+			description: "Show native run progress: OSC 9;4 in terminals, dock badge and window progress in the GUI",
 		},
 	},
 
@@ -1012,7 +1019,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Display",
 			label: "Render Mermaid Diagrams",
-			description: "Render Mermaid fenced code blocks as ASCII diagrams",
+			description: "Allow Mermaid diagrams: ASCII rendering in the TUI, graphical rendering in the GUI",
 		},
 	},
 
@@ -1034,9 +1041,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			group: "Display",
-			label: "Terminal Title Run State",
-			description:
-				"Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' on Windows), '>' when it's your turn, '!' when the agent is waiting on you",
+			label: "Title Run State",
+			description: "Show the agent run state in the terminal or GUI window title",
 		},
 	},
 
@@ -1058,8 +1064,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "appearance",
 			group: "Display",
-			label: "Tight Layout",
-			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
+			label: "Compact UI Density",
+			description: "Use compact spacing in TUI output and GUI chrome",
 		},
 	},
 	"tui.scrollbackRebuild": {
