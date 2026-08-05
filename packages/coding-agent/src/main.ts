@@ -42,7 +42,7 @@ import {
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
 import { serviceTierSettingToTier } from "./config/service-tier";
-import { getDefault, type SettingPath, Settings, type SettingValue, settings } from "./config/settings";
+import { Settings, type SettingValue, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import {
 	clearPluginRootsAndCaches,
@@ -129,64 +129,6 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 	} catch {
 		return undefined;
 	}
-}
-
-// Todo settings are caller-controlled in protocol modes. Do not host-default them:
-// embedders need project-level opt-outs for reminder/prelude prompt injection.
-const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
-	"task.isolation.mode",
-	"task.isolation.apply",
-	"task.isolation.merge",
-	"task.isolation.commits",
-	"task.eager",
-	"task.batch",
-	"task.maxConcurrency",
-	"task.maxRecursionDepth",
-	"task.disabledAgents",
-	"task.agentModelOverrides",
-	"task.agentPrewalk",
-	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
-	// memory should opt in explicitly through their own settings layer.
-	"memory.backend",
-	"memories.enabled",
-	// Advisor is interactive-session assistance. Protocol hosts opt in explicitly
-	// instead of inheriting a user's globally-enabled local preference, and when
-	// they do opt in they get the default tuning rather than the user's local tuning.
-	"advisor.enabled",
-	"advisor.subagents",
-	"advisor.syncBacklog",
-	"advisor.immuneTurns",
-	"tier.advisor",
-];
-
-const RPC_BACKGROUND_DEFAULTED_SETTING_PATHS: SettingPath[] = [
-	"async.enabled",
-	"async.maxJobs",
-	"bash.autoBackground.enabled",
-	"bash.autoBackground.thresholdMs",
-];
-
-// Protocol-mode hosts opt into a small set of paths whose host-default we
-// re-apply at startup so embedders inherit OMP's neutral defaults instead of
-// the local user's globally-persisted preferences for interactive use. The
-// guard preserves any explicit configuration — caller `Settings.isolated`
-// overrides, project `.claude/settings.yml`, `--config` overlays, or global
-// `config.yml` — so the host default only kicks in when nothing is set. Without
-// it the override clobbers every caller/host choice (#2598, #3207).
-function applyDefaultSettingOverrides(settingPaths: SettingPath[], targetSettings: Settings): void {
-	for (const settingPath of settingPaths) {
-		if (targetSettings.isConfigured(settingPath)) continue;
-		targetSettings.override(settingPath, getDefault(settingPath));
-	}
-}
-
-function applyRpcDefaultSettingOverrides(targetSettings: Settings = settings): void {
-	applyDefaultSettingOverrides(HOST_DEFAULTED_SETTING_PATHS, targetSettings);
-	applyDefaultSettingOverrides(RPC_BACKGROUND_DEFAULTED_SETTING_PATHS, targetSettings);
-}
-
-function applyAcpDefaultSettingOverrides(targetSettings: Settings = settings): void {
-	applyDefaultSettingOverrides(HOST_DEFAULTED_SETTING_PATHS, targetSettings);
 }
 
 /** Reads a non-TTY stdin stream as prompt text. */
@@ -1232,11 +1174,6 @@ export async function runRootCommand(
 		// --auto-approve / --yolo without an explicit --approval-mode: reflect in settings so
 		// setup-time checks (e.g. #wrapToolForAcpPermission) also see the yolo intent.
 		settingsInstance.override("tools.approvalMode", "yolo");
-	}
-	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
-		applyRpcDefaultSettingOverrides(settingsInstance);
-	} else if (parsedArgs.mode === "acp") {
-		applyAcpDefaultSettingOverrides(settingsInstance);
 	}
 	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 		Bun.env.PI_NO_PTY = "1";

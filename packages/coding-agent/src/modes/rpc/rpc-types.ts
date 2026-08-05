@@ -8,22 +8,26 @@ import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from 
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
-import type { ContextUsage, ExtensionAskDialogQuestion, ExtensionAskDialogResult } from "../../extensibility/extensions/types";
+import type {
+	ContextUsage,
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+} from "../../extensibility/extensions/types";
 import type { GoalStatus } from "../../goals/state";
 import type { MemoryBackendId } from "../../memory-backend/types";
-import type { LoopLimitRuntime } from "../loop-limit";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import type { FileEntry } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
-import type { ConfiguredThinkingLevel } from "../../thinking";
 import type {
 	AgentProgress,
 	SubagentEventPayload,
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "../../task";
+import type { ConfiguredThinkingLevel } from "../../thinking";
 import type { TodoPhase } from "../../tools/todo";
+import type { LoopLimitRuntime } from "../loop-limit";
 import type { RpcMessagesPage } from "./rpc-messages";
 
 // ============================================================================
@@ -135,7 +139,7 @@ export type RpcCommand =
 			tokenBudget?: number | null;
 			/** Lifecycle action on an existing goal; omit to set/replace by objective. */
 			action?: "pause" | "resume" | "drop";
-		  }
+	  }
 	| { id?: string; type: "get_loop_mode" }
 	| {
 			id?: string;
@@ -143,7 +147,7 @@ export type RpcCommand =
 			enabled: boolean;
 			/** Raw `/loop` argument string (`"10"`, `"5m keep going"`, …) parsed by the TUI's own parser. */
 			args?: string;
-		  }
+	  }
 
 	// Model roles
 	| { id?: string; type: "get_model_roles" }
@@ -171,7 +175,7 @@ export type RpcCommand =
 			action: "enable" | "disable" | "reconnect" | "remove";
 			/** Config file for `remove` (defaults to project, mirroring `/mcp remove`). */
 			scope?: "user" | "project";
-		  }
+	  }
 
 	// Session tree (visual branch navigation)
 	| { id?: string; type: "get_session_tree" }
@@ -388,8 +392,8 @@ export interface RpcSettingEntry {
 	/** True when array order is meaningful and editors should support reordering. */
 	ordered?: boolean;
 	/**
-	 * True when the setting only affects TUI chrome — non-TUI clients should
-	 * badge it so users don't expect an effect they can't deliver
+	 * True when the setting only affects TUI chrome. Non-TUI clients should
+	 * hide it or clearly identify that it has no effect there
 	 * (TUI_ONLY_SETTING_PATHS).
 	 */
 	tuiOnly?: boolean;
@@ -910,8 +914,25 @@ export type RpcResponse =
 
 	// Settings
 	| { id?: string; type: "response"; command: "get_settings_schema"; success: true; data: RpcSettingsSchemaResult }
-	| { id?: string; type: "response"; command: "get_settings"; success: true; data: { values: Record<string, unknown> } }
-	| { id?: string; type: "response"; command: "set_setting"; success: true; data: { path: string; value: unknown } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_settings";
+			success: true;
+			data: { values: Record<string, unknown>; advisorEnabled: boolean; advisorActive: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_setting";
+			success: true;
+			data: {
+				path: string;
+				value: unknown;
+				advisorEnabled?: boolean;
+				advisorActive?: boolean;
+			};
+	  }
 
 	// Providers
 	| { id?: string; type: "response"; command: "get_providers"; success: true; data: RpcProvidersResult }
@@ -931,8 +952,20 @@ export type RpcResponse =
 
 	// Model roles
 	| { id?: string; type: "response"; command: "get_model_roles"; success: true; data: RpcModelRolesResult }
-	| { id?: string; type: "response"; command: "set_model_role"; success: true; data: { role: string; modelId: string | null } }
-	| { id?: string; type: "response"; command: "get_model_role_metadata"; success: true; data: RpcModelRoleMetadataResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_model_role";
+			success: true;
+			data: { role: string; modelId: string | null };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_model_role_metadata";
+			success: true;
+			data: RpcModelRoleMetadataResult;
+	  }
 
 	// Domain inspection (read-only)
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: RpcSkillsResult }
@@ -956,14 +989,14 @@ export type RpcResponse =
 			command: "set_skill_enabled";
 			success: true;
 			data: { name: string; enabled: boolean };
-		  }
+	  }
 	| {
 			id?: string;
 			type: "response";
 			command: "set_hook_enabled";
 			success: true;
 			data: { id: string; enabled: boolean };
-		  }
+	  }
 	| { id?: string; type: "response"; command: "set_plugin_enabled"; success: true; data: RpcPluginSetEnabledResult }
 	| { id?: string; type: "response"; command: "mcp_action"; success: true; data: RpcMcpActionResult }
 	| { id?: string; type: "response"; command: "get_session_tree"; success: true; data: RpcSessionTreeResult }
@@ -974,7 +1007,13 @@ export type RpcResponse =
 	// Voice (speech in/out). `synthesize_speech` returns the local TTS model's
 	// output as a base64 WAV (PCM16) buffer for host-side playback.
 	| { id?: string; type: "response"; command: "transcribe_audio"; success: true; data: { text: string } }
-	| { id?: string; type: "response"; command: "synthesize_speech"; success: true; data: { audioBase64: string; mimeType: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "synthesize_speech";
+			success: true;
+			data: { audioBase64: string; mimeType: string };
+	  }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };

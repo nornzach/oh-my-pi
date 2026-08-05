@@ -1234,7 +1234,7 @@ export async function runRpcMode(
 						parameters: isZodSchema(tool.parameters) ? zodToWireSchema(tool.parameters) : tool.parameters,
 						examples: tool.examples,
 					})),
-				contextUsage: session.getContextUsage(),
+					contextUsage: session.getContextUsage(),
 					planModeEnabled: session.getPlanModeState()?.enabled ?? false,
 				};
 				return success(id, "get_state", state);
@@ -1754,7 +1754,11 @@ export async function runRpcMode(
 						values[p] = session.settings.get(p as SettingPath);
 					}
 				}
-				return success(id, "get_settings", { values });
+				return success(id, "get_settings", {
+					values,
+					advisorEnabled: session.isAdvisorEnabled(),
+					advisorActive: session.isAdvisorActive(),
+				});
 			}
 
 			case "set_setting": {
@@ -1767,8 +1771,14 @@ export async function runRpcMode(
 					// Live-apply runtime keys to the running session — previously only
 					// the TUI selector did this, so RPC edits looked broken until restart.
 					await applyRuntimeSetting(session, command.path, command.value);
+					const advisorEnabled = command.path === "advisor.enabled" ? session.isAdvisorEnabled() : undefined;
+					const advisorActive = command.path === "advisor.enabled" ? session.isAdvisorActive() : undefined;
 					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-					return success(id, "set_setting", { path: command.path, value: command.value });
+					return success(id, "set_setting", {
+						path: command.path,
+						value: command.value,
+						...(advisorEnabled === undefined ? {} : { advisorEnabled, advisorActive }),
+					});
 				} catch (err: unknown) {
 					return error(id, "set_setting", err instanceof Error ? err.message : String(err));
 				}
@@ -1891,7 +1901,9 @@ export async function runRpcMode(
 					color: info.color,
 					hidden: info.hidden || undefined,
 				}));
-				const customTags = session.settings.get("modelTags") as Record<string, { name?: string; color?: string; hidden?: boolean }> | undefined;
+				const customTags = session.settings.get("modelTags") as
+					| Record<string, { name?: string; color?: string; hidden?: boolean }>
+					| undefined;
 				const custom = customTags
 					? Object.entries(customTags)
 							.filter(([id]) => !(id in MODEL_ROLES))

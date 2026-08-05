@@ -241,12 +241,9 @@ describe("ACP lazy startup", () => {
 		});
 	});
 
-	it("honors explicit host-defaulted settings for protocol hosts", async () => {
-		// Regression for #3207: in RPC/ACP startup, runtime overrides applied via
-		// `applyDefaultSettingOverrides` previously clobbered any explicitly
-		// configured value (caller, project, --config overlay, or global) with the
-		// schema default. The fix (re-)added an `isConfigured` guard so explicit
-		// configuration survives, and the schema default only fills holes.
+	it("honors explicit host settings for protocol hosts", async () => {
+		// Regression for #3207: protocol startup must preserve every explicitly
+		// configured caller, project, --config overlay, or global value.
 		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
 
 		const explicit = {
@@ -334,6 +331,54 @@ describe("ACP lazy startup", () => {
 		for (const mode of ["rpc", "rpc-ui", "acp"] as const) {
 			await expect(runProtocolStartup(mode)).resolves.toEqual({ ...explicit, ...rpcOnlyExplicit });
 		}
+	});
+
+	it("allows protocol clients to change a setting that started at its schema default", async () => {
+		// Keep CLI startup side effects out of test-module evaluation: this suite
+		// intentionally loads the executable boundary inside each scenario.
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+		using tempDir = TempDir.createSync("@omp-protocol-edit-default-");
+		const cwd = tempDir.path();
+		const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+		const settings = Settings.isolated();
+		let observed: { before: boolean; after: boolean } | undefined;
+		const stopMessage = "stop test protocol setting edit";
+		const observe = () => {
+			const before = settings.get("advisor.subagents");
+			settings.set("advisor.subagents", true);
+			observed = { before, after: settings.get("advisor.subagents") };
+			throw new Error(stopMessage);
+		};
+
+		try {
+			await runRootCommand(
+				{
+					mode: "rpc-ui",
+					messages: [],
+					fileArgs: [],
+					unknownFlags: new Map(),
+					unrecognizedFlags: [],
+					noSkills: true,
+					noRules: true,
+					noTools: true,
+					noLsp: true,
+					noExtensions: true,
+					sessionDir: cwd,
+				},
+				[],
+				{
+					discoverAuthStorage: async () => authStorage,
+					settings,
+					createAgentSession: async () => observe(),
+				},
+			);
+		} catch (error) {
+			if (!(error instanceof Error) || error.message !== stopMessage) throw error;
+		} finally {
+			authStorage.close();
+		}
+
+		expect(observed).toEqual({ before: false, after: true });
 	});
 
 	it("honors explicit todo settings for protocol hosts", async () => {

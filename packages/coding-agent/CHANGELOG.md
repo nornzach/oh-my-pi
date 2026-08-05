@@ -85,8 +85,25 @@
 - Fixed `plan.defaultOnStartup` never applying to RPC/GUI sessions: the RPC boot path now arms plan mode on a fresh session exactly like the TUI and print mode do.
 - Fixed closed todos never auto-clearing in RPC/GUI sessions: the `tasks.todoClearDelay` timer moved from the TUI into `AgentSession`, which now owns the cleanup and emits the previously unwired `todo_auto_clear` event that both UIs already handled.
 - Fixed RPC `set_setting` (GUI, ACP, SDK) leaving the running session stale for runtime-cached settings: sampling parameters (`temperature`/`topP`/`topK`/`minP`/`presencePenalty`/`repetitionPenalty`), `defaultThinkingLevel`, `advisor.enabled`, `personality`, `tools.xdevDocs`, `memory.backend`, `inspect_image.mode`, `providers.webSearchOrder`/`webSearchExclude`/`imageOrder`, `mcp.notifications`, `steeringMode`/`followUpMode`/`interruptMode`, `omitThinking`, and the prompt half of `tui.renderMermaid` now apply immediately through the shared `applyRuntimeSetting` path, which the TUI settings selector also uses — previously only the TUI selector applied them, so non-TUI edits looked broken until restart.
+- Fixed RPC/GUI setting writes being masked by protocol-host default overrides after they had already persisted to `config.yml`; protocol clients can now change schema-defaulted settings and keep the effective value across sidecar restarts.
 - The settings schema now marks TUI-chrome-only entries (`TUI_ONLY_SETTING_PATHS`) so non-TUI clients can badge them instead of presenting them as effective. `display.showTokenUsage`, `display.collapseCompacted`, `tui.titleState`, and `goal.statusInFooter` are no longer TUI-only — the GUI honors them.
 - The settings schema also marks entries cached at session construction (`RESTART_REQUIRED_SETTING_PATHS`) so clients can badge them as restart-required instead of implying a live apply.
+- Fixed TTSR settings missing from the restart-required schema classification. Advisor setting RPC responses now report both the configured session state and whether an advisor runtime actually started, so clients can distinguish enabled-but-unresolved model roles from a running advisor.
+## [17.2.7] - 2026-08-03
+
+### Changed
+
+- Replaced arktype with @oh-my-pi/omptype for tool parameter and config schemas, significantly improving startup performance with ~100x faster schema construction. Config schema errors are now reported via OmpErrors using the same path/problem structure.
+
+### Fixed
+
+- Fixed an issue where custom, extension, or hook tool wrappers stripped schema methods off parameters, causing wire-schema detection failures and status-line token estimator crashes.
+- Fixed a bug where agent() calls in evaluation cells ignored turn cancellation and continued running indefinitely.
+- Fixed the built-in tail command to exit silently with code 141 (SIGPIPE) instead of failing with a "Broken pipe" error when a downstream pipeline reader exits early.
+- Fixed the in-process ps shell builtin to support common procps/BSD format specifiers, including tpgid, pri, flags, real/effective user/group columns, wchan, fault counters, sz, and the STAT + foreground flag.
+- Fixed install.sh falsely reporting success on musl-based systems (such as Alpine Linux) when the binary fails to start; the installer now smoke-tests the binary, exits non-zero on failure, and provides remediation steps.
+- Fixed Codex config.toml discovery incorrectly importing MCP servers that are configured with enabled = false.
+- Fixed bash.patterns allow rules rejecting valid commands when quoted arguments contained shell metacharacters (such as Cargo benchmark regex filters).
 
 ## [17.2.6] - 2026-08-03
 
