@@ -36,7 +36,7 @@ Unless user tells you exactly what to write:
 
 Roles are strict:
 
-- **This monorepo = upstream sync + sidecar build source.** It tracks `upstream` ([`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi)) for agent features, and it is the only place that can compile the GUI's bundled agent sidecar (`resources/omp`, built by `bun --cwd=packages/gui run build:omp` from `packages/coding-agent` + `packages/natives`).
+- **This monorepo = upstream sync + sidecar build source.** It tracks `upstream` ([`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi)) for agent features, and it is the only place that can compile the GUI's bundled agent sidecar (`resources/omp`, built by `bun --cwd=packages/gui run build:omp` from `packages/coding-agent` + `packages/natives`). Monorepo work is committed here and pushed to `origin` ([`nornzach/oh-my-pi`](https://github.com/nornzach/oh-my-pi), the fork) — the fork is the build-from-source monorepo referenced by the GUI's README; never push to `upstream`.
 - **The GUI sub-repository = the real product repo.** All GUI code changes, commits, tags, and releases happen **only** in `packages/gui/.git` and are pushed to `nornzach/oh-my-pi-gui` — never to this monorepo's remotes.
 
 Rules:
