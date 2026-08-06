@@ -61,6 +61,24 @@ describe("buildAvailableSlashCommands", () => {
 		expect(byName.notes.source).toBe("file");
 	});
 
+	test("marks text-mode executability and can expose TUI-only builtins to remote clients", async () => {
+		const session = {
+			customCommands: [],
+			skills: [],
+			sessionManager: { getCwd: () => process.cwd() },
+			setSlashCommands() {},
+		};
+
+		const textCommands = await buildAvailableSlashCommands(session as never, async () => []);
+		expect(textCommands.find(command => command.name === "usage")?.textModeExecutable).toBe(true);
+		expect(textCommands.find(command => command.name === "settings")).toBeUndefined();
+
+		const allCommands = await buildAvailableSlashCommands(session as never, async () => [], {
+			includeTuiOnlyBuiltins: true,
+		});
+		expect(allCommands.find(command => command.name === "settings")?.textModeExecutable).toBe(false);
+	});
+
 	test("loads file commands into the session before advertising them", async () => {
 		const fileCommands = [{ name: "notes", description: "Open notes", content: "body", source: "test" }];
 		let loadedCommands: typeof fileCommands | undefined;

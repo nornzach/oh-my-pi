@@ -160,15 +160,35 @@ export async function buildRpcMcpServersResult(session: AgentSession): Promise<R
 	const servers: RpcMcpServerInfo[] = [];
 	for (const name of names) {
 		const config = configured.get(name) ?? manager?.getServerConfig(name);
+		// Scope: which writable config file declared the server (project shadows
+		// user on a same-name hit, matching the `configured` merge above).
+		// Discovered-only entries (manager-known but in neither file) omit it.
+		const scope = projectConfig.mcpServers?.[name] ? "project" : userConfig.mcpServers?.[name] ? "user" : undefined;
+		// `lastError` is intentionally omitted: the manager reports connection
+		// failures through transient status events, not a queryable store.
+		const credential = config ? lookupMcpOAuthCredential(authStorage, config) : undefined;
+		const authState: RpcMcpServerInfo["authState"] = !config
+			? "none"
+			: credential
+				? credential.credential.expires > Date.now()
+					? "authorized"
+					: "expired"
+				: hasMcpAuthorizationHeader(config)
+					? "authorized"
+					: config.auth?.type === "oauth" || config.oauth
+						? "required"
+						: "none";
 		servers.push({
 			name,
 			transport: config?.type ?? (config ? "stdio" : "unknown"),
 			status: manager?.getConnectionStatus(name) ?? "disconnected",
 			toolCount: tools.filter(tool => tool.mcpServerName === name).length,
 			enabled: config?.enabled !== false && !disabledNames.has(name),
-			authed: config
-				? lookupMcpOAuthCredential(authStorage, config) !== undefined || hasMcpAuthorizationHeader(config)
-				: false,
+			authed: config ? credential !== undefined || hasMcpAuthorizationHeader(config) : false,
+			...(scope !== undefined ? { scope } : {}),
+			...(config && "command" in config && config.command ? { command: config.command } : {}),
+			...(config && "url" in config && config.url ? { url: config.url } : {}),
+			authState,
 		});
 	}
 	servers.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));

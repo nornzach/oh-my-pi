@@ -165,6 +165,34 @@ describe("dispatchRpcInputFrame", () => {
 		expect(started).toEqual(["abort_retry", "set_auto_retry"]);
 	});
 
+	test("slow speech synthesis does not block an unrelated prompt", async () => {
+		const synth = Promise.withResolvers<RpcResponse>();
+		const { deps, outputs } = makeDeps(async command => {
+			if (command.type === "synthesize_speech") return await synth.promise;
+			if (command.type === "prompt") {
+				return { id: command.id, type: "response", command: "prompt", success: true };
+			}
+			throw new Error(`unexpected: ${command.type}`);
+		});
+
+		const synthAwait = dispatchRpcInputFrame({ id: "tts-1", type: "synthesize_speech", text: "hello" }, deps);
+		expect(synthAwait).toBeUndefined();
+		const promptAwait = dispatchRpcInputFrame({ id: "p1", type: "prompt", message: "continue" }, deps);
+		expect(promptAwait).toBeInstanceOf(Promise);
+		await promptAwait;
+		expect(outputs.map(frame => (frame as RpcResponse).command)).toEqual(["prompt"]);
+
+		synth.resolve({
+			id: "tts-1",
+			type: "response",
+			command: "synthesize_speech",
+			success: true,
+			data: { audioBase64: "", mimeType: "audio/wav" },
+		});
+		await flushMicrotasks();
+		expect(outputs.map(frame => (frame as RpcResponse).command)).toEqual(["prompt", "synthesize_speech"]);
+	});
+
 	test("bash handler errors surface as an error response on the background frame", async () => {
 		const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 			if (command.type === "bash") throw new Error("kaboom");
@@ -323,6 +351,10 @@ describe("RpcInputDispatcher", () => {
 						followUpMode: "all",
 						interruptMode: "immediate",
 						sessionId: "session-1",
+						cwd: "/tmp",
+						autoRetryEnabled: false,
+						planModeEnabled: false,
+						agentsPaused: false,
 						autoCompactionEnabled: false,
 						fastModeEnabled: false,
 						fastModeActive: false,

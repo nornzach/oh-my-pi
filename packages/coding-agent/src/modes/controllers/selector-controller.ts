@@ -42,6 +42,8 @@ import {
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
+import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
+import { AskReanswerChatRedirectError, runAskReanswer } from "../../session/ask-reanswer";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import {
 	createForeignSessionStore,
@@ -60,16 +62,9 @@ import {
 	toResetUsageAccounts,
 } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
-import {
-	AUTO_THINKING,
-	concreteThinkingLevel,
-	parseConfiguredThinkingLevel,
-} from "../../thinking";
-import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
-import { type ToolSession } from "../../tools";
-import { AskTool, type AskToolDetails, type AskToolInput } from "../../tools/ask";
+import { AUTO_THINKING, concreteThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
+import type { AskToolDetails, AskToolInput } from "../../tools/ask";
 import { shortenPath } from "../../tools/render-utils";
-import { ToolAbortError } from "../../tools/tool-errors";
 import { copyToClipboard } from "../../utils/clipboard";
 import { repo } from "../../utils/git";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
@@ -1340,36 +1335,17 @@ export class SelectorController {
 			this.ctx.showError("Ask tool UI is not ready");
 			return undefined;
 		}
-		const toolSession: ToolSession = {
-			cwd: this.ctx.sessionManager.getCwd(),
-			hasUI: true,
-			settings: this.ctx.settings,
-			getSessionFile: () => this.ctx.sessionManager.getSessionFile() ?? null,
-			getSessionSpawns: () => null,
-			getPlanModeState: () => this.ctx.session.getPlanModeState(),
-		};
-		const askTool = new AskTool(toolSession);
-		const context = this.ctx.session.buildAskReanswerContext(uiContext);
-		let result: AgentToolResult<AskToolDetails>;
 		try {
-			result = await askTool.execute("tree-reanswer", { questions }, undefined, undefined, context);
+			return await runAskReanswer(this.ctx.session, questions, uiContext);
 		} catch (error) {
-			if (error instanceof ToolAbortError) return undefined;
+			if (error instanceof AskReanswerChatRedirectError) {
+				this.ctx.showError(
+					"Chat about this isn't available when re-answering from the tree — pick an option or type a custom answer instead.",
+				);
+				return undefined;
+			}
 			throw error;
 		}
-		// The rich ask dialog can race a collab guest choosing "Chat about this"
-		// (`AskTool`'s `chatRedirect` result); that's meaningful inside a live
-		// agent turn, where the model sees the redirect and starts a
-		// conversation, but this standalone re-answer has no turn to hand it
-		// to — completing the navigation with it would silently drop the
-		// user's intent to chat (roboomp review on #5895).
-		if (result.details?.chatRedirect) {
-			this.ctx.showError(
-				"Chat about this isn't available when re-answering from the tree — pick an option or type a custom answer instead.",
-			);
-			return undefined;
-		}
-		return result;
 	}
 
 	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {

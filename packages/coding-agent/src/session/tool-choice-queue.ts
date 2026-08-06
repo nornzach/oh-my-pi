@@ -271,12 +271,18 @@ export class ToolChoiceQueue {
 
 	// ── Cleanup ───────────────────────────────────────────────────────────
 
-	/** Remove all directives with the given label. Rejects in-flight if it matches. */
+	/**
+	 * Remove all directives with the given label. Rejects in-flight if it
+	 * matches. One-yield replays carry a `<label>-requeued` name but keep the
+	 * original as sequenceRoot, so the filter matches the root label too —
+	 * otherwise an explicit removal would leave a replayed copy armed.
+	 */
 	removeByLabel(label: string): void {
-		if (this.#inFlight?.directive.label === label) {
+		const inFlightRoot = this.#inFlight?.directive.sequenceRoot ?? this.#inFlight?.directive;
+		if (this.#inFlight?.directive.label === label || inFlightRoot?.label === label) {
 			this.reject("removed");
 		}
-		this.#queue = this.#queue.filter(d => d.label !== label);
+		this.#queue = this.#queue.filter(d => d.label !== label && (d.sequenceRoot ?? d).label !== label);
 	}
 
 	/** Empty the queue and reject any in-flight yield. */

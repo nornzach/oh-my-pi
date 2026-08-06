@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries } from "../../session/session-loader";
 import {
@@ -29,6 +30,18 @@ export interface RpcSubagentTranscriptSelector {
 type RpcSubagentOutput = (frame: RpcSubagentFrame) => void;
 
 const MAX_RETAINED_TRANSCRIPT_REFERENCES = 256;
+const MAX_RETAINED_TERMINAL_SUBAGENTS = 256;
+
+/**
+ * Snapshot statuses a bare AgentRegistry ref must never overwrite: finished
+ * agents stay registered as `idle` refs (agent-registry.ts retention model),
+ * and letting such a ref replace the terminal snapshot resurrects the card as
+ * live — blank label (task/assignment lived on the deleted snapshot), elapsed
+ * restarting from first-seen, durationMs lost with the progress payload.
+ * Resumable ref statuses (parked/aborted — the revive path) still win.
+ */
+const TERMINAL_SNAPSHOT_STATUSES: Record<string, true> = { completed: true, failed: true };
+const RESUMABLE_REF_STATUSES: Record<string, true> = { parked: true, aborted: true };
 
 function isSessionMessageEntry(entry: FileEntry): entry is SessionMessageEntry {
 	return entry.type === "message";
@@ -106,6 +119,13 @@ export async function readRpcSubagentTranscript(sessionFile: string, fromByte = 
 
 export class RpcSubagentRegistry {
 	#subagents = new Map<string, RpcSubagentSnapshot>();
+	/**
+	 * Finished agents, newest-last (LRU). Terminal lifecycle used to DELETE the
+	 * row, so the getSubagents AgentRegistry merge re-discovered the id from a
+	 * bare ref (idle, no task/assignment/progress) and the GUI showed fresh
+	 * blank cards with restarted elapsed timers. Kept until evicted or revived.
+	 */
+	#terminalSubagents = new Map<string, RpcSubagentSnapshot>();
 	#transcriptSessionFilesBySubagentId = new Map<string, string>();
 	#staleSubagentIds = new Set<string>();
 	#unsubscribers: Array<() => void> = [];
@@ -131,6 +151,7 @@ export class RpcSubagentRegistry {
 		for (const unsubscribe of this.#unsubscribers) unsubscribe();
 		this.#unsubscribers = [];
 		this.#subagents.clear();
+		this.#terminalSubagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
 		this.#staleSubagentIds.clear();
 	}
@@ -139,10 +160,14 @@ export class RpcSubagentRegistry {
 		for (const subagentId of this.#subagents.keys()) {
 			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
 		}
+		for (const subagentId of this.#terminalSubagents.keys()) {
+			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
+		}
 		for (const subagentId of this.#transcriptSessionFilesBySubagentId.keys()) {
 			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
 		}
 		this.#subagents.clear();
+		this.#terminalSubagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
 	}
 
@@ -155,7 +180,44 @@ export class RpcSubagentRegistry {
 	}
 
 	getSubagents(): RpcSubagentSnapshot[] {
-		return [...this.#subagents.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+		// Terminal rows seed the roster so finished agents keep their last-known
+		// task/assignment/progress; live rows then win outright (revival race).
+		const snapshots = new Map(this.#terminalSubagents);
+		for (const [id, snapshot] of this.#subagents) snapshots.set(id, snapshot);
+		let fallbackIndex = 1;
+		for (const snapshot of snapshots.values()) fallbackIndex = Math.max(fallbackIndex, snapshot.index + 1);
+
+		// The task event bus only retains currently executing task rows. The TUI
+		// Hub is registry-backed, so merge idle, parked, aborted, and advisor
+		// refs here as well; otherwise revive and read-only advisor transcripts
+		// are impossible to discover from a GUI attachment.
+		for (const ref of AgentRegistry.global().list()) {
+			if (ref.id === MAIN_AGENT_ID || ref.kind === "main") continue;
+			const existing = snapshots.get(ref.id);
+			// A bare ref must never resurrect a finished agent as live — see
+			// TERMINAL_SNAPSHOT_STATUSES. The terminal snapshot stays authoritative.
+			if (existing && TERMINAL_SNAPSHOT_STATUSES[existing.status] && !RESUMABLE_REF_STATUSES[ref.status]) {
+				continue;
+			}
+			snapshots.set(ref.id, {
+				id: ref.id,
+				index: existing?.index ?? fallbackIndex++,
+				agent: ref.history?.agent ?? existing?.agent ?? ref.displayName,
+				agentSource: existing?.agentSource,
+				description: existing?.description,
+				status: ref.status,
+				task: existing?.task ?? ref.activity,
+				assignment: existing?.assignment,
+				sessionFile: ref.sessionFile ?? existing?.sessionFile,
+				lastUpdate: ref.lastActivity,
+				progress: existing?.progress,
+				parentToolCallId: existing?.parentToolCallId,
+				parentSubagentId:
+					ref.parentId && ref.parentId !== MAIN_AGENT_ID ? ref.parentId : existing?.parentSubagentId,
+				kind: ref.kind,
+			});
+		}
+		return [...snapshots.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
 	}
 
 	#rememberTranscriptSession(subagentId: string, sessionFile: string | undefined): void {
@@ -185,6 +247,8 @@ export class RpcSubagentRegistry {
 		if (!existing && payload.status !== "started") return;
 		if (payload.status === "started") {
 			this.#staleSubagentIds.delete(payload.id);
+			// Revival: the live row (set below) replaces the finished one outright.
+			this.#terminalSubagents.delete(payload.id);
 		}
 		const sessionFile = payload.sessionFile ?? existing?.sessionFile;
 		const snapshot: RpcSubagentSnapshot = {
@@ -205,6 +269,13 @@ export class RpcSubagentRegistry {
 		this.#rememberTranscriptSession(payload.id, sessionFile);
 		if (isTerminalLifecycleStatus(payload.status)) {
 			this.#subagents.delete(payload.id);
+			this.#terminalSubagents.delete(payload.id);
+			this.#terminalSubagents.set(payload.id, snapshot);
+			while (this.#terminalSubagents.size > MAX_RETAINED_TERMINAL_SUBAGENTS) {
+				const oldest = this.#terminalSubagents.keys().next();
+				if (oldest.done) break;
+				this.#terminalSubagents.delete(oldest.value);
+			}
 		} else {
 			this.#subagents.set(payload.id, snapshot);
 		}

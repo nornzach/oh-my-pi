@@ -40,7 +40,7 @@ async function removeCloneSession(cloneFile: string): Promise<void> {
 export class TanCommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
-	async start(work: string): Promise<void> {
+	async start(work: string): Promise<string | undefined> {
 		const trimmedWork = work.trim();
 		if (!trimmedWork) {
 			this.ctx.showStatus("Usage: /tan <work>");
@@ -239,5 +239,6 @@ export class TanCommandController {
 		);
 		if (!wasStreaming) this.ctx.rebuildChatFromMessages();
 		this.ctx.showStatus(`Dispatched background tan ${jobId}`);
+		return jobId;
 	}
 }

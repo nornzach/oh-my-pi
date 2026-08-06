@@ -634,10 +634,21 @@ export class InputController {
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || settings.get("emojiAutocomplete")) && text) text = expandEmoticons(text);
 
+			// The `->` / `=>` yield-queue shorthand parses BEFORE any steer
+			// decision (focused-chat steer below, streaming steer further down):
+			// a prefixed draft always routes to a followUp lane with the prefix
+			// stripped, regardless of streaming state. Recomputed after the
+			// extension input handler, which may rewrite the text.
+			const initialQueueBody = parseQueueShorthand(text);
+
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (continue shortcuts, slash/bash/python, loop,
 			// compaction queueing) is main-session-only.
 			if (this.ctx.focusedAgentId) {
+				if (initialQueueBody !== undefined) {
+					await this.#submitToFocusedSession(initialQueueBody, "followUp");
+					return;
+				}
 				await this.#submitToFocusedSession(text, "steer");
 				return;
 			}

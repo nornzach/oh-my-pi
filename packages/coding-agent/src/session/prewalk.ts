@@ -243,6 +243,33 @@ export class PrewalkCoordinator {
 		return true;
 	}
 
+	/**
+	 * Cancel a pending prewalk on an explicit user toggle-off (RPC set_prewalk;
+	 * the TUI has no disarm). Pulls a still-queued plan/continue nudge out of
+	 * the steering queue and scrubs one that already landed in the transcript,
+	 * so the next turn carries no stale prewalk steer. Returns false when no
+	 * switch was armed.
+	 */
+	disarm(): boolean {
+		if (!this.#prewalk) return false;
+		this.#prewalk = undefined;
+		this.#continuePending = false;
+		const isNudge = (message: AgentMessage): boolean =>
+			message.role === "custom" &&
+			(message.customType === PREWALK_PLAN_MESSAGE_TYPE || message.customType === PREWALK_CONTINUE_MESSAGE_TYPE);
+		const steering = this.#host.agent.peekSteeringQueue();
+		if (steering.some(isNudge)) {
+			this.#host.agent.replaceQueues(
+				steering.filter(message => !isNudge(message)),
+				[...this.#host.agent.peekFollowUpQueue()],
+			);
+		}
+		this.#scrubPlanNudge([]);
+		this.#planInjected = false;
+		this.#host.emitNotice("info", "Prewalk: disarmed before the first edit/write.", "prewalk");
+		return true;
+	}
+
 	/** Lazily enables plan-yolo's plan phase before the first prompt is built. */
 	async armPlanYoloIfNeeded(): Promise<void> {
 		if (!this.#planYolo || this.#planYoloArmed) return;

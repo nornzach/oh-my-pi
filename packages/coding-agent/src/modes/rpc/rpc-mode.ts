@@ -11,10 +11,14 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { once } from "node:events";
+import { agentPauseGate } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { $env, isRecord, readLines, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, readLines, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
+import { getKnownRoleIds, getRoleInfo, MODEL_ROLES } from "../../config/model-roles";
+import { applyProviderGlobalsFromSettings } from "../../config/provider-globals";
+import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
@@ -26,24 +30,31 @@ import {
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
-import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand, isTuiOnlyBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
-import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { sttClient } from "../../stt/asr-client";
 import { resolveSttModelSpec } from "../../stt/models";
+import type { ToolSession } from "../../tools";
+import { DebugTool } from "../../tools/debug";
+import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { DEFAULT_TTS_VOICE } from "../../tts/models";
 import { ttsClient } from "../../tts/tts-client";
 import { decodeWav, encodeWav } from "../../tts/wav";
 import type { EventBus } from "../../utils/event-bus";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { initializeExtensions } from "../runtime-init";
-import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
-import { buildRpcProvidersResult, buildRpcSettingsSchema, buildRpcUsageResult } from "./rpc-extensions";
+import { buildCopyTargets } from "../utils/copy-targets";
+import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
+import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
+import { applyRpcHookEnabled, applyRpcMcpAction, applyRpcPluginEnabled, applyRpcSkillEnabled } from "./rpc-actions";
+import { applyRpcAbortSubagent, applyRpcReviveSubagent, buildRpcAgentDefinitions } from "./rpc-agents";
+import { RpcBtwController } from "./rpc-btw";
+import { RpcCollabController } from "./rpc-collab";
+import { buildRpcCommandArgCompletions } from "./rpc-completions";
 import {
 	buildRpcHooksResult,
 	buildRpcMarketplacesResult,
@@ -53,17 +64,45 @@ import {
 	buildRpcPromptTemplatesResult,
 	buildRpcSkillsResult,
 } from "./rpc-domains";
-import { applyRpcHookEnabled, applyRpcMcpAction, applyRpcPluginEnabled, applyRpcSkillEnabled } from "./rpc-actions";
-import { MODEL_ROLES, getKnownRoleIds, getRoleInfo, type ModelRole } from "../../config/model-roles";
-import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
-import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
+import { buildRpcProvidersResult, buildRpcSettingsSchema, buildRpcUsageResult } from "./rpc-extensions";
+import { applyRpcImportForeignSession, buildRpcForeignSessionList } from "./rpc-foreign";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput } from "./rpc-input";
+import { RpcLiveController } from "./rpc-live";
+import { applyRpcMarketplaceAction } from "./rpc-marketplace";
+import {
+	applyRpcMcpAdd,
+	applyRpcMcpReauth,
+	applyRpcMcpReauthCancel,
+	applyRpcMcpTest,
+	type RpcMcpOAuthUi,
+	RpcMcpReauthBusyError,
+} from "./rpc-mcp-extra";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcGoalModeController, RpcLoopModeController, RpcVibeModeController } from "./rpc-modes";
+import { runRpcOmfg } from "./rpc-omfg";
+import { applyRpcWriteLocalPaste } from "./rpc-paste";
 import { RpcPlanApprovalController } from "./rpc-plan";
+import {
+	applyRpcDeletePluginSetting,
+	applyRpcSetPluginFeatures,
+	applyRpcSetPluginSetting,
+	buildRpcPluginDetail,
+} from "./rpc-plugins";
+import { applyRpcGetQueue, applyRpcQueueClear, applyRpcQueueMove, applyRpcQueueRemove } from "./rpc-queue";
+import { buildRpcActiveTools, buildRpcContextReport, buildRpcJobs, shareRpcSession } from "./rpc-reports";
+import {
+	applyRpcFresh,
+	applyRpcGetForceTool,
+	applyRpcReloadPlugins,
+	applyRpcSetForceTool,
+	applyRpcSetPrewalk,
+	applyRpcShakeContext,
+} from "./rpc-session-actions";
+import { applyRpcForkFrom, applyRpcSwitchLeaf } from "./rpc-session-extra";
 import { buildRpcSessionTree } from "./rpc-session-tree";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
+import { startRpcTan } from "./rpc-tan";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -76,10 +115,18 @@ import type {
 	RpcHostUriCancelRequest,
 	RpcHostUriRequest,
 	RpcHostUriResult,
+	RpcReloadPluginsResult,
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
 } from "./rpc-types";
+import {
+	applyRpcAddDirectory,
+	applyRpcMoveSession,
+	applyRpcRemoveDirectory,
+	buildRpcWorkspaceDirectories,
+	RpcWorkspaceBusyError,
+} from "./rpc-workspace";
 
 // Re-export types for consumers
 export type * from "./rpc-types";
@@ -125,11 +172,16 @@ type RpcOutput = (
 
 export type RpcSessionChangeCommand = Extract<
 	RpcCommand,
-	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" } | { type: "fork" }
+	| { type: "new_session" }
+	| { type: "drop_session" }
+	| { type: "switch_session" }
+	| { type: "branch" }
+	| { type: "fork" }
 >;
 
 export type RpcSessionChangeResult =
 	| { type: "new_session"; data: { cancelled: boolean } }
+	| { type: "drop_session"; data: { cancelled: boolean } }
 	| { type: "switch_session"; data: { cancelled: boolean } }
 	| { type: "branch"; data: { text: string; cancelled: boolean } }
 	| { type: "fork"; data: { cancelled: boolean } };
@@ -327,18 +379,43 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 }
 
 /**
+ * Command types dispatched in the background instead of queueing behind the
+ * serial command tail. Execution, discovery/import, OAuth, and local speech
+ * inference can all be slow; their control frames or an unrelated prompt must
+ * remain readable while they run. Shared by RpcInputDispatcher.dispatch's
+ * immediate-spawn fast path and dispatchRpcInputFrame's background spawn so
+ * the two never drift.
+ */
+function isBackgroundRpcCommand(type: RpcCommand["type"]): boolean {
+	return (
+		type === "bash" ||
+		type === "eval" ||
+		type === "list_foreign_sessions" ||
+		type === "import_foreign_session" ||
+		type === "mcp_test" ||
+		type === "mcp_reauth" ||
+		type === "transcribe_audio" ||
+		type === "synthesize_speech" ||
+		type === "debug" ||
+		type === "live_start" ||
+		type === "collab_start" ||
+		type === "collab_join"
+	);
+}
+
+/**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * Bash and eval commands are dispatched in the background so the caller can
- * keep reading subsequent frames while a shell command or eval cell is still
- * running. This lets a client send `abort_bash`/`abort_eval` while a
- * long-running execution is in flight. Response correlation is preserved via
- * each command's `id`; ordering across concurrent commands is not guaranteed
- * and clients MUST match on `id`.
+ * Long-running and long-lived commands are dispatched in the background so
+ * the caller can keep reading subsequent control frames. This lets a client
+ * send `abort_bash`/`abort_eval`, stop live voice or collaboration, or issue
+ * unrelated requests while the original command is still running. Response
+ * correlation is preserved via each command's `id`; ordering across concurrent
+ * commands is not guaranteed and clients MUST match on `id`.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
- *   background (`bash`/`eval`). Otherwise a promise that resolves once the
+ *   background. Otherwise a promise that resolves once the
  *   response for the command has been emitted via `output`. Errors from
  *   `handleCommand` on non-background commands propagate; the caller is
  *   expected to wrap them.
@@ -351,11 +428,10 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// the union here.
 	const command = parsed as RpcCommand;
 
-	// `bash`/`eval` can run for a long time. Dispatch them in the background so
-	// a subsequent `abort_bash`/`abort_eval` frame can be read and handled
-	// without waiting for the execution to finish on its own. The response is
-	// emitted when `handleCommand` resolves; clients correlate via `command.id`.
-	if (command.type === "bash" || command.type === "eval") {
+	// Long-running executions, source scans/imports, MCP probes/OAuth, and local
+	// speech inference run in the background. Abort/control frames and ordinary
+	// prompts therefore remain responsive; responses correlate by command id.
+	if (isBackgroundRpcCommand(command.type)) {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
@@ -391,7 +467,11 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
-			if (command.type === "bash" || command.type === "eval") {
+			// Immediate-spawn fast path: background commands never wait behind
+			// the serial tail (a slow mcp_reauth would otherwise hold every
+			// later frame hostage — including the mcp_reauth_cancel meant to
+			// overtake it).
+			if (isBackgroundRpcCommand(command.type)) {
 				dispatchRpcInputFrame(command, this.#deps);
 				return;
 			}
@@ -503,6 +583,12 @@ export async function handleRpcSessionChange(
 			const cancelled = !(await session.newSession(options));
 			if (!cancelled) subagentRegistry?.clear();
 			return { type: "new_session", data: { cancelled } };
+		}
+
+		case "drop_session": {
+			const cancelled = !(await session.newSession({ drop: true }));
+			if (!cancelled) subagentRegistry?.clear();
+			return { type: "drop_session", data: { cancelled } };
 		}
 
 		case "switch_session": {
@@ -745,6 +831,41 @@ export async function runRpcMode(
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
+	// OAuth UI bridge for mcp_reauth (C1): the browser URL rides the EXISTING
+	// open_url frame (same emission as the login command), progress rides
+	// notify, and the manual code paste-back rides the EXISTING input dialog
+	// plumbing (requestRpcDialog over pendingExtensionRequests).
+	const rpcMcpOAuthUi: RpcMcpOAuthUi = {
+		openUrl: info =>
+			output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "open_url",
+				url: info.url,
+				launchUrl: info.launchUrl,
+				instructions: info.instructions,
+			} as RpcExtensionUIRequest),
+		notify: message =>
+			output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "notify",
+				message,
+				notifyType: "info",
+			} as RpcExtensionUIRequest),
+		input: (title, placeholder, signal) =>
+			requestRpcDialog<string | undefined>(
+				pendingExtensionRequests,
+				output,
+				// The reauth cancel channel: aborting dismisses the remote input
+				// dialog (method:"cancel" frame) and resolves the pending extension
+				// request instead of leaking it.
+				signal ? { signal } : undefined,
+				undefined,
+				{ method: "input", title, placeholder },
+				response => parseValueDialogResponse(response, undefined),
+			),
+	};
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
 	const subagentRegistry = eventBus ? new RpcSubagentRegistry(eventBus, output) : undefined;
@@ -753,6 +874,7 @@ export async function runRpcMode(
 		output,
 		onError: err => output(error(undefined, "plan_approval", err.message)),
 	});
+	const btwController = new RpcBtwController(session);
 	const vibeModeController = new RpcVibeModeController(session);
 	const goalModeController = new RpcGoalModeController({
 		session,
@@ -990,6 +1112,16 @@ export async function runRpcMode(
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
 	setToolUIContext?.(rpcUiContext, true);
+	const liveController = new RpcLiveController(session, output);
+	const collabController = new RpcCollabController({
+		session,
+		eventBus,
+		output,
+		notify: (message, type) => rpcUiContext.notify(message, type),
+		select: (title, options, dialogOptions) => rpcUiContext.select(title, options, dialogOptions),
+		edit: (title, prefill, dialogOptions) => rpcUiContext.editor(title, prefill, dialogOptions),
+	});
+	let askReanswerAwaitingResumeLeafId: string | undefined;
 
 	// Set up extensions with RPC-based UI context
 	await initializeExtensions(session, {
@@ -1046,15 +1178,12 @@ export async function runRpcMode(
 		session.sessionManager.appendModeChange("plan", { planFilePath });
 	}
 
-	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
-	const reloadPluginState = async () => {
-		const cwd = session.sessionManager.getCwd();
-		const projectPath = await resolveActiveProjectRegistryPath(cwd);
-		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
-		resetCapabilities();
-		await session.refreshSkills();
-		session.setSlashCommands(await loadSlashCommands({ cwd }));
-		await emitAvailableCommandsUpdate();
+	const getAvailableCommands = async () =>
+		buildAvailableSlashCommands(session, undefined, { includeTuiOnlyBuiltins: true });
+	const reloadPluginState = async (): Promise<RpcReloadPluginsResult> => {
+		return applyRpcReloadPlugins(session, commands => {
+			output({ type: "available_commands_update", commands });
+		});
 	};
 	const emitAvailableCommandsUpdate = async () => {
 		output({ type: "available_commands_update", commands: await getAvailableCommands() });
@@ -1094,6 +1223,14 @@ export async function runRpcMode(
 			new Promise<void>(resolve => setTimeout(resolve, DISCOVERY_WAIT_MS)),
 		]);
 
+	// Workspace-directory mutations surface streaming refusals with the
+	// machine-readable "busy" code (TUI "Cannot … while streaming." parity);
+	// domain refusals (missing path, primary removal) ride the plain message.
+	const workspaceError = (id: string | undefined, command: string, err: unknown): RpcResponse => {
+		if (err instanceof RpcWorkspaceBusyError) return error(id, command, err.message, err.code);
+		return error(id, command, err instanceof Error ? err.message : String(err));
+	};
+
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
@@ -1110,9 +1247,12 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
+				if (collabController.isGuest && !command.message.trimStart().startsWith("/")) {
+					collabController.sendPrompt(command.message, command.images);
+					return success(id, "prompt");
+				}
 				// TUI captures every submitted prompt as the loop prompt while loop
 				// mode is enabled (input-controller's setLoopPrompt).
-				loopModeController.onHostPrompt(command.message);
 				const skillResult = await tryRunRpcSkillCommand(session, command.message, command.streamingBehavior);
 				if (skillResult) {
 					return success(id, "prompt", skillResult);
@@ -1124,7 +1264,9 @@ export async function runRpcMode(
 					cwd: session.sessionManager.getCwd(),
 					output: text => output({ type: "command_output", text }),
 					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: reloadPluginState,
+					reloadPlugins: async () => {
+						await reloadPluginState();
+					},
 					notifyTitleChanged: async () => {
 						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
 					},
@@ -1145,6 +1287,9 @@ export async function runRpcMode(
 					}
 					return success(id, "prompt", { agentInvoked: false });
 				}
+				if (isTuiOnlyBuiltinSlashCommand(command.message)) {
+					return error(id, "prompt", "Command requires an interactive client UI");
+				}
 
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
@@ -1164,11 +1309,13 @@ export async function runRpcMode(
 			}
 
 			case "steer": {
+				if (collabController.sendPrompt(command.message, command.images)) return success(id, "steer");
 				await session.steer(command.message, command.images);
 				return success(id, "steer");
 			}
 
 			case "follow_up": {
+				if (collabController.sendPrompt(command.message, command.images)) return success(id, "follow_up");
 				await session.followUp(command.message, command.images);
 				return success(id, "follow_up");
 			}
@@ -1176,12 +1323,16 @@ export async function runRpcMode(
 			case "abort": {
 				// TUI Esc pauses the loop before aborting the current iteration.
 				loopModeController.pause();
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				if (!collabController.sendAbort()) await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return success(id, "abort");
 			}
 
 			case "abort_and_prompt": {
 				loopModeController.pause();
+				if (collabController.sendAbort()) {
+					collabController.sendPrompt(command.message, command.images);
+					return success(id, "abort_and_prompt");
+				}
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				loopModeController.onHostPrompt(command.message);
 				session
@@ -1191,6 +1342,7 @@ export async function runRpcMode(
 			}
 
 			case "new_session":
+			case "drop_session":
 			case "switch_session":
 			case "branch":
 			case "fork": {
@@ -1236,6 +1388,9 @@ export async function runRpcMode(
 					})),
 					contextUsage: session.getContextUsage(),
 					planModeEnabled: session.getPlanModeState()?.enabled ?? false,
+					prewalkArmed: session.getPrewalkState() !== undefined,
+					agentsPaused: agentPauseGate.paused,
+					agentsPausedAt: agentPauseGate.pausedAt,
 				};
 				return success(id, "get_state", state);
 			}
@@ -1253,6 +1408,21 @@ export async function runRpcMode(
 
 			case "get_available_commands": {
 				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
+			}
+
+			// Dynamic slash-command argument candidates (MCP server names, /move
+			// directories). Static subcommand data rides get_available_commands.
+			case "get_command_arg_completions": {
+				try {
+					const items = await buildRpcCommandArgCompletions(
+						session.sessionManager.getCwd(),
+						command.command,
+						command.prefix,
+					);
+					return success(id, "get_command_arg_completions", { items: items ?? [] });
+				} catch (err) {
+					return error(id, "get_command_arg_completions", err instanceof Error ? err.message : String(err));
+				}
 			}
 
 			case "set_todos": {
@@ -1314,6 +1484,22 @@ export async function runRpcMode(
 				}
 			}
 
+			// Per-subagent lifecycle (TUI Agent Hub `x`/`r` parity): abort one
+			// subagent without touching the main turn, or revive a parked one.
+			case "abort_subagent": {
+				if (collabController.abortRemoteAgent(command.agentId)) {
+					return success(id, "abort_subagent", { ok: true });
+				}
+				return success(id, "abort_subagent", await applyRpcAbortSubagent(command.agentId));
+			}
+
+			case "revive_subagent": {
+				if (collabController.reviveRemoteAgent(command.agentId)) {
+					return success(id, "revive_subagent", { ok: true });
+				}
+				return success(id, "revive_subagent", await applyRpcReviveSubagent(command.agentId));
+			}
+
 			// =================================================================
 			// Model
 			// =================================================================
@@ -1340,7 +1526,20 @@ export async function runRpcMode(
 			}
 
 			case "cycle_model": {
-				const result = await session.cycleModel();
+				// Wire frames are cast, not shape-validated — reject a direction
+				// outside the declared union before forwarding to the session.
+				if (
+					command.direction !== undefined &&
+					command.direction !== "forward" &&
+					command.direction !== "backward"
+				) {
+					return error(
+						id,
+						"cycle_model",
+						`Invalid direction: ${command.direction}. Expected "forward" or "backward".`,
+					);
+				}
+				const result = await session.cycleModel(command.direction);
 				if (!result) {
 					return success(id, "cycle_model", null);
 				}
@@ -1390,14 +1589,35 @@ export async function runRpcMode(
 			}
 
 			case "dequeue": {
-				// TUI Alt+Up parity (restoreQueuedMessagesToEditor): pull user-authored
-				// queued steer/follow-up messages back out so the host can restore them
-				// into its composer. Plain (non-forInterrupt) clearQueue semantics:
-				// non-user internal steers stay queued for the continuing stream. The
-				// TUI-only compactionQueuedMessages store has no RPC counterpart — RPC
-				// steer/follow_up always enqueue on the agent queues drained here.
-				const { steering, followUp } = session.clearQueue();
-				return success(id, "dequeue", { messages: [...steering, ...followUp] });
+				// Preserve delivery lanes and cross-lane enqueue order so a remote
+				// editor can pull back the newest message and re-queue the rest
+				// without demoting steers to follow-ups.
+				const messages = session.clearQueueWithDelivery();
+				return success(id, "dequeue", { messages });
+			}
+
+			case "get_queue": {
+				return success(id, "get_queue", applyRpcGetQueue(session));
+			}
+
+			case "queue_remove": {
+				try {
+					return success(id, "queue_remove", applyRpcQueueRemove(session, command.queueId));
+				} catch (err) {
+					return error(id, "queue_remove", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "queue_move": {
+				try {
+					return success(id, "queue_move", applyRpcQueueMove(session, command.queueId, command.toIndex));
+				} catch (err) {
+					return error(id, "queue_move", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "queue_clear": {
+				return success(id, "queue_clear", applyRpcQueueClear(session, command.lane));
 			}
 
 			// =================================================================
@@ -1428,12 +1648,102 @@ export async function runRpcMode(
 				return success(id, "abort_retry");
 			}
 
+			// TUI /retry parity: retry the last failed assistant turn. Distinct
+			// from abort_retry (cancels a scheduled auto-retry) and from the GUI's
+			// client-side re-send (this knows what "failed turn" means).
+			case "retry": {
+				const didRetry = await session.retry();
+				return success(id, "retry", { retried: didRetry });
+			}
+
+			// TUI /clear parity: drop the conversation context in place, keeping
+			// the session. Refused while streaming / foreground bash/eval so a
+			// late result cannot land after the reset boundary.
+			case "clear_context": {
+				const result = await session.resetSessionContext();
+				if (!result) {
+					return error(
+						id,
+						"clear_context",
+						"Session is busy (streaming or foreground execution in flight)",
+						"busy",
+					);
+				}
+				return success(id, "clear_context", { cleared: true, droppedCount: result.droppedCount });
+			}
+
+			// =================================================================
+			// One-shot session actions (TUI /prewalk /fresh /shake
+			// /reload-plugins /force parity)
+			// =================================================================
+
+			// /prewalk: arm/disarm the next-action model switch. Resolution and
+			// auth failures land as ordinary errors (the TUI's usage() path).
+			case "set_prewalk": {
+				try {
+					return success(id, "set_prewalk", applyRpcSetPrewalk(session, command.enabled));
+				} catch (err) {
+					return error(id, "set_prewalk", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// /fresh: reset provider stream state. Same busy boundary as
+			// clear_context — the TUI refuses mid-stream too.
+			case "fresh": {
+				const result = applyRpcFresh(session);
+				if (!result) {
+					return error(id, "fresh", "Session is busy (streaming or foreground execution in flight)", "busy");
+				}
+				return success(id, "fresh", result);
+			}
+
+			// /shake elide|images: `removed` carries the TUI's one-line summary.
+			case "shake_context": {
+				try {
+					return success(id, "shake_context", await applyRpcShakeContext(session, command.mode));
+				} catch (err) {
+					return error(id, "shake_context", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// /reload-plugins: full reload incl. MCP reconnect (#7189 parity);
+			// data carries the post-reload counts for the GUI toast.
+			case "reload_plugins": {
+				return success(id, "reload_plugins", await reloadPluginState());
+			}
+
+			// /force + GUI clear: unknown/inactive tool names land as errors
+			// (the TUI's usage() path); the response reports the post-state.
+			case "set_force_tool": {
+				try {
+					return success(id, "set_force_tool", applyRpcSetForceTool(session, command));
+				} catch (err) {
+					return error(id, "set_force_tool", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_force_tool": {
+				return success(id, "get_force_tool", applyRpcGetForceTool(session));
+			}
+
+			// Write a large paste to the session's local:// store; the name
+			// counter is allocated here so concurrent GUI windows never collide.
+			case "write_local_paste": {
+				try {
+					return success(id, "write_local_paste", await applyRpcWriteLocalPaste(session, command.content));
+				} catch (err) {
+					return error(id, "write_local_paste", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			// =================================================================
 			// Bash
 			// =================================================================
 
 			case "bash": {
-				const result = await session.executeBash(command.command);
+				const result = await session.executeBash(command.command, undefined, {
+					excludeFromContext: command.excluded === true,
+				});
 				return success(id, "bash", result);
 			}
 
@@ -1503,6 +1813,46 @@ export async function runRpcMode(
 				return success(id, "get_session_tree", buildRpcSessionTree(session));
 			}
 
+			// Independent new session from a history node (Codex-style "open in
+			// new window from here"); does NOT switch the attached session.
+			case "fork_from": {
+				try {
+					return success(id, "fork_from", await applyRpcForkFrom(session, command.entryId));
+				} catch (err) {
+					return error(id, "fork_from", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			// Move the active leaf in place (TUI tree-selector Enter parity).
+			case "switch_leaf": {
+				if (session.isStreaming) {
+					return error(id, "switch_leaf", "Session is busy (streaming)", "busy");
+				}
+				try {
+					const result = await applyRpcSwitchLeaf(session, command, rpcUiContext);
+					askReanswerAwaitingResumeLeafId = result.askReanswerCommitted ? result.activeLeafId : undefined;
+					return success(id, "switch_leaf", result);
+				} catch (err) {
+					askReanswerAwaitingResumeLeafId = undefined;
+					return error(id, "switch_leaf", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "resume_after_ask_reanswer": {
+				const activeLeafId = session.sessionManager.getLeafId() ?? undefined;
+				if (!askReanswerAwaitingResumeLeafId || activeLeafId !== askReanswerAwaitingResumeLeafId) {
+					return error(
+						id,
+						"resume_after_ask_reanswer",
+						"No committed ask re-answer is awaiting resume",
+						"invalid_state",
+					);
+				}
+				askReanswerAwaitingResumeLeafId = undefined;
+				session.resumeAfterAskReanswer();
+				return success(id, "resume_after_ask_reanswer");
+			}
+
 			case "get_themes": {
 				const themes = await getAvailableThemesWithPaths();
 				return success(id, "get_themes", { themes });
@@ -1522,6 +1872,86 @@ export async function runRpcMode(
 				// LLM context window that get_messages returns.
 				const transcript = session.buildTranscriptSessionContext();
 				return success(id, "get_transcript", { messages: transcript.messages });
+			}
+
+			// =================================================================
+			// Workspace directories (TUI /dirs /add-dir /remove-dir /move parity)
+			// =================================================================
+
+			case "get_directories": {
+				return success(id, "get_directories", buildRpcWorkspaceDirectories(session));
+			}
+
+			case "add_directory": {
+				try {
+					return success(id, "add_directory", await applyRpcAddDirectory(session, command.path));
+				} catch (err) {
+					return workspaceError(id, "add_directory", err);
+				}
+			}
+
+			case "remove_directory": {
+				try {
+					return success(id, "remove_directory", await applyRpcRemoveDirectory(session, command.path));
+				} catch (err) {
+					return workspaceError(id, "remove_directory", err);
+				}
+			}
+
+			case "move_session": {
+				try {
+					const result = await applyRpcMoveSession(session, command.path, {
+						applyCwdChange: async newCwd => {
+							// TUI applyCwdChange parity: re-point the process, project
+							// settings, provider globals, and plugin/capability caches at
+							// the destination so the next prompt sees the new project's
+							// configuration and commands.
+							setProjectDir(newCwd);
+							await session.settings.reloadForCwd(newCwd);
+							applyProviderGlobalsFromSettings(session.settings);
+							await reloadPluginState();
+						},
+					});
+					return success(id, "move_session", result);
+				} catch (err) {
+					return workspaceError(id, "move_session", err);
+				}
+			}
+
+			// Foreign session import (Claude/Codex → OMP copy). Both run in the
+			// background (dispatchRpcInputFrame) — listing scans the source,
+			// importing converts a whole transcript.
+			case "list_foreign_sessions": {
+				try {
+					return success(id, "list_foreign_sessions", {
+						sessions: await buildRpcForeignSessionList(command.source),
+					});
+				} catch (err) {
+					return error(
+						id,
+						"list_foreign_sessions",
+						err instanceof Error ? err.message : String(err),
+						"source_unavailable",
+					);
+				}
+			}
+
+			case "import_foreign_session": {
+				try {
+					return success(
+						id,
+						"import_foreign_session",
+						await applyRpcImportForeignSession(session, command.source, command.foreignId),
+					);
+				} catch (err) {
+					// Same source-outage failure class as list_foreign_sessions.
+					return error(
+						id,
+						"import_foreign_session",
+						err instanceof Error ? err.message : String(err),
+						"source_unavailable",
+					);
+				}
 			}
 
 			case "transcribe_audio": {
@@ -1576,9 +2006,84 @@ export async function runRpcMode(
 				}
 			}
 
+			case "live_start": {
+				try {
+					const state = await liveController.start(command.voice ?? session.settings.get("live.voice"));
+					return success(id, "live_start", state);
+				} catch (err: unknown) {
+					return error(id, "live_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "live_toggle_mute": {
+				try {
+					return success(id, "live_toggle_mute", liveController.toggleMute());
+				} catch (err: unknown) {
+					return error(id, "live_toggle_mute", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "live_stop": {
+				try {
+					return success(id, "live_stop", await liveController.stop());
+				} catch (err: unknown) {
+					return error(id, "live_stop", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_live_state": {
+				return success(id, "get_live_state", liveController.state);
+			}
+
+			case "debug": {
+				try {
+					const debugSession = {
+						cwd: session.sessionManager.getCwd(),
+						hasUI: true,
+						settings: session.settings,
+					} as ToolSession;
+					const result = await new DebugTool(debugSession).execute(Snowflake.next() as string, command.params);
+					return success(id, "debug", { content: result.content, details: result.details });
+				} catch (err: unknown) {
+					return error(id, "debug", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "collab_start": {
+				try {
+					return success(id, "collab_start", await collabController.start(command.relayUrl));
+				} catch (err: unknown) {
+					return error(id, "collab_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "collab_join": {
+				try {
+					return success(id, "collab_join", await collabController.join(command.link));
+				} catch (err: unknown) {
+					return error(id, "collab_join", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "collab_leave": {
+				try {
+					return success(id, "collab_leave", await collabController.leave());
+				} catch (err: unknown) {
+					return error(id, "collab_leave", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_collab_state": {
+				return success(id, "get_collab_state", collabController.state);
+			}
+
 			case "get_last_assistant_text": {
 				const text = session.getLastAssistantText();
 				return success(id, "get_last_assistant_text", { text });
+			}
+
+			case "get_copy_targets": {
+				return success(id, "get_copy_targets", { targets: buildCopyTargets(session) });
 			}
 
 			case "set_session_name": {
@@ -1836,6 +2341,63 @@ export async function runRpcMode(
 				return success(id, "get_goal", goalModeController.state);
 			}
 
+			case "guided_goal": {
+				try {
+					return success(id, "guided_goal", await goalModeController.startGuidedInterview(command.initial));
+				} catch (err: unknown) {
+					return error(id, "guided_goal", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_agents_paused": {
+				if (command.enabled) {
+					agentPauseGate.pause();
+					return success(id, "set_agents_paused", {
+						paused: true,
+						pausedAt: agentPauseGate.pausedAt,
+					});
+				}
+				const heldMs = agentPauseGate.resume();
+				return success(id, "set_agents_paused", { paused: false, heldMs });
+			}
+
+			case "btw": {
+				try {
+					return success(id, "btw", await btwController.start(command.question));
+				} catch (err: unknown) {
+					return error(id, "btw", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "btw_branch": {
+				try {
+					const result = await btwController.branch();
+					if (!result.cancelled) {
+						subagentRegistry?.clear();
+						await emitAvailableCommandsUpdate();
+						planApprovalController.syncArmed();
+					}
+					return success(id, "btw_branch", result);
+				} catch (err: unknown) {
+					return error(id, "btw_branch", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "tan": {
+				try {
+					return success(id, "tan", await startRpcTan(session, command.work));
+				} catch (err: unknown) {
+					return error(id, "tan", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "omfg": {
+				try {
+					return success(id, "omfg", await runRpcOmfg(session, rpcUiContext, command.complaint));
+				} catch (err: unknown) {
+					return error(id, "omfg", err instanceof Error ? err.message : String(err));
+				}
+			}
 			case "set_goal": {
 				try {
 					return success(id, "set_goal", await goalModeController.setGoal(command));
@@ -1922,6 +2484,15 @@ export async function runRpcMode(
 			// Domain Inspection (skills / hooks / mcp / plugins / templates / memory)
 			// =================================================================
 
+			case "get_agent_definitions": {
+				try {
+					const result = await buildRpcAgentDefinitions(session);
+					return success(id, "get_agent_definitions", result);
+				} catch (err: unknown) {
+					return error(id, "get_agent_definitions", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "get_skills": {
 				try {
 					const result = await buildRpcSkillsResult(session);
@@ -1985,6 +2556,26 @@ export async function runRpcMode(
 				}
 			}
 
+			case "get_context_report": {
+				return success(id, "get_context_report", buildRpcContextReport(session));
+			}
+
+			case "get_active_tools": {
+				return success(id, "get_active_tools", buildRpcActiveTools(session));
+			}
+
+			case "share_session": {
+				try {
+					return success(id, "share_session", await shareRpcSession(session));
+				} catch (err: unknown) {
+					return error(id, "share_session", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_jobs": {
+				return success(id, "get_jobs", buildRpcJobs(session));
+			}
+
 			// =================================================================
 			// Domain Actions (mutating)
 			// =================================================================
@@ -2027,8 +2618,86 @@ export async function runRpcMode(
 				}
 			}
 
+			// =================================================================
+			// C1 management surfaces (MCP add/test/reauth, marketplace, plugins)
+			// =================================================================
+
+			case "mcp_add": {
+				try {
+					const result = await applyRpcMcpAdd(session, command.name, command.config, command.scope);
+					return success(id, "mcp_add", result);
+				} catch (err: unknown) {
+					return error(id, "mcp_add", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "mcp_test": {
+				// Background-dispatched (dispatchRpcInputFrame). Every outcome —
+				// including argument and probe failures — rides the result shape.
+				const result = await applyRpcMcpTest(session, command.name, command.config);
+				return success(id, "mcp_test", result);
+			}
+
+			case "mcp_reauth": {
+				// Background-dispatched (dispatchRpcInputFrame) so
+				// mcp_reauth_cancel can overtake the browser login wait.
+				try {
+					const result = await applyRpcMcpReauth(session, command.name, rpcMcpOAuthUi);
+					return success(id, "mcp_reauth", result);
+				} catch (err: unknown) {
+					if (err instanceof RpcMcpReauthBusyError) {
+						return error(id, "mcp_reauth", err.message, err.code);
+					}
+					return error(id, "mcp_reauth", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "mcp_reauth_cancel": {
+				return success(id, "mcp_reauth_cancel", applyRpcMcpReauthCancel(command.name));
+			}
+
+			case "marketplace_action": {
+				try {
+					const result = await applyRpcMarketplaceAction(session, command);
+					// Every successful mutation ends in the plugin-state reload so the
+					// GUI receives a fresh available_commands_update.
+					if (result.ok && command.action !== "list_available") await reloadPluginState();
+					return success(id, "marketplace_action", result);
+				} catch (err: unknown) {
+					return error(id, "marketplace_action", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_plugin_detail": {
+				try {
+					const detail = await buildRpcPluginDetail(session, command.pluginId);
+					return success(id, "get_plugin_detail", detail);
+				} catch (err: unknown) {
+					return error(id, "get_plugin_detail", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "set_plugin_features": {
+				const result = await applyRpcSetPluginFeatures(session, command.pluginId, command.features);
+				if (result.ok) await reloadPluginState();
+				return success(id, "set_plugin_features", result);
+			}
+
+			case "set_plugin_setting": {
+				const result = await applyRpcSetPluginSetting(session, command.pluginId, command.key, command.value);
+				if (result.ok) await reloadPluginState();
+				return success(id, "set_plugin_setting", result);
+			}
+
+			case "delete_plugin_setting": {
+				const result = await applyRpcDeletePluginSetting(session, command.pluginId, command.key);
+				if (result.ok) await reloadPluginState();
+				return success(id, "delete_plugin_setting", result);
+			}
+
 			default: {
-				const unknownCommand = command as { type: string };
+				const exhaustive: never = command;
+				const unknownCommand = exhaustive as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
 		}
@@ -2046,6 +2715,7 @@ export async function runRpcMode(
 			// the process exits. dispose() also emits `session_shutdown`, so we
 			// must NOT emit it separately here or the event fires twice. Skipping
 			// dispose left OMP-owned Chromium alive after RPC shutdown (#5643).
+			await Promise.all([liveController.dispose(), collabController.dispose()]);
 			await session.dispose();
 			process.exit(0);
 		},
@@ -2097,6 +2767,7 @@ export async function runRpcMode(
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();
+	await Promise.all([liveController.dispose(), collabController.dispose()]);
 	// Dispose the main session before exiting so the browser reaper and other
 	// bounded teardown run on the stdin-EOF path too (#5643). Idempotent: a
 	// prior pi.shutdown() through the coordinator makes this await settle

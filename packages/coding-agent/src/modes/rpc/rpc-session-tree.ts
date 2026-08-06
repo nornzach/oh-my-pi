@@ -82,7 +82,7 @@ export function buildRpcSessionTree(session: AgentSession): RpcSessionTreeResult
 	const tree: RpcSessionTreeNode[] = [];
 	for (const id of included) {
 		const entry = byId.get(id);
-		if (!entry || entry.type !== "message") continue;
+		if (entry?.type !== "message") continue;
 		const role = roleOf(entry);
 		if (!role) continue;
 		const text = collapse(extractText(entry.message));

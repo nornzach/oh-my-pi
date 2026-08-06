@@ -6,6 +6,7 @@ import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import type { Goal, GoalModeState } from "../goals/state";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { TodoItem } from "../tools/todo";
+import type { SessionQueuedMessage } from "./agent-session-types";
 import type { CustomMessage } from "./messages";
 
 /** Session-specific events that extend the core AgentEvent. */
@@ -61,7 +62,14 @@ export type AgentSessionEvent =
 			/** The level `auto` resolved to this turn, once classified. */
 			resolved?: Effort;
 	  }
-	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState };
+	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
+	/**
+	 * Authoritative snapshot of the user-restorable queue after EVERY queue
+	 * mutation (enqueue, drain/consume, remove, move, clear, dequeue restore).
+	 * Remote UIs subscribe instead of polling get_queue; advisor cards and
+	 * internal steers are deliberately absent (same filter as get_queue).
+	 */
+	| { type: "queue_update"; steering: SessionQueuedMessage[]; followUp: SessionQueuedMessage[] };
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;

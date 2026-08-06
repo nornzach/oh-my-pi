@@ -18,6 +18,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionRunner, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import type { AskToolDetails } from "@oh-my-pi/pi-coding-agent/tools/ask";
+import { applyRpcSwitchLeaf } from "../src/modes/rpc/rpc-session-extra";
 import { assistantMsg, createTestSession, userMsg } from "./utilities";
 
 const ORIGINAL_QUESTIONS = [
@@ -521,6 +522,55 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			expect(result.reopenAsk).toBeUndefined();
 			expect(result.askReanswerCommitted).toBeFalsy();
 
+			await session.waitForIdle();
+			expect(continueSpy).not.toHaveBeenCalled();
+		} finally {
+			await ctx.cleanup();
+		}
+	});
+});
+
+describe("RPC switch_leaf ask re-answer", () => {
+	it("opens the remote ask dialog, commits a sibling answer, and defers resume", async () => {
+		const ctx = await createTestSession({ inMemory: true });
+		try {
+			const { session, sessionManager } = ctx;
+			sessionManager.appendMessage(userMsg("please deploy"));
+			const askCallId = "ask-call-rpc";
+			sessionManager.appendMessage(toolCallMsg(askCallId, "ask", { questions: ORIGINAL_QUESTIONS }));
+			const staleResultId = sessionManager.appendMessage(
+				toolResultMsg(askCallId, "ask", "User selected: staging", staleAnswerResult().details),
+			);
+			sessionManager.appendMessage(assistantMsg("deploying to staging"));
+			const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue(undefined);
+			const askDialog = vi.fn(async () => ({
+				kind: "submit" as const,
+				results: [
+					{
+						id: ORIGINAL_QUESTIONS[0]!.id,
+						question: ORIGINAL_QUESTIONS[0]!.question,
+						options: ORIGINAL_QUESTIONS[0]!.options.map(option => option.label),
+						multi: false,
+						selectedOptions: ["production"],
+					},
+				],
+			}));
+			const uiContext = { askDialog } as unknown as ExtensionUIContext;
+
+			const result = await applyRpcSwitchLeaf(session, { entryId: staleResultId }, uiContext);
+
+			expect(askDialog).toHaveBeenCalledTimes(1);
+			expect(result.cancelled).toBe(false);
+			expect(result.reopenAsk).toBeUndefined();
+			expect(result.askReanswerCommitted).toBe(true);
+			const activeLeafId = sessionManager.getLeafId();
+			if (!activeLeafId) throw new Error("expected the RPC re-answer to create an active leaf");
+			expect(result.activeLeafId).toBe(activeLeafId);
+			const newEntry = sessionManager.getEntry(activeLeafId);
+			if (newEntry?.type !== "message" || newEntry.message.role !== "toolResult") {
+				throw new Error("expected the RPC re-answer to commit a toolResult leaf");
+			}
+			expect(newEntry.message.details).toMatchObject({ selectedOptions: ["production"] });
 			await session.waitForIdle();
 			expect(continueSpy).not.toHaveBeenCalled();
 		} finally {

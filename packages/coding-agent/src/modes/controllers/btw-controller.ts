@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../../prompts/system/btw-user.md" with { type: "text" };
+import type { AgentSession } from "../../session/agent-session";
 import { copyToClipboard } from "../../utils/clipboard";
 import { BtwPanelComponent } from "../components/btw-panel";
 import type { InteractiveModeContext } from "../types";
@@ -13,7 +14,22 @@ interface BtwRequest {
 	sessionId: string;
 }
 
-function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
+export interface BtwTurnResult {
+	replyText: string;
+	assistantMessage: AssistantMessage;
+}
+
+export async function runBtwTurn(
+	session: AgentSession,
+	question: string,
+	options: { onTextDelta?: (delta: string) => void; signal?: AbortSignal } = {},
+): Promise<BtwTurnResult> {
+	const promptText = prompt.render(btwUserPrompt, { question });
+	const { replyText, assistantMessage } = await session.runEphemeralTurn({
+		promptText,
+		onTextDelta: options.onTextDelta,
+		signal: options.signal,
+	});
 	const content: AssistantMessage["content"] = [];
 	let replacedText = false;
 	for (const part of assistantMessage.content) {
@@ -31,7 +47,7 @@ function assistantMessageWithReplyText(assistantMessage: AssistantMessage, reply
 		replacedText = true;
 	}
 	if (!replacedText) content.push({ type: "text", text: replyText });
-	return { ...assistantMessage, content, providerPayload: undefined };
+	return { replyText, assistantMessage: { ...assistantMessage, content, providerPayload: undefined } };
 }
 
 export class BtwController {
@@ -179,9 +195,7 @@ export class BtwController {
 
 	async #runRequest(request: BtwRequest): Promise<void> {
 		try {
-			const promptText = prompt.render(btwUserPrompt, { question: request.question });
-			const { replyText, assistantMessage } = await this.ctx.session.runEphemeralTurn({
-				promptText,
+			const { replyText, assistantMessage } = await runBtwTurn(this.ctx.session, request.question, {
 				onTextDelta: delta => {
 					if (this.#isActiveRequest(request)) {
 						request.component.appendText(delta);
@@ -200,7 +214,7 @@ export class BtwController {
 				this.#lastQuestion = request.question;
 				this.#lastReplyText = replyText;
 				this.#lastCopyText = copyText;
-				this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
+				this.#lastAssistantMessage = assistantMessage;
 				this.#lastLeafId = request.leafId;
 				this.#lastSessionId = request.sessionId;
 			} else {

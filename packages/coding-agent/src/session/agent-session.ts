@@ -226,10 +226,12 @@ import type {
 	ResetSessionContextResult,
 	ResolvedRoleModel,
 	RestoredQueuedMessage,
+	RestoredQueuedMessageWithDelivery,
 	RoleModelCycle,
 	RoleModelCycleResult,
 	SessionHandoffOptions,
 	SessionOAuthAccountList,
+	SessionQueuedMessage,
 	SessionStats,
 	UsageFallbackConfirmer,
 } from "./agent-session-types";
@@ -451,6 +453,7 @@ export class AgentSession {
 	#exitRecorded = false;
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
+	#unsubscribeQueueChange?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
@@ -497,6 +500,13 @@ export class AgentSession {
 	#titleSystemPrompt: string | undefined;
 	#titleGenerationAbortController = new AbortController();
 	#toolChoiceQueue = new ToolChoiceQueue();
+	/**
+	 * Name of the tool a pending user-force (`/force`, RPC set_force_tool)
+	 * constrains next. Tracked session-side because the queue's directive
+	 * sequence loses the name once the forced yield is served; cleared when
+	 * the forced call resolves, the force is dropped, or the user clears it.
+	 */
+	#pendingForcedTool: string | undefined;
 
 	readonly #bash: BashRunner;
 
@@ -883,6 +893,14 @@ export class AgentSession {
 	 */
 	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
 		return this.#prewalk.arm(target, thinkingLevel);
+	}
+
+	/**
+	 * Cancel a pending prewalk (RPC set_prewalk toggle-off; the TUI has no
+	 * disarm). Returns false when no prewalk switch was armed.
+	 */
+	disarmPrewalk(): boolean {
+		return this.#prewalk.disarm();
 	}
 
 	/** Validate the active plan artifact and shape an `xd://propose` result for review-mode hosts. */
@@ -1564,6 +1582,14 @@ export class AgentSession {
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
+		// Fan every queue mutation (enqueue, drain/consume, remove, move, clear,
+		// dequeue restore) out as an authoritative snapshot so remote queue UIs
+		// subscribe instead of polling get_queue. Synchronous #emit, matching
+		// todo_auto_clear: queue_update has no extension-facing hook.
+		this.#unsubscribeQueueChange = this.agent.onQueueChange(() => {
+			if (this.#isDisposed) return;
+			this.#emit({ type: "queue_update", ...this.listQueuedMessages() });
+		});
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 		this.#unsubscribeModelRoles = onModelRolesChanged(() => this.#advisors.onModelRolesChanged());
@@ -1647,10 +1673,46 @@ export class AgentSession {
 			throw new Error("Current model does not support forcing a specific tool.");
 		}
 
+		this.#pendingForcedTool = toolName;
 		this.#toolChoiceQueue.pushSequence([forced, "none"], {
 			label: "user-force",
-			onRejected: info => (info.reason === "unavailable" ? "drop_sequence" : "requeue"),
+			onResolved: info => {
+				// The forced call ran — the force is spent; the trailing "none"
+				// stop is bookkeeping, not a user-facing pending force.
+				if (info.choice === forced && this.#pendingForcedTool === toolName) {
+					this.#pendingForcedTool = undefined;
+				}
+			},
+			onRejected: info => {
+				// Explicit removals and drops must not re-arm the force; aborted
+				// or errored turns replay it at the head so the next turn still
+				// honors the user's choice.
+				if (info.reason === "unavailable" || info.reason === "removed" || info.reason === "cleared") {
+					if (info.choice === forced && this.#pendingForcedTool === toolName) {
+						this.#pendingForcedTool = undefined;
+					}
+					return "drop_sequence";
+				}
+				return "requeue";
+			},
 		});
+	}
+
+	/** The tool a pending user-force constrains next, or null (RPC get_force_tool). */
+	getForcedToolChoice(): string | null {
+		return this.#pendingForcedTool ?? null;
+	}
+
+	/**
+	 * Drop a pending user-forced tool choice (RPC set_force_tool clear; the TUI
+	 * has no equivalent). A force already served to the model cannot be unsent —
+	 * only queued directives are removed. Returns true when a force was pending.
+	 */
+	clearForcedToolChoice(): boolean {
+		const pending = this.#pendingForcedTool !== undefined;
+		this.#pendingForcedTool = undefined;
+		this.#toolChoiceQueue.removeByLabel("user-force");
+		return pending;
 	}
 
 	/** The tool-choice queue: forces forthcoming tool invocations and carries handlers. */
@@ -3886,6 +3948,10 @@ export class AgentSession {
 			this.#unsubscribeModelRoles();
 			this.#unsubscribeModelRoles = undefined;
 		}
+		if (this.#unsubscribeQueueChange) {
+			this.#unsubscribeQueueChange();
+			this.#unsubscribeQueueChange = undefined;
+		}
 		this.#eventListeners = [];
 		this.#sessionChangeCallbacks.clear();
 
@@ -4674,6 +4740,7 @@ export class AgentSession {
 	/** Drop mutable tool decisions and directives owned by the previous logical session. */
 	#clearSessionScopedToolState(): void {
 		this.agent.clearDeferredToolDirectives();
+		this.#pendingForcedTool = undefined;
 		this.#toolChoiceQueue.clear();
 		this.#tools.clearAcpPermissionDecisions();
 		this.#tools.resetAnnouncedMounts();
@@ -6105,6 +6172,28 @@ export class AgentSession {
 		return { steering, followUp };
 	}
 
+	/**
+	 * Clear user-authored queued messages for a remote editor while preserving
+	 * their delivery lane and cross-lane enqueue order.
+	 */
+	clearQueueWithDelivery(): RestoredQueuedMessageWithDelivery[] {
+		const collect = (
+			messages: readonly AgentMessage[],
+			mode: RestoredQueuedMessageWithDelivery["mode"],
+		): RestoredQueuedMessageWithDelivery[] =>
+			messages.filter(isUserQueuedMessage).map(message => ({
+				...toRestoredQueuedMessage(message),
+				mode,
+				timestamp: message.timestamp,
+			}));
+		const messages = [
+			...collect(this.agent.peekSteeringQueue(), "steer"),
+			...collect(this.agent.peekFollowUpQueue(), "followUp"),
+		].sort((left, right) => left.timestamp - right.timestamp);
+		this.clearQueue();
+		return messages;
+	}
+
 	/** Number of pending displayable messages (includes steering, follow-up, and next-turn messages).
 	 *  Reflects actual queued work (advisor cards included) — feeds hasPendingMessages()/RPC and the
 	 *  empty-submit abort gate. The user-restorable subset is surfaced by getQueuedMessages()/clearQueue(). */
@@ -6162,6 +6251,60 @@ export class AgentSession {
 			return toRestoredQueuedMessage(removed);
 		}
 		return undefined;
+	}
+
+	/** Snapshot of one queued entry for remote queue UIs (RPC get_queue): the
+	 *  stable queue id plus the same text/images the editor-restore path
+	 *  surfaces. Only user-restorable entries are listed — advisor cards,
+	 *  hidden companions, and internal steers never appear here (mirrors
+	 *  {@link clearQueue}'s user filter on top of the displayable filter). */
+	listQueuedMessages(): {
+		steering: SessionQueuedMessage[];
+		followUp: SessionQueuedMessage[];
+	} {
+		const collect = (messages: readonly AgentMessage[]) =>
+			messages.filter(isUserQueuedMessage).flatMap(message => {
+				const id = this.agent.queueEntryId(message);
+				return id === undefined ? [] : [{ id, ...toRestoredQueuedMessage(message), timestamp: message.timestamp }];
+			});
+		return { steering: collect(this.agent.peekSteeringQueue()), followUp: collect(this.agent.peekFollowUpQueue()) };
+	}
+
+	/** Remove one queued entry by stable queue id (RPC queue_remove). Returns
+	 *  false when the id matches no live entry. */
+	removeQueuedMessageById(queueId: string): boolean {
+		if (this.agent.removeQueuedMessage(queueId) === undefined) return false;
+		this.#reconcileQueuedMessageDrain();
+		return true;
+	}
+
+	/** Same-lane reorder by stable queue id with clamped target (RPC
+	 *  queue_move). Returns the lane and final index, or undefined for an
+	 *  unknown id. */
+	moveQueuedMessageById(
+		queueId: string,
+		toIndex: number,
+	): { lane: "steering" | "followUp"; index: number } | undefined {
+		return this.agent.moveQueuedMessage(queueId, toIndex);
+	}
+
+	/** Clear user-restorable queued entries (RPC queue_clear), lane-scoped when
+	 *  `lane` is given. Mirrors {@link clearQueue}'s default filtering: hidden
+	 *  user companions ride out with their user message while advisor cards and
+	 *  internal steers survive. Returns the number of user-restorable messages
+	 *  removed (companions are not counted). */
+	clearQueuedMessages(lane?: "steering" | "followUp"): number {
+		const keep = (m: AgentMessage): boolean => !isUserQueuedMessage(m) && !isHiddenUserCompanion(m);
+		const steeringAll = this.agent.peekSteeringQueue();
+		const followUpAll = this.agent.peekFollowUpQueue();
+		const nextSteering = lane === "followUp" ? steeringAll.slice() : steeringAll.filter(keep);
+		const nextFollowUp = lane === "steering" ? followUpAll.slice() : followUpAll.filter(keep);
+		const removed =
+			(lane === "followUp" ? 0 : steeringAll.filter(isUserQueuedMessage).length) +
+			(lane === "steering" ? 0 : followUpAll.filter(isUserQueuedMessage).length);
+		this.agent.replaceQueues(nextSteering, nextFollowUp);
+		this.#reconcileQueuedMessageDrain();
+		return removed;
 	}
 
 	get skillsSettings(): SkillsSettings | undefined {

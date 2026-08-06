@@ -8,8 +8,13 @@
  * against the same `AgentSession` APIs. Deltas vs the TUI are documented per
  * controller.
  */
+import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
+import { prompt } from "@oh-my-pi/pi-utils";
 import { formatModelString } from "../../config/model-resolver";
 import type { GoalModeState } from "../../goals/state";
+import guidedGoalInterviewPrompt from "../../prompts/goals/guided-goal-interview.md" with { type: "text" };
+import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import { type VibeOwnerScope, type VibeParentSession, VibeSessionRegistry } from "../../vibe/runtime";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -17,8 +22,6 @@ import {
 	type LoopLimitRuntime,
 	parseLoopLimitArgs,
 } from "../loop-limit";
-import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { type VibeOwnerScope, type VibeParentSession, VibeSessionRegistry } from "../../vibe/runtime";
 import type { RpcGoalState, RpcLoopModeState, RpcLoopModeUpdateFrame, RpcVibeModeState } from "./rpc-types";
 
 // ============================================================================
@@ -187,7 +190,10 @@ export class RpcGoalModeController {
 		const goalTools = [...new Set([...previousTools, "goal"])];
 		const state = options.resume
 			? await session.goalRuntime.resumeGoal()
-			: await session.goalRuntime.createGoal({ objective: options.objective ?? "", tokenBudget: options.tokenBudget });
+			: await session.goalRuntime.createGoal({
+					objective: options.objective ?? "",
+					tokenBudget: options.tokenBudget,
+				});
 		this.#previousTools = previousTools;
 		await session.setActiveToolsByName(goalTools);
 		session.setGoalModeState(state);
@@ -216,6 +222,40 @@ export class RpcGoalModeController {
 		this.#previousTools = undefined;
 		this.#continuationTurnInFlight = false;
 		this.#cancelContinuation();
+	}
+
+	async startGuidedInterview(initial?: string): Promise<{ started: true }> {
+		const session = this.#deps.session;
+		this.#assertEnterAllowed();
+		const state = session.getGoalModeState();
+		if (state?.enabled) throw new Error("Goal mode is already active.");
+		if (state?.goal?.status === "paused") {
+			throw new Error("Resume the current goal first, or drop it before starting a guided goal.");
+		}
+		const enabledTools = session.getEnabledToolNames();
+		const previousTools = enabledTools.filter(name => name !== "goal");
+		this.#previousTools = previousTools;
+		if (!enabledTools.includes("goal")) {
+			await session.setActiveToolsByName([...previousTools, "goal"]);
+		}
+		const kickoff = prompt.render(guidedGoalInterviewPrompt, { initial: initial?.trim() || undefined });
+		try {
+			if (session.isStreaming) {
+				await session.followUp(kickoff, undefined, { synthetic: true });
+			} else {
+				try {
+					await session.prompt(kickoff, { synthetic: true });
+				} catch (error) {
+					if (!(error instanceof AgentBusyError)) throw error;
+					await session.followUp(kickoff, undefined, { synthetic: true });
+				}
+			}
+			return { started: true };
+		} catch (error) {
+			await session.setActiveToolsByName(previousTools);
+			this.#previousTools = undefined;
+			throw error;
+		}
 	}
 
 	async setGoal(command: RpcSetGoalCommand): Promise<RpcGoalState> {

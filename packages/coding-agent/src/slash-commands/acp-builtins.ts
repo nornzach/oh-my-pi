@@ -29,6 +29,14 @@ export function isAcpBuiltinShadowedName(name: string): boolean {
 	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
 }
 
+/** True when text names a known builtin that has no text-mode handler. */
+export function isTuiOnlyBuiltinSlashCommand(text: string): boolean {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return false;
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	return command !== undefined && command.handle === undefined;
+}
+
 /**
  * Commands advertised to ACP clients. Entries without a text-mode `handle`
  * (e.g. `/quit`, `/login`, dashboards) are filtered out so the client doesn't

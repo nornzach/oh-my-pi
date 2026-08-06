@@ -577,6 +577,29 @@ describe("AgentSession derived queued custom display", () => {
 		expect(remaining[0]).toMatchObject({ customType: "advisor" });
 	});
 
+	it("clearQueueWithDelivery preserves cross-lane enqueue order and lane metadata", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		session.agent.followUp({
+			role: "user",
+			content: [{ type: "text", text: "older follow-up" }],
+			attribution: "user",
+			timestamp: 100,
+		});
+		session.agent.steer({
+			role: "user",
+			content: [{ type: "text", text: "newer steer" }],
+			attribution: "user",
+			timestamp: 200,
+		});
+
+		expect(session.clearQueueWithDelivery()).toEqual([
+			{ text: "older follow-up", images: undefined, mode: "followUp", timestamp: 100 },
+			{ text: "newer steer", images: undefined, mode: "steer", timestamp: 200 },
+		]);
+		expect(session.agent.hasQueuedMessages()).toBe(false);
+	});
+
 	it("popLastQueuedMessage steps over an advisor card to the user message", async () => {
 		fixture = await createRealSession();
 		const { session } = fixture;

@@ -411,3 +411,20 @@ export interface ResetSessionContextResult {
 
 /** Queued user content restored to the editor. */
 export type RestoredQueuedMessage = { text: string; images?: ImageContent[] };
+
+/** Queued user content with its delivery lane and enqueue time intact. */
+export interface RestoredQueuedMessageWithDelivery extends RestoredQueuedMessage {
+	mode: "steer" | "followUp";
+	timestamp: number;
+}
+
+/**
+ * One user-restorable queued entry as surfaced to remote queue UIs: the
+ * stable per-entry queue id (assigned at enqueue time, lane-prefixed) plus
+ * the same text/images the editor-restore path surfaces. The payload of the
+ * `queue_update` session event and the get_queue RPC.
+ */
+export interface SessionQueuedMessage extends RestoredQueuedMessage {
+	id: string;
+	timestamp: number;
+}

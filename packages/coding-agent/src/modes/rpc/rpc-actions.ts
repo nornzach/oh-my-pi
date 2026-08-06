@@ -21,6 +21,7 @@ import { loadAllMCPConfigs } from "../../mcp/config";
 import { readMCPConfigFile, removeMCPServer, setMcpServerEnabled } from "../../mcp/config-writer";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
+import { serializeMcpReload } from "./rpc-mcp-extra";
 import type { RpcMcpActionResult, RpcPluginSetEnabledResult } from "./rpc-types";
 
 /**
@@ -121,9 +122,8 @@ export type RpcMcpAction = "enable" | "disable" | "reconnect" | "remove";
  *
  * reconnect: `/mcp reconnect` verbatim (`reconnectServer` + `refreshMCPTools`).
  *
- * remove: `/mcp remove` verbatim — config file delete (default scope project),
- * live disconnect, then the controller's full `reloadServers` rediscovery so
- * every remaining server's tools rebind.
+ * remove: `/mcp remove` config delete, then the controller's serialized full
+ * `reloadServers` rediscovery so every remaining server's tools rebind.
  */
 export async function applyRpcMcpAction(
 	session: AgentSession,
@@ -152,30 +152,38 @@ export async function applyRpcMcpAction(
 				throw new Error(`Server "${name}" not found.`);
 			}
 			await setMcpServerEnabled({ userPath, projectPath, name, enabled });
-			if (enabled) {
-				// Mirror MCPCommandController.#connectEnabledMCPServer.
-				if (manager) {
-					const { configs, sources } = await loadAllMCPConfigs(cwd);
-					const config = configs[name];
-					if (config) {
-						const source = sources[name];
-						await manager.connectServers({ [name]: config }, source ? { [name]: source } : {});
+			// Serialized with every other shared-manager mutation (mcp_add /
+			// mcp_reauth reloads): a targeted connect resolving after a concurrent
+			// disconnectAll would be dropped unclosed.
+			await serializeMcpReload(async () => {
+				if (enabled) {
+					// Mirror MCPCommandController.#connectEnabledMCPServer.
+					if (manager) {
+						const { configs, sources } = await loadAllMCPConfigs(cwd);
+						const config = configs[name];
+						if (config) {
+							const source = sources[name];
+							await manager.connectServers({ [name]: config }, source ? { [name]: source } : {});
+						}
 					}
+				} else {
+					await manager?.disconnectServer(name);
 				}
-			} else {
-				await manager?.disconnectServer(name);
-			}
-			await session.refreshMCPTools(manager?.getTools() ?? []);
+				await session.refreshMCPTools(manager?.getTools() ?? []);
+			});
 			return { name, action, status: manager?.getConnectionStatus(name) ?? "disconnected" };
 		}
 
 		case "reconnect": {
 			if (!manager) throw new Error("MCP manager not available.");
-			const connection = await manager.reconnectServer(name, { manual: true });
+			const connection = await serializeMcpReload(async () => {
+				const reconnected = await manager.reconnectServer(name, { manual: true });
+				if (reconnected) await session.refreshMCPTools(manager.getTools());
+				return reconnected;
+			});
 			if (!connection) {
 				throw new Error(`Failed to reconnect to "${name}". Check server status and logs.`);
 			}
-			await session.refreshMCPTools(manager.getTools());
 			return { name, action, status: manager.getConnectionStatus(name) };
 		}
 
@@ -185,22 +193,24 @@ export async function applyRpcMcpAction(
 			if (!config.mcpServers?.[name]) {
 				throw new Error(`Server "${name}" not found in ${scope ?? "project"} config.`);
 			}
-			if (manager?.getConnection(name)) {
-				await manager.disconnectServer(name);
-			}
 			await removeMCPServer(filePath, name);
-			if (manager) {
-				// Mirror MCPCommandController.reloadServers: full rediscovery with the
-				// same settings-derived filters as startup.
-				await manager.disconnectAll();
-				session.setMCPPromptCommands([]);
-				await manager.discoverAndConnect({
-					enableProjectConfig: session.settings.get("mcp.enableProjectConfig") ?? true,
-					filterExa: true,
-					filterBrowser: session.settings.get("browser.enabled") ?? false,
-				});
-			}
-			await session.refreshMCPTools(manager?.getTools() ?? []);
+			// Serialized with every other shared-manager mutation (mcp_add /
+			// mcp_reauth reloads): an interleaved disconnectAll would drop
+			// in-flight connections unclosed and double-connect discoveries.
+			await serializeMcpReload(async () => {
+				if (manager) {
+					// Mirror MCPCommandController.reloadServers: full rediscovery with the
+					// same settings-derived filters as startup.
+					await manager.disconnectAll();
+					session.setMCPPromptCommands([]);
+					await manager.discoverAndConnect({
+						enableProjectConfig: session.settings.get("mcp.enableProjectConfig") ?? true,
+						filterExa: true,
+						filterBrowser: session.settings.get("browser.enabled") ?? false,
+					});
+				}
+				await session.refreshMCPTools(manager?.getTools() ?? []);
+			});
 			return { name, action };
 		}
 	}

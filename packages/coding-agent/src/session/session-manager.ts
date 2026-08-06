@@ -2480,6 +2480,62 @@ export class SessionManager {
 		return newSessionFile;
 	}
 
+	/**
+	 * Create an INDEPENDENT new session file containing only the path from root
+	 * to `leafId`, leaving this session untouched — the non-switching
+	 * counterpart of {@link createBranchedSession} (which converts this session
+	 * in place). Backs the `fork_from` RPC ("new session from this point").
+	 * Returns the new file path + session id, or undefined when not persisting.
+	 */
+	async copyBranchToNewSession(leafId: string): Promise<{ sessionPath: string; sessionId: string } | undefined> {
+		if (!this.#persist || !this.#sessionFile) return undefined;
+		const branchPath = this.getBranch(leafId);
+		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
+
+		// Same keep-set/label-carry rules as createBranchedSession.
+		const entriesToKeep = branchPath.filter(entry => entry.type !== "label");
+		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
+		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
+		for (const [targetId, label] of this.#index.labelsInEffect()) {
+			if (keptIds.has(targetId)) labelsToCarry.push({ targetId, label });
+		}
+
+		const manager = new SessionManager(this.#cwd, this.#sessionDir, true, this.#storage);
+		manager.#suppressBreadcrumb = this.#suppressBreadcrumb;
+		manager.#resetToNewSession({ parentSession: this.#sessionFile });
+		manager.#sessionName = this.#sessionName;
+		manager.#titleSource = this.#titleSource;
+		manager.#titleUpdatedAt = this.#titleUpdatedAt;
+		manager.#header.title = this.#sessionName;
+		manager.#header.titleSource = this.#titleSource;
+		manager.#additionalDirectories = [...this.#additionalDirectories];
+		manager.#header.additionalDirectories =
+			manager.#additionalDirectories.length > 0 ? [...manager.#additionalDirectories] : undefined;
+
+		const labels: LabelEntry[] = [];
+		let parentId = entriesToKeep[entriesToKeep.length - 1]?.id ?? null;
+		for (const carried of labelsToCarry) {
+			const labelEntry: LabelEntry = {
+				type: "label",
+				id: generateId(new Set([...keptIds, ...labels.map(entry => entry.id)])),
+				parentId,
+				timestamp: nowIso(),
+				targetId: carried.targetId,
+				label: carried.label,
+			};
+			labels.push(labelEntry);
+			parentId = labelEntry.id;
+		}
+
+		manager.#entries = structuredClone([...entriesToKeep, ...labels]);
+		manager.#index.rebuild(manager.#entries);
+		manager.#forceFileCreation = true;
+		await manager.#rewriteAtomically();
+		return manager.#sessionFile !== undefined
+			? { sessionPath: manager.#sessionFile, sessionId: manager.#sessionId }
+			: undefined;
+	}
+
 	/** Resolve the canonical default session directory for a cwd. */
 	static getDefaultSessionDir(
 		cwd: string,

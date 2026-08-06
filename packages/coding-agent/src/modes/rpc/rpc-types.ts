@@ -14,9 +14,15 @@ import type {
 	ExtensionAskDialogResult,
 } from "../../extensibility/extensions/types";
 import type { GoalStatus } from "../../goals/state";
+import type { LiveTranscript } from "../../live/controller";
+import type { LivePhase } from "../../live/visualizer";
 import type { MemoryBackendId } from "../../memory-backend/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
-import type { RestoredQueuedMessage } from "../../session/agent-session-types";
+import type {
+	AsyncJobSnapshotItem,
+	ContextUsageBreakdown,
+	RestoredQueuedMessageWithDelivery,
+} from "../../session/agent-session-types";
 import type { FileEntry } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type {
@@ -26,8 +32,10 @@ import type {
 	SubagentProgressPayload,
 } from "../../task";
 import type { ConfiguredThinkingLevel } from "../../thinking";
+import type { DebugParams } from "../../tools/debug";
 import type { TodoPhase } from "../../tools/todo";
 import type { LoopLimitRuntime } from "../loop-limit";
+import type { CopyTarget } from "../utils/copy-targets";
 import type { RpcMessagesPage } from "./rpc-messages";
 
 // ============================================================================
@@ -45,6 +53,7 @@ export type RpcCommand =
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "new_session"; parentSession?: string }
+	| { id?: string; type: "drop_session" }
 
 	// State
 	| { id?: string; type: "get_state" }
@@ -59,7 +68,7 @@ export type RpcCommand =
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
-	| { id?: string; type: "cycle_model" }
+	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_available_models" }
 
 	// Thinking
@@ -74,6 +83,18 @@ export type RpcCommand =
 	// Queue restore (TUI Alt+Up parity: pull queued steer/follow-up messages back out)
 	| { id?: string; type: "dequeue" }
 
+	// Queue management (stable per-entry ids — never array indices, which
+	// drift under concurrent enqueue). `queueId` names the entry id surfaced
+	// by get_queue; it cannot ride the frame envelope's `id` slot, which is
+	// the request-correlation id. queue_move is a same-lane reorder with a
+	// clamped target; queue_clear drops user-restorable entries only (hidden
+	// companions ride out with them; advisor cards and internal steers
+	// survive), lane-scoped when `lane` is given.
+	| { id?: string; type: "get_queue" }
+	| { id?: string; type: "queue_remove"; queueId: string }
+	| { id?: string; type: "queue_move"; queueId: string; toIndex: number }
+	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
+
 	// Compaction
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
@@ -83,7 +104,7 @@ export type RpcCommand =
 	| { id?: string; type: "abort_retry" }
 
 	// Bash
-	| { id?: string; type: "bash"; command: string }
+	| { id?: string; type: "bash"; command: string; excluded?: boolean }
 	| { id?: string; type: "abort_bash" }
 
 	// Eval (user-initiated `$`/`$$` execution; `excluded` is the `$$` exclude-from-context form)
@@ -98,6 +119,7 @@ export type RpcCommand =
 	| { id?: string; type: "fork" }
 	| { id?: string; type: "get_branch_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
+	| { id?: string; type: "get_copy_targets" }
 	| { id?: string; type: "set_session_name"; name: string }
 	| { id?: string; type: "set_entry_label"; entryId: string; label?: string }
 	| { id?: string; type: "handoff"; customInstructions?: string }
@@ -131,6 +153,12 @@ export type RpcCommand =
 	| { id?: string; type: "get_vibe_mode" }
 	| { id?: string; type: "set_vibe_mode"; enabled: boolean }
 	| { id?: string; type: "get_goal" }
+	| { id?: string; type: "guided_goal"; initial?: string }
+	| { id?: string; type: "set_agents_paused"; enabled: boolean }
+	| { id?: string; type: "btw"; question: string }
+	| { id?: string; type: "btw_branch" }
+	| { id?: string; type: "tan"; work: string }
+	| { id?: string; type: "omfg"; complaint: string }
 	| {
 			id?: string;
 			type: "set_goal";
@@ -163,6 +191,23 @@ export type RpcCommand =
 	| { id?: string; type: "get_prompt_templates" }
 	| { id?: string; type: "get_memory_report" }
 
+	// Session reports (structured TUI /context /tools /share /jobs parity)
+	| { id?: string; type: "get_context_report" }
+	| { id?: string; type: "get_active_tools" }
+	| { id?: string; type: "share_session" }
+	| { id?: string; type: "get_jobs" }
+
+	// One-shot session actions (TUI /prewalk /fresh /shake /reload-plugins
+	// /force parity). set_force_tool takes exactly one of `tool` (force the
+	// next turn onto that active tool) or `clear: true` (drop a pending
+	// force); fresh is refused with code "busy" while streaming.
+	| { id?: string; type: "set_prewalk"; enabled: boolean }
+	| { id?: string; type: "fresh" }
+	| { id?: string; type: "shake_context"; mode: "elide" | "images" }
+	| { id?: string; type: "reload_plugins" }
+	| { id?: string; type: "set_force_tool"; tool?: string; clear?: boolean }
+	| { id?: string; type: "get_force_tool" }
+
 	// Domain actions (mutating). Payload ids are `hookId`/`pluginId` — the
 	// envelope `id` field is reserved for request correlation.
 	| { id?: string; type: "set_skill_enabled"; name: string; enabled: boolean }
@@ -193,7 +238,101 @@ export type RpcCommand =
 	// RIFF/WAVE buffer — PCM16, mono, 16 kHz (the STT pipeline's native rate);
 	// `mimeType` is informational ("audio/wav").
 	| { id?: string; type: "transcribe_audio"; audioBase64: string; mimeType: string }
-	| { id?: string; type: "synthesize_speech"; text: string };
+	| { id?: string; type: "synthesize_speech"; text: string }
+
+	// Turn recovery (TUI /retry parity): retry the last failed assistant turn.
+	// Separate from abort_retry (which cancels a scheduled auto-retry).
+	| { id?: string; type: "retry" }
+
+	// In-place context reset (TUI /clear parity): drops the conversation
+	// context, keeps the session id + transcript file. Refused with code "busy"
+	// while streaming or a foreground bash/eval execution is in flight.
+	| { id?: string; type: "clear_context" }
+
+	// Per-subagent lifecycle (TUI Agent Hub `x`/`r` parity). `agentId` names
+	// the registry row; the main agent and read-only advisor transcripts are
+	// refused via the result's `reason`.
+	| { id?: string; type: "abort_subagent"; agentId: string }
+	| { id?: string; type: "revive_subagent"; agentId: string }
+
+	// Agent control-center inventory. Returns every definition discoverable for
+	// the attached workspace, including unused project/user/bundled agents.
+	| { id?: string; type: "get_agent_definitions" }
+
+	// Write a large paste into the session's local:// store. The name counter
+	// is allocated agent-side so multiple GUI windows on one session can never
+	// collide (the TUI counter is per-input-controller and can).
+	| { id?: string; type: "write_local_paste"; content: string }
+
+	// Foreign session import (Claude/Codex → a fresh OMP session copy; the
+	// source data is never modified). `foreignId` is the `id` from
+	// list_foreign_sessions; import re-lists to resolve it.
+	| { id?: string; type: "list_foreign_sessions"; source: "claude" | "codex" }
+	| { id?: string; type: "import_foreign_session"; source: "claude" | "codex"; foreignId: string }
+
+	// Session tree navigation. fork_from writes an INDEPENDENT new session
+	// file containing only the path from root to `entryId` and does not switch
+	// (Codex-style "new session from here"); switch_leaf moves the active leaf
+	// in place (TUI tree-selector Enter parity, navigateTree underneath).
+	| { id?: string; type: "fork_from"; entryId: string }
+	| { id?: string; type: "switch_leaf"; entryId: string; summarize?: boolean; customInstructions?: string }
+	| { id?: string; type: "resume_after_ask_reanswer" }
+
+	// Slash-command argument completions for a remote composer. Static
+	// subcommand data already rides RpcAvailableSlashCommand; this covers the
+	// dynamic candidates (MCP server names, /move directories).
+	| { id?: string; type: "get_command_arg_completions"; command: string; prefix: string }
+
+	// MCP server management (C1). mcp_test/mcp_reauth are background-dispatched
+	// (see dispatchRpcInputFrame) so a slow probe or a browser OAuth login never
+	// wedges the serial command queue — that is what lets mcp_reauth_cancel
+	// overtake an in-flight mcp_reauth. mcp_test takes exactly one of
+	// `name` (probe a configured server) or `config` (probe an inline definition).
+	| { id?: string; type: "mcp_add"; name: string; config: RpcMcpServerInput; scope?: "user" | "project" }
+	| { id?: string; type: "mcp_test"; name?: string; config?: RpcMcpServerInput }
+	| { id?: string; type: "mcp_reauth"; name: string }
+	| { id?: string; type: "mcp_reauth_cancel"; name: string }
+
+	// Marketplace management (C1). `add` takes `source`; remove/update take
+	// `marketplace`; install takes `plugin` + `marketplace`; uninstall/upgrade
+	// take `plugin` ("name@marketplace" id, or a bare name with `marketplace`);
+	// list_available optionally filters by `marketplace`.
+	| {
+			id?: string;
+			type: "marketplace_action";
+			action: "add" | "remove" | "update" | "install" | "uninstall" | "upgrade" | "list_available";
+			marketplace?: string;
+			plugin?: string;
+			source?: string;
+	  }
+
+	// Interactive surfaces that remain long-lived in the sidecar process.
+	| { id?: string; type: "live_start"; voice?: string }
+	| { id?: string; type: "live_toggle_mute" }
+	| { id?: string; type: "live_stop" }
+	| { id?: string; type: "get_live_state" }
+	| { id?: string; type: "debug"; params: DebugParams }
+	| { id?: string; type: "collab_start"; relayUrl?: string; view?: boolean }
+	| { id?: string; type: "collab_join"; link: string }
+	| { id?: string; type: "collab_leave" }
+	| { id?: string; type: "get_collab_state" }
+
+	// Plugin detail and settings (C1). `pluginId` is the npm package name (the
+	// npm install channel backs settings/features; see rpc-plugins.ts).
+	| { id?: string; type: "get_plugin_detail"; pluginId: string }
+	| { id?: string; type: "set_plugin_features"; pluginId: string; features: string[] }
+	| { id?: string; type: "set_plugin_setting"; pluginId: string; key: string; value: unknown }
+	| { id?: string; type: "delete_plugin_setting"; pluginId: string; key: string }
+
+	// Workspace directories (TUI /dirs /add-dir /remove-dir /move parity).
+	// Paths may be absolute or cwd-relative and follow TUI `~` expansion.
+	// add_directory/remove_directory return the post-mutation directory list;
+	// remove_directory refuses the primary (cwd) directory with a clear error;
+	// move_session relocates the session file's cwd association on disk.
+	| { id?: string; type: "get_directories" }
+	| { id?: string; type: "add_directory"; path: string }
+	| { id?: string; type: "remove_directory"; path: string }
+	| { id?: string; type: "move_session"; path: string };
 
 // ============================================================================
 // RPC State
@@ -230,6 +369,11 @@ export interface RpcSessionState {
 	contextUsage?: ContextUsage;
 	/** Whether plan mode is currently enabled. */
 	planModeEnabled: boolean;
+	/** Whether a prewalk model switch is armed and waiting for the first edit/write. */
+	prewalkArmed?: boolean;
+	/** Process-global agent pause state. */
+	agentsPaused: boolean;
+	agentsPausedAt?: number;
 }
 
 export interface RpcAvailableSlashCommand {
@@ -239,6 +383,70 @@ export interface RpcAvailableSlashCommand {
 	input?: { hint?: string };
 	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
 	source: AvailableSlashCommandSource;
+	/** Whether the command consumes text after its name (drives post-space completion). */
+	allowArgs?: boolean;
+	/** Whether dynamic candidates exist (get_command_arg_completions); static-only commands never need the round trip. */
+	hasDynamicArgCompletion?: boolean;
+}
+
+/** Result of switch_leaf (session.navigateTree passthrough + the leaf after the move). */
+export interface RpcSwitchLeafResult {
+	cancelled: boolean;
+	aborted?: boolean;
+	/** Set when the target is an `ask` toolResult and the caller must re-open the ask picker first (issue #5642). */
+	reopenAsk?: { toolCallId: string; questions: unknown };
+	/** Draft text/images of the target user message — restore into the composer. */
+	editorText?: string;
+	editorImages?: ImageContent[];
+	/** The active leaf after navigation (undefined when cancelled/aborted). */
+	activeLeafId?: string;
+	/** The caller must rebuild its transcript, then send resume_after_ask_reanswer. */
+	askReanswerCommitted?: boolean;
+}
+
+/** Realtime voice state mirrored into the GUI while the sidecar owns audio I/O. */
+export interface RpcLiveState {
+	active: boolean;
+	phase: LivePhase;
+	muted: boolean;
+	inputLevel: number;
+	outputLevel: number;
+	transcript?: LiveTranscript;
+	error?: string;
+}
+
+export interface RpcLiveUpdateFrame {
+	type: "live_update";
+	state: RpcLiveState;
+}
+
+export interface RpcCollabParticipant {
+	name: string;
+	role: "host" | "guest";
+	readOnly?: boolean;
+}
+
+/** Current live-collaboration attachment. Secret write links never enter logs. */
+export interface RpcCollabState {
+	role: "host" | "guest" | null;
+	readOnly: boolean;
+	link?: string;
+	viewLink?: string;
+	webLink?: string;
+	webViewLink?: string;
+	participants: RpcCollabParticipant[];
+}
+
+/** Lightweight metadata of one Claude/Codex session offered for import. */
+export interface RpcForeignSessionInfo {
+	id: string;
+	path: string;
+	cwd: string;
+	title?: string;
+	created: string;
+	modified: string;
+	messageCount?: number;
+	firstMessage?: string;
 }
 
 export interface RpcAvailableCommandsUpdateFrame {
@@ -308,12 +516,47 @@ export interface RpcEvalResult {
 }
 
 /**
- * Result of a `dequeue` command: the user-authored messages pulled out of the
- * steer/follow-up queues in editor-restore order (steering first, then
- * follow-ups — the TUI's Alt+Up restore order). Empty when nothing was queued.
+ * Result of a `dequeue` command. Messages retain their original delivery lane
+ * and are ordered by enqueue time across both queues (oldest first).
  */
 export interface RpcDequeueResult {
-	messages: RestoredQueuedMessage[];
+	messages: RestoredQueuedMessageWithDelivery[];
+}
+
+/**
+ * One user-restorable queued message surfaced by `get_queue`. `id` is the
+ * stable per-entry queue id assigned at enqueue time (lane-prefixed counter
+ * like `s1`/`f1`), valid for queue_remove/queue_move until the entry is
+ * consumed or removed. Only user-authored, displayable entries appear here —
+ * advisor cards, hidden companions, and internal steers are excluded.
+ */
+export interface RpcQueuedMessage {
+	id: string;
+	text: string;
+	images?: ImageContent[];
+	timestamp: number;
+}
+
+/** Result of a `get_queue` command: both lanes in insertion order. */
+export interface RpcGetQueueResult {
+	steering: RpcQueuedMessage[];
+	followUp: RpcQueuedMessage[];
+}
+
+/** Result of a `queue_remove` command. Unknown ids produce an error response instead. */
+export interface RpcQueueRemoveResult {
+	removed: true;
+}
+
+/** Result of a `queue_move` command: the entry's lane and its final (clamped) index. */
+export interface RpcQueueMoveResult {
+	lane: "steering" | "followUp";
+	index: number;
+}
+
+/** Result of a `queue_clear` command: count of user-restorable messages removed. */
+export interface RpcQueueClearResult {
+	removed: number;
 }
 
 // ============================================================================
@@ -588,6 +831,25 @@ export interface RpcMcpServerInfo {
 	enabled: boolean;
 	/** True when stored OAuth credentials or a static Authorization header exist. */
 	authed: boolean;
+	/** Which writable config file declared the server; omitted for discovered-only entries. */
+	scope?: "user" | "project";
+	/** Configured stdio command (stdio transports only). */
+	command?: string;
+	/** Configured URL (http/sse transports only). */
+	url?: string;
+	/**
+	 * Last connection error for this server. Currently always omitted: the MCP
+	 * manager surfaces connection failures through transient status events, not
+	 * a queryable per-server error store.
+	 */
+	lastError?: string;
+	/**
+	 * OAuth credential state derived from the config and stored credentials:
+	 * "none" (no OAuth configured), "authorized" (usable credential or static
+	 * Authorization header), "expired" (stored credential past its expiry),
+	 * "required" (OAuth configured but no usable credential stored).
+	 */
+	authState?: "none" | "authorized" | "expired" | "required";
 }
 
 export interface RpcMcpServersResult {
@@ -638,6 +900,108 @@ export interface RpcMcpActionResult {
 	name: string;
 	action: "enable" | "disable" | "reconnect" | "remove";
 	status?: "connected" | "connecting" | "disconnected";
+}
+
+// ============================================================================
+// C1 Management Wire Types (mcp add/test/reauth, marketplace, plugin settings)
+// ============================================================================
+
+/**
+ * Wire form of one MCP server definition (`mcp_add.config`, `mcp_test.config`).
+ * Maps onto {@link MCPServerConfig}: stdio takes command/args/env, http/sse
+ * take url/headers, `timeoutMs` maps to the config's `timeout`.
+ */
+export interface RpcMcpServerInput {
+	transport: "stdio" | "http" | "sse";
+	/** stdio: executable to spawn. */
+	command?: string;
+	/** stdio: argv. */
+	args?: string[];
+	/** stdio: environment overrides. */
+	env?: Record<string, string>;
+	/** http/sse: server URL. */
+	url?: string;
+	/** http/sse: extra headers. */
+	headers?: Record<string, string>;
+	/** MCP request timeout in milliseconds (maps to the config's `timeout`). */
+	timeoutMs?: number;
+}
+
+/** Result of `mcp_add`: the refreshed live view of the just-added server. */
+export interface RpcMcpAddResult {
+	added: true;
+	server: RpcMcpServerInfo;
+}
+
+/**
+ * Result of `mcp_test`. Probe failures (connect/handshake/tool-list, unknown
+ * server name, invalid arguments) ride `error` with `ok:false`.
+ */
+export interface RpcMcpTestResult {
+	ok: boolean;
+	toolNames?: string[];
+	toolCount?: number;
+	error?: string;
+}
+
+/**
+ * Result of `mcp_reauth`. User cancellation resolves `{ ok:false, error:"cancelled" }`;
+ * a second reauth claimed while one is in flight is refused at the envelope
+ * (`success:false, code:"oauth_busy"`), not here.
+ */
+export interface RpcMcpReauthResult {
+	ok: boolean;
+	error?: string;
+}
+
+/** Result of `mcp_reauth_cancel`: false when no reauth for that name was in flight. */
+export interface RpcMcpReauthCancelResult {
+	cancelled: boolean;
+}
+
+/** One catalog entry from a marketplace, with its local install state. */
+export interface RpcMarketplacePluginInfo {
+	name: string;
+	description?: string;
+	version?: string;
+	installed: boolean;
+}
+
+/**
+ * Result of `marketplace_action`. Domain failures (unknown marketplace/plugin,
+ * invalid source, install errors) ride `error` with `ok:false`. `plugins` is
+ * populated only for `action:"list_available"`; catalogs are cache-backed
+ * (populated by `add`/`update`), so the listing reflects the last fetch.
+ */
+export interface RpcMarketplaceActionResult {
+	ok: boolean;
+	error?: string;
+	plugins?: RpcMarketplacePluginInfo[];
+}
+
+/**
+ * Full detail for one plugin: manifest-declared features with live enable
+ * state, the declared settings schema (omitted when the manifest declares
+ * none), non-secret effective setting values (project overrides merged over
+ * user), and the keys with persisted values. Secret values never cross the
+ * RPC boundary; `configuredKeys` lets clients render their write-only state.
+ */
+export interface RpcPluginDetail {
+	id: string;
+	enabled: boolean;
+	features: Array<{ id: string; description?: string; enabled: boolean }>;
+	settingsSchema?: unknown;
+	values: Record<string, unknown>;
+	configuredKeys: string[];
+}
+
+/**
+ * Result of the plugin feature/setting mutations. Validation feedback (unknown
+ * feature, schema violation) rides `error` with `ok:false`.
+ */
+export interface RpcPluginMutationResult {
+	ok: boolean;
+	error?: string;
 }
 
 /** A file-based prompt template. */
@@ -728,9 +1092,9 @@ export interface RpcSubagentSnapshot {
 	id: string;
 	index: number;
 	agent: string;
-	agentSource: AgentProgress["agentSource"];
+	agentSource?: AgentProgress["agentSource"];
 	description?: string;
-	status: AgentProgress["status"];
+	status: string;
 	task?: string;
 	assignment?: string;
 	sessionFile?: string;
@@ -739,6 +1103,34 @@ export interface RpcSubagentSnapshot {
 	parentToolCallId?: string;
 	/** Registry id of the spawning subagent for nested spawns; absent at the root. */
 	parentSubagentId?: string;
+	kind?: "sub" | "advisor";
+}
+
+export interface RpcAgentDefinitionInfo {
+	name: string;
+	description: string;
+	filePath?: string;
+	model?: string[];
+	thinkingLevel?: string;
+	tools?: string[];
+	spawns?: string[] | "*";
+	autoloadSkills?: string[];
+	output?: unknown;
+	blocking?: boolean;
+	readSummarize?: boolean;
+	prewalk?: boolean | string;
+	defaultPatterns: string[];
+	defaultResolved?: string;
+	effectivePatterns: string[];
+	effectiveResolved?: string;
+	effectiveThinkingLevel?: string;
+	prewalkPattern?: string;
+	prewalkResolved?: string;
+	source: "bundled" | "user" | "project";
+}
+
+export interface RpcAgentDefinitionsResult {
+	agents: RpcAgentDefinitionInfo[];
 }
 
 export interface RpcSubagentMessagesResult {
@@ -748,6 +1140,104 @@ export interface RpcSubagentMessagesResult {
 	reset: boolean;
 	entries: FileEntry[];
 	messages: AgentMessage[];
+}
+
+// ============================================================================
+// Workspace Directory Wire Types (/dirs /add-dir /remove-dir /move parity)
+// ============================================================================
+
+/** One session workspace root. Exactly one entry — the session cwd — is primary. */
+export interface RpcWorkspaceDirectory {
+	path: string;
+	primary: boolean;
+}
+
+/**
+ * Result of get_directories / add_directory / remove_directory: the session's
+ * workspace roots, primary (cwd) first, additional directories in their
+ * stored order.
+ */
+export interface RpcWorkspaceDirectoriesResult {
+	directories: RpcWorkspaceDirectory[];
+}
+
+// ============================================================================
+// Session Report Wire Types (/context /tools /share /jobs parity)
+// ============================================================================
+
+/**
+ * Result of get_context_report: the provider-anchored token breakdown from
+ * `session.getContextBreakdown()` verbatim, plus the header fields the TUI
+ * renders above it. `contextWindow` is 0 (and `model` empty) when no model
+ * is selected — the TUI's "unavailable" state.
+ */
+export interface RpcContextReportResult {
+	breakdown: ContextUsageBreakdown | undefined;
+	contextWindow: number;
+	/** Active model id; empty when no model is selected. */
+	model: string;
+}
+
+/** Tool provenance bucket. `plugin` is reserved: plugin-shipped tools load
+ * through the extension/custom-tool path and surface as `extension`. */
+export type RpcToolSource = "builtin" | "mcp" | "extension" | "plugin";
+
+export interface RpcActiveTool {
+	name: string;
+	description?: string;
+	source: RpcToolSource;
+}
+
+/**
+ * Result of get_active_tools: active top-level tools (TUI /tools rows),
+ * followed by xd:// mounted entries (the `~ xd://name` rows).
+ */
+export interface RpcActiveToolsResult {
+	tools: RpcActiveTool[];
+}
+
+/** Result of share_session. `truncated` rides only when content was trimmed. */
+export interface RpcShareSessionResult {
+	url: string;
+	truncated?: boolean;
+}
+
+/**
+ * Result of get_jobs: running jobs first, then recent (TUI /jobs ordering),
+ * items as-is from the session's async-job snapshot. Empty when the session
+ * has no job registry.
+ */
+export interface RpcJobsResult {
+	jobs: AsyncJobSnapshotItem[];
+}
+
+// ============================================================================
+// One-Shot Session Action Wire Types (prewalk / fresh / shake / reload / force)
+// ============================================================================
+
+/** Result of set_prewalk: the armed state after the toggle. */
+export interface RpcPrewalkState {
+	enabled: boolean;
+}
+
+/** Result of fresh (provider stream state reset); deliberately empty. */
+export type RpcFreshResult = Record<string, never>;
+
+/** Result of shake_context. `removed` is the one-line operator summary (TUI formatShakeSummary). */
+export interface RpcShakeContextResult {
+	removed: string;
+}
+
+/** Result of reload_plugins: post-reload inventory counts. */
+export interface RpcReloadPluginsResult {
+	plugins: number;
+	skills: number;
+	commands: number;
+}
+
+/** Result of set_force_tool / get_force_tool: the pending forced tool, or null. */
+export interface RpcForceToolState {
+	tool: string | null;
 }
 
 // ============================================================================
@@ -772,6 +1262,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "abort"; success: true }
 	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "drop_session"; success: true; data: { cancelled: boolean } }
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
@@ -862,6 +1353,60 @@ export type RpcResponse =
 	// Retry
 	| { id?: string; type: "response"; command: "set_auto_retry"; success: true }
 	| { id?: string; type: "response"; command: "abort_retry"; success: true }
+	| { id?: string; type: "response"; command: "retry"; success: true; data: { retried: boolean } }
+
+	// Context reset
+	| {
+			id?: string;
+			type: "response";
+			command: "clear_context";
+			success: true;
+			data: { cleared: boolean; droppedCount?: number };
+	  }
+
+	// Per-subagent lifecycle
+	| {
+			id?: string;
+			type: "response";
+			command: "abort_subagent";
+			success: true;
+			data: { ok: boolean; reason?: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "revive_subagent";
+			success: true;
+			data: { ok: boolean; reason?: string };
+	  }
+
+	// Session local:// paste write
+	| { id?: string; type: "response"; command: "write_local_paste"; success: true; data: { name: string; url: string } }
+
+	// Foreign sessions
+	| {
+			id?: string;
+			type: "response";
+			command: "list_foreign_sessions";
+			success: true;
+			data: { sessions: RpcForeignSessionInfo[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "import_foreign_session";
+			success: true;
+			data: { sessionPath: string; sessionId: string };
+	  }
+
+	// Slash-command argument completions
+	| {
+			id?: string;
+			type: "response";
+			command: "get_command_arg_completions";
+			success: true;
+			data: { items: Array<{ value: string; label?: string; description?: string; hint?: string }> };
+	  }
 
 	// Bash
 	| { id?: string; type: "response"; command: "bash"; success: true; data: BashResult }
@@ -876,6 +1421,16 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }
+	| { id?: string; type: "response"; command: "fork"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "fork_from";
+			success: true;
+			data: { sessionPath: string; sessionId: string };
+	  }
+	| { id?: string; type: "response"; command: "switch_leaf"; success: true; data: RpcSwitchLeafResult }
+	| { id?: string; type: "response"; command: "resume_after_ask_reanswer"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -889,6 +1444,37 @@ export type RpcResponse =
 			command: "get_last_assistant_text";
 			success: true;
 			data: { text: string | null };
+	  }
+	| { id?: string; type: "response"; command: "get_copy_targets"; success: true; data: { targets: CopyTarget[] } }
+	| { id?: string; type: "response"; command: "guided_goal"; success: true; data: { started: true } }
+	| {
+			id?: string;
+			type: "response";
+			command: "btw";
+			success: true;
+			data: { question: string; replyText: string; canBranch: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "btw_branch";
+			success: true;
+			data: { cancelled: boolean; sessionFile?: string };
+	  }
+	| { id?: string; type: "response"; command: "tan"; success: true; data: { jobId: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "omfg";
+			success: true;
+			data: { state: "saved" | "rejected" | "aborted"; savedPath?: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_agents_paused";
+			success: true;
+			data: { paused: boolean; pausedAt?: number; heldMs?: number };
 	  }
 	| { id?: string; type: "response"; command: "set_session_name"; success: true }
 	| { id?: string; type: "response"; command: "set_entry_label"; success: true }
@@ -969,6 +1555,7 @@ export type RpcResponse =
 
 	// Domain inspection (read-only)
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: RpcSkillsResult }
+	| { id?: string; type: "response"; command: "get_agent_definitions"; success: true; data: RpcAgentDefinitionsResult }
 	| { id?: string; type: "response"; command: "get_hooks"; success: true; data: RpcHooksResult }
 	| { id?: string; type: "response"; command: "get_mcp_servers"; success: true; data: RpcMcpServersResult }
 	| { id?: string; type: "response"; command: "get_plugins"; success: true; data: RpcPluginsResult }
@@ -981,6 +1568,20 @@ export type RpcResponse =
 			data: RpcPromptTemplatesResult;
 	  }
 	| { id?: string; type: "response"; command: "get_memory_report"; success: true; data: RpcMemoryReport }
+
+	// Session reports (read-only)
+	| { id?: string; type: "response"; command: "get_context_report"; success: true; data: RpcContextReportResult }
+	| { id?: string; type: "response"; command: "get_active_tools"; success: true; data: RpcActiveToolsResult }
+	| { id?: string; type: "response"; command: "share_session"; success: true; data: RpcShareSessionResult }
+	| { id?: string; type: "response"; command: "get_jobs"; success: true; data: RpcJobsResult }
+
+	// One-shot session actions
+	| { id?: string; type: "response"; command: "set_prewalk"; success: true; data: RpcPrewalkState }
+	| { id?: string; type: "response"; command: "fresh"; success: true; data: RpcFreshResult }
+	| { id?: string; type: "response"; command: "shake_context"; success: true; data: RpcShakeContextResult }
+	| { id?: string; type: "response"; command: "reload_plugins"; success: true; data: RpcReloadPluginsResult }
+	| { id?: string; type: "response"; command: "set_force_tool"; success: true; data: RpcForceToolState }
+	| { id?: string; type: "response"; command: "get_force_tool"; success: true; data: RpcForceToolState }
 
 	// Domain actions (mutating)
 	| {
@@ -1014,6 +1615,56 @@ export type RpcResponse =
 			success: true;
 			data: { audioBase64: string; mimeType: string };
 	  }
+
+	// MCP server management (C1)
+	| { id?: string; type: "response"; command: "mcp_add"; success: true; data: RpcMcpAddResult }
+	| { id?: string; type: "response"; command: "mcp_test"; success: true; data: RpcMcpTestResult }
+	| { id?: string; type: "response"; command: "mcp_reauth"; success: true; data: RpcMcpReauthResult }
+	| { id?: string; type: "response"; command: "mcp_reauth_cancel"; success: true; data: RpcMcpReauthCancelResult }
+
+	// Marketplace management (C1)
+	| {
+			id?: string;
+			type: "response";
+			command: "marketplace_action";
+			success: true;
+			data: RpcMarketplaceActionResult;
+	  }
+
+	// Plugin detail and settings (C1)
+	| { id?: string; type: "response"; command: "get_plugin_detail"; success: true; data: RpcPluginDetail }
+	| { id?: string; type: "response"; command: "set_plugin_features"; success: true; data: RpcPluginMutationResult }
+	| { id?: string; type: "response"; command: "set_plugin_setting"; success: true; data: RpcPluginMutationResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "delete_plugin_setting";
+			success: true;
+			data: RpcPluginMutationResult;
+	  }
+
+	// Long-lived interactive surfaces.
+	| { id?: string; type: "response"; command: "live_start"; success: true; data: RpcLiveState }
+	| { id?: string; type: "response"; command: "live_toggle_mute"; success: true; data: RpcLiveState }
+	| { id?: string; type: "response"; command: "live_stop"; success: true; data: RpcLiveState }
+	| { id?: string; type: "response"; command: "get_live_state"; success: true; data: RpcLiveState }
+	| {
+			id?: string;
+			type: "response";
+			command: "debug";
+			success: true;
+			data: { content: unknown; details?: unknown };
+	  }
+	| { id?: string; type: "response"; command: "collab_start"; success: true; data: RpcCollabState }
+	| { id?: string; type: "response"; command: "collab_join"; success: true; data: RpcCollabState }
+	| { id?: string; type: "response"; command: "collab_leave"; success: true; data: RpcCollabState }
+	| { id?: string; type: "response"; command: "get_collab_state"; success: true; data: RpcCollabState }
+
+	// Workspace directories
+	| { id?: string; type: "response"; command: "get_directories"; success: true; data: RpcWorkspaceDirectoriesResult }
+	| { id?: string; type: "response"; command: "add_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
+	| { id?: string; type: "response"; command: "remove_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
+	| { id?: string; type: "response"; command: "move_session"; success: true; data: { cwd: string } }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };

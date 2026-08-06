@@ -3,7 +3,7 @@ import { CONFIG_DIR_NAME, prompt } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../../capability/rule";
 import omfgUserPrompt from "../../prompts/system/omfg-user.md" with { type: "text" };
 import { shortenPath } from "../../tools/render-utils";
-import { OmfgPanelComponent } from "../components/omfg-panel";
+import { OmfgPanelComponent, type OmfgPanelResult } from "../components/omfg-panel";
 import type { InteractiveModeContext } from "../types";
 import {
 	buildOmfgRuleForPath,
@@ -18,6 +18,7 @@ interface OmfgRequest {
 	component: OmfgPanelComponent;
 	abortController: AbortController;
 	complaint: string;
+	run?: Promise<void>;
 }
 
 interface OmfgCandidate extends ParsedGeneratedRule {
@@ -79,7 +80,16 @@ export class OmfgController {
 		this.ctx.omfgContainer.addChild(request.component);
 		this.ctx.ui.requestRender();
 		this.#activeRequest = request;
-		void this.#runRequest(request);
+		request.run = this.#runRequest(request);
+		void request.run;
+	}
+
+	async startAndWait(complaint: string): Promise<OmfgPanelResult | undefined> {
+		await this.start(complaint);
+		const request = this.#activeRequest;
+		if (!request?.run) return undefined;
+		await request.run;
+		return request.component.getResult();
 	}
 
 	async #runRequest(request: OmfgRequest): Promise<void> {

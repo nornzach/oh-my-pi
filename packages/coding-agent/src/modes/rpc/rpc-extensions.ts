@@ -2,20 +2,21 @@
  * Data builders for extension-feature RPC commands (usage, settings, providers).
  * Keeps rpc-mode.ts switch cases thin; all projection logic lives here.
  */
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+
 import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { Settings } from "../../config/settings";
 import {
 	getDefault,
 	isCredential,
 	RESTART_REQUIRED_SETTING_PATHS,
-	SETTINGS_SCHEMA,
 	SETTING_TABS,
+	SETTINGS_SCHEMA,
+	type SettingPath,
 	TAB_GROUPS,
 	TAB_METADATA,
 	TUI_ONLY_SETTING_PATHS,
-	type SettingPath,
 } from "../../config/settings-schema";
-import type { Settings } from "../../config/settings";
 import type { AgentSession } from "../../session/agent-session";
 import type {
 	RpcProviderInfo,
@@ -110,7 +111,7 @@ export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaRes
 	for (const path of Object.keys(schema) as SettingPath[]) {
 		const def = schema[path];
 		const ui = "ui" in def ? (def.ui as Record<string, unknown> | undefined) : undefined;
-		const secret = isCredential(path) || (ui?.secret === true);
+		const secret = isCredential(path) || ui?.secret === true;
 
 		let options: RpcSettingEntry["options"];
 		if ("values" in def && Array.isArray(def.values)) {
@@ -171,10 +172,7 @@ export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResu
 	}
 
 	// Collect all provider ids: those with models + those with OAuth + those with auth.
-	const providerIds = new Set<string>([
-		...modelCountByProvider.keys(),
-		...oauthIds,
-	]);
+	const providerIds = new Set<string>([...modelCountByProvider.keys(), ...oauthIds]);
 
 	// Also include providers that have stored credentials but no models yet.
 	try {

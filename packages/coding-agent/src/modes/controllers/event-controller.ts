@@ -269,6 +269,11 @@ export class EventController {
 				this.ctx.ui.resetDisplay();
 			},
 			goal_updated: async () => {},
+			queue_update: async () => {
+				// Queue mutations arrive for every enqueue/drain/remove/move/clear;
+				// the pending bar is the TUI's queue surface.
+				this.ctx.updatePendingMessagesDisplay();
+			},
 		} satisfies AgentSessionEventHandlers;
 	}
 

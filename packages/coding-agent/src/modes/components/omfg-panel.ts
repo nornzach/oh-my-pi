@@ -13,6 +13,12 @@ export type OmfgPanelState =
 	| "aborted"
 	| "error";
 
+export interface OmfgPanelResult {
+	state: OmfgPanelState;
+	savedPath?: string;
+	errorMessage?: string;
+}
+
 interface OmfgPanelComponentOptions {
 	complaint: string;
 	tui: TUI;
@@ -86,6 +92,10 @@ export class OmfgPanelComponent extends Container {
 		this.#status = "Could not create rule.";
 		this.#errorMessage = message;
 		this.#rebuild();
+	}
+
+	getResult(): OmfgPanelResult {
+		return { state: this.#state, savedPath: this.#savedPath, errorMessage: this.#errorMessage };
 	}
 
 	close(): void {

@@ -30,7 +30,7 @@ import planModeCompactInstructionsPrompt from "../../prompts/system/plan-mode-co
 	type: "text",
 };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { PROPOSE_DEVICE_NAME, type PlanProposalHandler, writeDeviceDispatch } from "../../tools/resolve";
+import { type PlanProposalHandler, PROPOSE_DEVICE_NAME, writeDeviceDispatch } from "../../tools/resolve";
 import type { RpcPlanApprovalOption, RpcPlanApprovalResult, RpcPlanProposalFrame } from "./rpc-types";
 
 /** Options advertised on the `plan_proposal` frame (TUI review parity). */
