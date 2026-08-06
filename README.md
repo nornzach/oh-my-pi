@@ -1,3 +1,18 @@
+> [!IMPORTANT]
+> **This is the [`nornzach/oh-my-pi`](https://github.com/nornzach/oh-my-pi) working fork of [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi).** It tracks upstream and additionally carries the RPC/agent enablement the [omp GUI](https://github.com/nornzach/oh-my-pi-gui) depends on (remote-client RPC commands, queue management + `queue_update` frames, login-shell spawn env, and related session/runtime work).
+>
+> **It is the build-from-source monorepo for the GUI**: clone this fork, nest the GUI repo at `packages/gui/`, then `bun run build:omp` inside it — see the [GUI README](https://github.com/nornzach/oh-my-pi-gui#build-from-source) for the full sequence.
+>
+> **Upstream sync (kept open on purpose):** `upstream` = `can1357/oh-my-pi` stays the sync remote — feature updates are pulled from upstream regularly and this fork's GUI-enablement commits ride on top:
+> ```bash
+> git fetch upstream && git merge upstream/main   # or rebase the fork commits onto it
+> ```
+> Remote layout for this checkout: `origin` = this fork (push target), `upstream` = can1357 (sync source, never push).
+>
+> Everything below is the upstream README, unmodified.
+
+---
+
 <p align="center">
   <img src="https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png?raw=true" alt="omp">
 </p>
