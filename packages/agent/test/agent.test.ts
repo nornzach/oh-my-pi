@@ -1510,3 +1510,172 @@ describe("Agent — F3 in-place state mutation", () => {
 		expect(agent.state.pendingToolCalls).not.toBe(pendingToolCalls);
 	});
 });
+
+describe("Agent — stable queue ids and lane ops", () => {
+	const userMessage = (text: string, timestamp: number = Date.now()) => ({
+		role: "user" as const,
+		content: text,
+		timestamp,
+	});
+
+	it("assigns lane-prefixed stable ids at enqueue time without changing peek output", () => {
+		const agent = new Agent();
+		const s1 = userMessage("first steer");
+		const f1 = userMessage("first follow-up");
+		const s2 = userMessage("second steer");
+
+		agent.steer(s1);
+		agent.followUp(f1);
+		agent.steer(s2);
+
+		expect(agent.queueEntryId(s1)).toBe("s1");
+		expect(agent.queueEntryId(f1)).toBe("f2");
+		expect(agent.queueEntryId(s2)).toBe("s3");
+		expect(agent.queueEntryId(userMessage("never queued"))).toBeUndefined();
+		// Existing peek consumers keep seeing bare messages in insertion order.
+		expect(agent.peekSteeringQueue()).toEqual([s1, s2]);
+		expect(agent.peekFollowUpQueue()).toEqual([f1]);
+	});
+
+	it("keeps ids stable across replaceQueues filtering and re-insertion", () => {
+		const agent = new Agent();
+		const keep1 = userMessage("keep 1");
+		const dropped = userMessage("dropped");
+		const keep2 = userMessage("keep 2");
+		agent.steer(keep1);
+		agent.steer(dropped);
+		agent.steer(keep2);
+		const id1 = agent.queueEntryId(keep1);
+		const id2 = agent.queueEntryId(keep2);
+
+		// Session-style in-place filtering (advisor-card extraction, nudge pulls)
+		// re-inserts survivors by reference; their ids must not drift.
+		agent.replaceQueues(
+			agent.peekSteeringQueue().filter(message => message !== dropped),
+			[...agent.peekFollowUpQueue()],
+		);
+
+		expect(agent.queueEntryId(keep1)).toBe(id1);
+		expect(agent.queueEntryId(keep2)).toBe(id2);
+		// Fresh entries introduced by replaceQueues still receive ids.
+		const late = userMessage("late");
+		agent.replaceQueues([...agent.peekSteeringQueue(), late], [...agent.peekFollowUpQueue()]);
+		const lateId = agent.queueEntryId(late);
+		expect(lateId).toBeDefined();
+		expect(new Set([id1, id2, lateId]).size).toBe(3);
+	});
+
+	it("removeQueuedMessage drops the entry from whichever lane holds it", () => {
+		const agent = new Agent();
+		const steer = userMessage("steer");
+		const followUp = userMessage("follow-up");
+		agent.steer(steer);
+		agent.followUp(followUp);
+
+		expect(agent.removeQueuedMessage(agent.queueEntryId(steer) ?? "")).toEqual({ lane: "steering", message: steer });
+		expect(agent.peekSteeringQueue()).toEqual([]);
+		expect(agent.hasQueuedMessages()).toBe(true);
+
+		expect(agent.removeQueuedMessage(agent.queueEntryId(followUp) ?? "")).toEqual({
+			lane: "followUp",
+			message: followUp,
+		});
+		expect(agent.hasQueuedMessages()).toBe(false);
+		expect(agent.removeQueuedMessage("s999")).toBeUndefined();
+	});
+
+	it("moveQueuedMessage reorders within a lane, clamps the target, and never crosses lanes", () => {
+		const agent = new Agent();
+		const a = userMessage("a");
+		const b = userMessage("b");
+		const c = userMessage("c");
+		const other = userMessage("other lane");
+		agent.followUp(a);
+		agent.followUp(b);
+		agent.followUp(c);
+		agent.steer(other);
+
+		const idOf = (message: { role: "user"; content: string; timestamp: number }) => agent.queueEntryId(message) ?? "";
+
+		expect(agent.moveQueuedMessage(idOf(c), 0)).toEqual({ lane: "followUp", index: 0 });
+		expect(agent.peekFollowUpQueue()).toEqual([c, a, b]);
+
+		// Clamp above range: after removal the lane has 2 entries, so 99 lands at 2.
+		expect(agent.moveQueuedMessage(idOf(a), 99)).toEqual({ lane: "followUp", index: 2 });
+		expect(agent.peekFollowUpQueue()).toEqual([c, b, a]);
+
+		// Clamp below range and non-finite input both land at 0.
+		expect(agent.moveQueuedMessage(idOf(a), -5)).toEqual({ lane: "followUp", index: 0 });
+		expect(agent.moveQueuedMessage(idOf(a), Number.NaN)).toEqual({ lane: "followUp", index: 0 });
+
+		// The steering lane is untouched by follow-up reorders (and vice versa).
+		expect(agent.peekSteeringQueue()).toEqual([other]);
+		expect(agent.moveQueuedMessage("f999", 0)).toBeUndefined();
+	});
+
+	it("drain honors the reordered queue and skips removed entries", async () => {
+		const mock = createMockModel({ responses: [{ content: ["answer 1"] }, { content: ["answer 2"] }] });
+		const agent = new Agent({ streamFn: mock.stream, steeringMode: "one-at-a-time" });
+		agent.replaceMessages([
+			{ role: "user", content: [{ type: "text", text: "Initial" }], timestamp: Date.now() - 10 },
+			createAssistantMessage([{ type: "text", text: "ready" }]),
+		]);
+
+		const first = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "steer first" }],
+			timestamp: Date.now(),
+		};
+		const second = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "steer second" }],
+			timestamp: Date.now() + 1,
+		};
+		agent.steer(first);
+		agent.steer(second);
+
+		// Reorder: second jumps the line; then remove it — the drain must
+		// deliver only `first`, proving remove/move compose with dequeue.
+		agent.moveQueuedMessage(agent.queueEntryId(second) ?? "", 0);
+		agent.removeQueuedMessage(agent.queueEntryId(second) ?? "");
+
+		await agent.continue();
+
+		const userTurns = agent.state.messages.filter(message => message.role === "user").slice(-1);
+		expect(userTurns).toEqual([first]);
+		expect(agent.hasQueuedMessages()).toBe(false);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("onQueueChange fires on real mutations and stays silent on no-ops", async () => {
+		const mock = createMockModel({ responses: [{ content: ["done"] }] });
+		const agent = new Agent({ streamFn: mock.stream });
+		let notifications = 0;
+		const unsubscribe = agent.onQueueChange(() => {
+			notifications++;
+		});
+
+		const message = userMessage("tracked");
+		agent.steer(message); // enqueue
+		agent.followUp(message); // enqueue
+		agent.moveQueuedMessage("nope", 0); // unknown id: no mutation, no notify
+		agent.removeQueuedMessage("nope"); // unknown id: no mutation, no notify
+		expect(notifications).toBe(2);
+
+		agent.moveQueuedMessage(agent.queueEntryId(message) ?? "", 0); // real move
+		expect(notifications).toBe(3);
+
+		agent.replaceMessages([createAssistantMessage([{ type: "text", text: "ready" }])]);
+		await agent.continue(); // drains both lanes
+		expect(notifications).toBeGreaterThan(3);
+		expect(agent.hasQueuedMessages()).toBe(false);
+
+		const afterDrain = notifications;
+		agent.clearAllQueues(); // queue reset: notifies
+		expect(notifications).toBe(afterDrain + 1);
+
+		unsubscribe();
+		agent.steer(userMessage("after unsubscribe"));
+		expect(notifications).toBe(afterDrain + 1);
+	});
+});
