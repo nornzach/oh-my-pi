@@ -34,6 +34,33 @@ Unless user tells you exactly what to write:
 
 `packages/gui/` is **not an ordinary package directory** — it is the checked-out working tree of the standalone GUI repository [`nornzach/oh-my-pi-gui`](https://github.com/nornzach/oh-my-pi-gui), nested inside this monorepo with its own `.git`, remotes, tags, and releases.
 
+### The three repos — never confuse them
+
+| Repo | Role | You push here? | You pull from here? |
+|---|---|---|---|
+| [`nornzach/oh-my-pi`](https://github.com/nornzach/oh-my-pi) | **Our monorepo fork** — agent source + the only sidecar build source. This checkout's `origin`. | ✅ all monorepo work | only to resolve our own commits |
+| [`nornzach/oh-my-pi-gui`](https://github.com/nornzach/oh-my-pi-gui) | **GUI product repo** — all GUI code, tags, GitHub releases. Pushed from inside `packages/gui/`. | ✅ all GUI work | only to resolve our own commits |
+| [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi) | **Upstream** — the sync source for agent feature updates. This checkout's `upstream`. | ❌ **NEVER push** | ✅ the only place new omp features come from |
+
+### Remotes in this checkout
+
+- `origin` = `nornzach/oh-my-pi` (fork) — every monorepo commit lands here. `git push` with no argument is safe.
+- `upstream` = `can1357/oh-my-pi` — fetch/merge only. If a push command ever names `upstream`, it is wrong.
+- The GUI repo's own `origin` lives in `packages/gui/.git` and is a different repository entirely.
+
+### Syncing upstream (pulling new omp features)
+
+Run the script, never a hand-rolled merge — it also re-provisions everything a plain merge misses:
+
+```bash
+bash packages/gui/scripts/sync-upstream.sh
+# fetch upstream → show incoming → merge upstream/main → bun install →
+# re-provision pi_natives on version bump → gen:stats → build:omp → GUI build+tests
+```
+
+- Resolve conflicts, then re-run with `SKIP_MERGE=1`.
+- After a sync: monorepo commits are pushed to `origin` (fork) as usual; the GUI side gets rebuilt/repackaged only when a release is due (see `packages/gui/AGENTS.md`).
+
 Roles are strict:
 
 - **This monorepo = upstream sync + sidecar build source.** It tracks `upstream` ([`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi)) for agent features, and it is the only place that can compile the GUI's bundled agent sidecar (`resources/omp`, built by `bun --cwd=packages/gui run build:omp` from `packages/coding-agent` + `packages/natives`). Monorepo work is committed here and pushed to `origin` ([`nornzach/oh-my-pi`](https://github.com/nornzach/oh-my-pi), the fork) — the fork is the build-from-source monorepo referenced by the GUI's README; never push to `upstream`.
