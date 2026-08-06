@@ -30,6 +30,23 @@ Unless user tells you exactly what to write:
 - **Never comment on GitHub** (issues, PRs, discussions).
 - **Never create issues on GitHub**.
 
+## omp GUI Sub-Repository
+
+`packages/gui/` is **not an ordinary package directory** — it is the checked-out working tree of the standalone GUI repository [`nornzach/oh-my-pi-gui`](https://github.com/nornzach/oh-my-pi-gui), nested inside this monorepo with its own `.git`, remotes, tags, and releases.
+
+Roles are strict:
+
+- **This monorepo = upstream sync + sidecar build source.** It tracks `upstream` ([`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi)) for agent features, and it is the only place that can compile the GUI's bundled agent sidecar (`resources/omp`, built by `bun --cwd=packages/gui run build:omp` from `packages/coding-agent` + `packages/natives`).
+- **The GUI sub-repository = the real product repo.** All GUI code changes, commits, tags, and releases happen **only** in `packages/gui/.git` and are pushed to `nornzach/oh-my-pi-gui` — never to this monorepo's remotes.
+
+Rules:
+
+- NEVER commit `packages/gui/` paths into this monorepo's git. The directory appears as untracked here — that is intentional, not a dirty tree.
+- Git state is separate: check GUI work with `git -C packages/gui status` (its branch must stay in sync with `origin/main` of `nornzach/oh-my-pi-gui`), monorepo work with plain `git status`.
+- Changing GUI behavior requires the full loop: edit in `packages/gui/`, rebuild the sidecar if the change touches agent/RPC code, then commit + tag + release inside the GUI sub-repo. Releases ship DMGs built from this monorepo checkout, so sync it with upstream first and keep the checkout clean.
+- The canonical GUI build/release procedure, sub-repo URL, and handoff rules live in `packages/gui/AGENTS.md` and `packages/gui/README.md` — those files govern the sub-repo; this section only marks the boundary.
+- `resources/omp*` binaries are build artifacts of this monorepo, ignored by the GUI repo. Rebuild them here; never commit them anywhere.
+
 ## Code Quality
 
 - No `any` unless absolutely necessary.
