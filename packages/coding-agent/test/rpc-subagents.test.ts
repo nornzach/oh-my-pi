@@ -396,7 +396,13 @@ describe("RPC subagent registry", () => {
 			// Finished agents stay registered as idle refs (agent-registry
 			// retention model): the ref merge must not flip the card back live.
 			const agents = AgentRegistry.global();
-			const ref = agents.register({ id: "SubagentA", displayName: "SubagentA", kind: "sub", session: null, status: "idle" });
+			const ref = agents.register({
+				id: "SubagentA",
+				displayName: "SubagentA",
+				kind: "sub",
+				session: null,
+				status: "idle",
+			});
 			expect(registry.getSubagents()).toMatchObject([
 				{ id: "SubagentA", status: "completed", assignment: "Implement work", progress: { durationMs: 19_800 } },
 			]);
