@@ -1714,6 +1714,15 @@ export const log = {
 	async subjects(cwd: string, count: number, signal?: AbortSignal): Promise<string[]> {
 		return splitLines(await runText(cwd, ["log", `-n${count}`, "--pretty=format:%s"], { readOnly: true, signal }));
 	},
+	/** Commit subjects in `base..head`, newest first, capped at `count`. */
+	async subjectsInRange(cwd: string, base: string, head: string, count = 50, signal?: AbortSignal): Promise<string[]> {
+		return splitLines(
+			await runText(cwd, ["log", `-n${count}`, "--pretty=format:%s", `${base}..${head}`], {
+				readOnly: true,
+				signal,
+			}),
+		);
+	},
 	/** Recent commits as `<short-sha> <subject>` onelines. */
 	async onelines(cwd: string, count: number, signal?: AbortSignal): Promise<string[]> {
 		return splitLines(

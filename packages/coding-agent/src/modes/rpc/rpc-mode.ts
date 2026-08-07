@@ -90,6 +90,16 @@ import {
 	applyRpcSetPluginSetting,
 	buildRpcPluginDetail,
 } from "./rpc-plugins";
+import {
+	buildRpcPrDetail,
+	buildRpcPrDraft,
+	buildRpcPrFileDiff,
+	buildRpcPrList,
+	buildRpcPrRepo,
+	checkoutRpcPr,
+	createRpcPr,
+	RpcPrError,
+} from "./rpc-pr";
 import { applyRpcGetQueue, applyRpcQueueClear, applyRpcQueueMove, applyRpcQueueRemove } from "./rpc-queue";
 import { buildRpcActiveTools, buildRpcContextReport, buildRpcJobs, shareRpcSession } from "./rpc-reports";
 import {
@@ -396,6 +406,13 @@ function isBackgroundRpcCommand(type: RpcCommand["type"]): boolean {
 		type === "import_foreign_session" ||
 		type === "worktree_create" ||
 		type === "worktree_remove" ||
+		type === "pr_repo" ||
+		type === "pr_list" ||
+		type === "pr_get" ||
+		type === "pr_diff" ||
+		type === "pr_draft" ||
+		type === "pr_create" ||
+		type === "pr_checkout" ||
 		type === "mcp_test" ||
 		type === "mcp_reauth" ||
 		type === "transcribe_audio" ||
@@ -1240,6 +1257,12 @@ export async function runRpcMode(
 		if (err instanceof RpcWorktreeError) return error(id, command, err.message, err.code);
 		return error(id, command, err instanceof Error ? err.message : String(err));
 	};
+	// PR failures carry the typed reason (gh_missing / no_github_remote / …) so
+	// the PR Center renders the matching empty state instead of a raw message.
+	const prError = (id: string | undefined, command: string, err: unknown): RpcResponse => {
+		if (err instanceof RpcPrError) return error(id, command, err.message, err.code);
+		return error(id, command, err instanceof Error ? err.message : String(err));
+	};
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
@@ -1984,6 +2007,84 @@ export async function runRpcMode(
 					);
 				} catch (err) {
 					return worktreeError(id, "worktree_remove", err);
+				}
+			}
+
+			// =================================================================
+			// Pull requests (GUI PR Center; plan/21 in the GUI repo)
+			// =================================================================
+
+			case "pr_repo": {
+				return success(id, "pr_repo", await buildRpcPrRepo(session));
+			}
+
+			case "pr_list": {
+				try {
+					return success(
+						id,
+						"pr_list",
+						await buildRpcPrList(session, { state: command.state, limit: command.limit }),
+					);
+				} catch (err) {
+					return prError(id, "pr_list", err);
+				}
+			}
+
+			case "pr_get": {
+				try {
+					return success(id, "pr_get", await buildRpcPrDetail(session, { number: command.number }));
+				} catch (err) {
+					return prError(id, "pr_get", err);
+				}
+			}
+
+			case "pr_diff": {
+				try {
+					return success(
+						id,
+						"pr_diff",
+						await buildRpcPrFileDiff(session, { number: command.number, path: command.path }),
+					);
+				} catch (err) {
+					return prError(id, "pr_diff", err);
+				}
+			}
+
+			case "pr_draft": {
+				try {
+					return success(
+						id,
+						"pr_draft",
+						await buildRpcPrDraft(session, { base: command.base, head: command.head }),
+					);
+				} catch (err) {
+					return prError(id, "pr_draft", err);
+				}
+			}
+
+			case "pr_create": {
+				try {
+					return success(
+						id,
+						"pr_create",
+						await createRpcPr(session, {
+							title: command.title,
+							body: command.body,
+							base: command.base,
+							head: command.head,
+							draft: command.draft,
+						}),
+					);
+				} catch (err) {
+					return prError(id, "pr_create", err);
+				}
+			}
+
+			case "pr_checkout": {
+				try {
+					return success(id, "pr_checkout", await checkoutRpcPr(session, { number: command.number }));
+				} catch (err) {
+					return prError(id, "pr_checkout", err);
 				}
 			}
 

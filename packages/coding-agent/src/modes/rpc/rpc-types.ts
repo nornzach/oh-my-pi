@@ -342,7 +342,19 @@ export type RpcCommand =
 	// refuses a dirty worktree unless force, the refusal carrying the counts.
 	| { id?: string; type: "get_git_status" }
 	| { id?: string; type: "worktree_create"; name: string; baseCwd?: string; baseRef?: "HEAD" | "default" }
-	| { id?: string; type: "worktree_remove"; path: string; force?: boolean };
+	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
+
+	// Pull requests (GUI PR Center, plan/21). All resolve the GitHub repo from
+	// the session cwd via the gh CLI; pr_diff is per-file (lazy) so frames stay
+	// small, pr_draft is the one model call, pr_checkout lands the PR in a
+	// ~/.omp/wt worktree (plan/20 scheme).
+	| { id?: string; type: "pr_repo" }
+	| { id?: string; type: "pr_list"; state?: "open" | "closed" | "merged" | "all"; limit?: number }
+	| { id?: string; type: "pr_get"; number: number }
+	| { id?: string; type: "pr_diff"; number: number; path: string }
+	| { id?: string; type: "pr_draft"; base?: string; head?: string }
+	| { id?: string; type: "pr_create"; title: string; body: string; base?: string; head?: string; draft?: boolean }
+	| { id?: string; type: "pr_checkout"; number: number };
 
 // ============================================================================
 // RPC State
@@ -1197,6 +1209,57 @@ export interface RpcWorktreeCreateResult {
 	baseCwd: string;
 }
 
+/** pr_repo: gh availability + the session cwd's GitHub repo, or the typed reason it's unusable. */
+export type RpcPrRepo =
+	| { available: true; repo: string; defaultBranch: string | null }
+	| { available: false; reason: "gh_missing" | "not_a_repo" | "no_github_remote" };
+
+/** pr_list row: one PR with rollup CI counts (success/failure/pending). */
+export interface RpcPrListItem {
+	number: number;
+	title: string;
+	url: string;
+	isDraft: boolean;
+	authorLogin: string;
+	headRefName: string;
+	baseRefName: string;
+	additions: number;
+	deletions: number;
+	updatedAt: string;
+	reviewDecision: string | null;
+	checks: { success: number; failure: number; pending: number };
+}
+
+/** pr_get detail: everything the PR Center renders except per-file diff text. */
+export interface RpcPrDetail {
+	number: number;
+	title: string;
+	url: string;
+	isDraft: boolean;
+	authorLogin: string;
+	body: string;
+	baseRefName: string;
+	headRefName: string;
+	mergeStateStatus: string;
+	additions: number;
+	deletions: number;
+	reviewDecision: string | null;
+	files: Array<{ path: string; changeType: string; additions: number; deletions: number }>;
+	checks: Array<{ name: string; status: string; conclusion: string | null }>;
+}
+
+/** pr_draft result (AI-drafted, user-editable before pr_create). */
+export interface RpcPrDraftResult {
+	title: string;
+	body: string;
+}
+
+/** pr_create result. */
+export interface RpcPrCreateResult {
+	url: string;
+	number: number;
+}
+
 // ============================================================================
 // Session Report Wire Types (/context /tools /share /jobs parity)
 // ============================================================================
@@ -1706,6 +1769,15 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_git_status"; success: true; data: RpcGitStatus }
 	| { id?: string; type: "response"; command: "worktree_create"; success: true; data: RpcWorktreeCreateResult }
 	| { id?: string; type: "response"; command: "worktree_remove"; success: true; data: { removed: true } }
+
+	// Pull requests
+	| { id?: string; type: "response"; command: "pr_repo"; success: true; data: RpcPrRepo }
+	| { id?: string; type: "response"; command: "pr_list"; success: true; data: RpcPrListItem[] }
+	| { id?: string; type: "response"; command: "pr_get"; success: true; data: RpcPrDetail }
+	| { id?: string; type: "response"; command: "pr_diff"; success: true; data: { diff: string } }
+	| { id?: string; type: "response"; command: "pr_draft"; success: true; data: RpcPrDraftResult }
+	| { id?: string; type: "response"; command: "pr_create"; success: true; data: RpcPrCreateResult }
+	| { id?: string; type: "response"; command: "pr_checkout"; success: true; data: { path: string; branch: string } }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };

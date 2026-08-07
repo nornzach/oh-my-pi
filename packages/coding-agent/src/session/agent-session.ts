@@ -7989,7 +7989,10 @@ export class AgentSession {
 					const titleSource = this.sessionManager.titleSource;
 					// Kind inherits — a branch from a chat session's root must not
 					// convert the continuing sidecar onto an agent-stamped file.
-					await this.sessionManager.newSession({ kind: this.sessionManager.getHeader()?.kind, parentSession: previousSessionFile });
+					await this.sessionManager.newSession({
+						kind: this.sessionManager.getHeader()?.kind,
+						parentSession: previousSessionFile,
+					});
 					if (title) await this.sessionManager.setSessionName(title, titleSource);
 				} else {
 					this.sessionManager.createBranchedSession(selectedEntry.parentId);

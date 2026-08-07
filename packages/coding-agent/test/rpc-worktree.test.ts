@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $ } from "bun";
-
 import {
 	buildRpcGitStatus,
 	createRpcWorktree,
@@ -11,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-worktree";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { branch } from "@oh-my-pi/pi-coding-agent/utils/git";
+import { $ } from "bun";
 
 // The RPC functions only touch session.sessionManager.getCwd() — a stub is
 // the right-sized seam (a full AgentSession pulls provider/auth machinery).
