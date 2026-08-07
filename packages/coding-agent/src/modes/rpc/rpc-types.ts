@@ -332,7 +332,17 @@ export type RpcCommand =
 	| { id?: string; type: "get_directories" }
 	| { id?: string; type: "add_directory"; path: string }
 	| { id?: string; type: "remove_directory"; path: string }
-	| { id?: string; type: "move_session"; path: string };
+	| { id?: string; type: "move_session"; path: string }
+
+	// Git worktrees (GUI tab × worktree binding). get_git_status is the live
+	// source for the footer git segment (branch + porcelain counts; isRepo
+	// false outside a repository). worktree_create materializes a new branch
+	// omp/gui/<name> at ~/.omp/wt/gui-<name>-<hash7>; baseRef "HEAD" (current
+	// checkout) or "default" (repository default branch). worktree_remove
+	// refuses a dirty worktree unless force, the refusal carrying the counts.
+	| { id?: string; type: "get_git_status" }
+	| { id?: string; type: "worktree_create"; name: string; baseCwd?: string; baseRef?: "HEAD" | "default" }
+	| { id?: string; type: "worktree_remove"; path: string; force?: boolean };
 
 // ============================================================================
 // RPC State
@@ -1163,6 +1173,30 @@ export interface RpcWorkspaceDirectoriesResult {
 	directories: RpcWorkspaceDirectory[];
 }
 
+/**
+ * Result of get_git_status: the footer git segment's live state for the
+ * session cwd (TUI gitSegment parity). `isRepo` false outside a repository
+ * (counts zeroed, branch null); `branch` null when detached.
+ */
+export interface RpcGitStatus {
+	isRepo: boolean;
+	branch: string | null;
+	staged: number;
+	unstaged: number;
+	untracked: number;
+}
+
+/**
+ * Result of worktree_create: the materialized worktree. `path` is the
+ * checkout root (~/.omp/wt/gui-<name>-<hash7>), `branch` the new
+ * omp/gui/<name> ref, `baseCwd` the repo's primary checkout it forked from.
+ */
+export interface RpcWorktreeCreateResult {
+	path: string;
+	branch: string;
+	baseCwd: string;
+}
+
 // ============================================================================
 // Session Report Wire Types (/context /tools /share /jobs parity)
 // ============================================================================
@@ -1667,6 +1701,11 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "add_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
 	| { id?: string; type: "response"; command: "remove_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
 	| { id?: string; type: "response"; command: "move_session"; success: true; data: { cwd: string } }
+
+	// Git worktrees
+	| { id?: string; type: "response"; command: "get_git_status"; success: true; data: RpcGitStatus }
+	| { id?: string; type: "response"; command: "worktree_create"; success: true; data: RpcWorktreeCreateResult }
+	| { id?: string; type: "response"; command: "worktree_remove"; success: true; data: { removed: true } }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };

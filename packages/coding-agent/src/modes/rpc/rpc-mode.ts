@@ -128,6 +128,7 @@ import {
 	buildRpcWorkspaceDirectories,
 	RpcWorkspaceBusyError,
 } from "./rpc-workspace";
+import { buildRpcGitStatus, createRpcWorktree, RpcWorktreeError, removeRpcWorktree } from "./rpc-worktree";
 
 // Re-export types for consumers
 export type * from "./rpc-types";
@@ -393,6 +394,8 @@ function isBackgroundRpcCommand(type: RpcCommand["type"]): boolean {
 		type === "eval" ||
 		type === "list_foreign_sessions" ||
 		type === "import_foreign_session" ||
+		type === "worktree_create" ||
+		type === "worktree_remove" ||
 		type === "mcp_test" ||
 		type === "mcp_reauth" ||
 		type === "transcribe_audio" ||
@@ -1231,6 +1234,12 @@ export async function runRpcMode(
 		if (err instanceof RpcWorkspaceBusyError) return error(id, command, err.message, err.code);
 		return error(id, command, err instanceof Error ? err.message : String(err));
 	};
+	// Worktree refusals carry a machine-readable code (the GUI's close dialog
+	// branches on "worktree_dirty"); everything else is a plain message.
+	const worktreeError = (id: string | undefined, command: string, err: unknown): RpcResponse => {
+		if (err instanceof RpcWorktreeError) return error(id, command, err.message, err.code);
+		return error(id, command, err instanceof Error ? err.message : String(err));
+	};
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
@@ -1942,6 +1951,42 @@ export async function runRpcMode(
 				}
 			}
 
+			// =================================================================
+			// Git worktrees (GUI tab × worktree binding; plan/20 in the GUI repo)
+			// =================================================================
+
+			case "get_git_status": {
+				return success(id, "get_git_status", await buildRpcGitStatus(session));
+			}
+
+			case "worktree_create": {
+				try {
+					return success(
+						id,
+						"worktree_create",
+						await createRpcWorktree(session, {
+							name: command.name,
+							baseCwd: command.baseCwd,
+							baseRef: command.baseRef,
+						}),
+					);
+				} catch (err) {
+					return worktreeError(id, "worktree_create", err);
+				}
+			}
+
+			case "worktree_remove": {
+				try {
+					return success(
+						id,
+						"worktree_remove",
+						await removeRpcWorktree(session, { path: command.path, force: command.force }),
+					);
+				} catch (err) {
+					return worktreeError(id, "worktree_remove", err);
+				}
+			}
+
 			// Foreign session import (Claude/Codex → OMP copy). Both run in the
 			// background (dispatchRpcInputFrame) — listing scans the source,
 			// importing converts a whole transcript.
@@ -2327,7 +2372,12 @@ export async function runRpcMode(
 				// have — refuse rather than create a contradictory "plan rules +
 				// no tools" context (I3). Disarming stays allowed.
 				if (command.enabled && session.restrictToolNames) {
-					return error(id, "set_plan_mode", "Plan mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+					return error(
+						id,
+						"set_plan_mode",
+						"Plan mode is unavailable in a tool-free (chat) session.",
+						"mode_unavailable_in_chat",
+					);
 				}
 				if (command.enabled) {
 					session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
@@ -2361,7 +2411,12 @@ export async function runRpcMode(
 
 			case "set_vibe_mode": {
 				if (command.enabled && session.restrictToolNames) {
-					return error(id, "set_vibe_mode", "Vibe mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+					return error(
+						id,
+						"set_vibe_mode",
+						"Vibe mode is unavailable in a tool-free (chat) session.",
+						"mode_unavailable_in_chat",
+					);
 				}
 				try {
 					return success(id, "set_vibe_mode", await vibeModeController.setEnabled(command.enabled));
@@ -2376,7 +2431,12 @@ export async function runRpcMode(
 
 			case "guided_goal": {
 				if (session.restrictToolNames) {
-					return error(id, "guided_goal", "Goal mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+					return error(
+						id,
+						"guided_goal",
+						"Goal mode is unavailable in a tool-free (chat) session.",
+						"mode_unavailable_in_chat",
+					);
 				}
 				try {
 					return success(id, "guided_goal", await goalModeController.startGuidedInterview(command.initial));
@@ -2436,7 +2496,12 @@ export async function runRpcMode(
 			}
 			case "set_goal": {
 				if (session.restrictToolNames) {
-					return error(id, "set_goal", "Goal mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+					return error(
+						id,
+						"set_goal",
+						"Goal mode is unavailable in a tool-free (chat) session.",
+						"mode_unavailable_in_chat",
+					);
 				}
 				try {
 					return success(id, "set_goal", await goalModeController.setGoal(command));
@@ -2451,7 +2516,12 @@ export async function runRpcMode(
 
 			case "set_loop_mode": {
 				if (command.enabled && session.restrictToolNames) {
-					return error(id, "set_loop_mode", "Loop mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+					return error(
+						id,
+						"set_loop_mode",
+						"Loop mode is unavailable in a tool-free (chat) session.",
+						"mode_unavailable_in_chat",
+					);
 				}
 				try {
 					return success(id, "set_loop_mode", loopModeController.setEnabled(command.enabled, command.args));
