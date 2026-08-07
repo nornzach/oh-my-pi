@@ -258,9 +258,12 @@ export class SessionHandoff {
 			const bashTransition = this.#host.beginBashSessionTransition();
 			this.#host.cancelOwnAsyncJobs();
 			try {
-				await this.#host.sessionManager.newSession(
-					previousSessionFile ? { parentSession: previousSessionFile } : undefined,
-				);
+				await this.#host.sessionManager.newSession({
+					// Same inheritance rule as AgentSession.newSession: a handoff
+					// from a chat session stays chat-stamped.
+					kind: this.#host.sessionManager.getHeader()?.kind,
+					...(previousSessionFile ? { parentSession: previousSessionFile } : {}),
+				});
 				this.#host.markBashSessionTransition(bashTransition);
 				// The handoff opens a fresh conversation, so the spend of the one it
 				// summarizes stays with it. Clearing here, at the commit point, keeps the

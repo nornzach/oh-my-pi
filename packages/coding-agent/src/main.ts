@@ -65,6 +65,7 @@ import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
+import chatPromptContent from "./prompts/chat-mode.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
@@ -767,18 +768,25 @@ export async function createSessionManager(
 	// --resume without value is handled separately (needs picker UI)
 	// If --session-dir provided without --continue/--resume, create new session there
 	if (parsed.sessionDir) {
-		return SessionManager.create(cwd, parsed.sessionDir);
+		return SessionManager.create(cwd, parsed.sessionDir, undefined, parsed.chat ? { kind: "chat" } : undefined);
 	}
 	// Auto-resume: behave like --continue if the setting is enabled and a prior
 	// session exists. When a prior session is resumed, mark parsed.continue so
 	// buildSessionOptions restores the session's model/thinking instead of
 	// overriding them with CLI defaults.
-	if (activeSettings.get("autoResume")) {
+	// BUT: --chat always creates a fresh chat session (I1: kind must match from creation).
+	if (!parsed.chat && activeSettings.get("autoResume")) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;
 		}
 		return manager;
+	}
+
+	// A chat session must be created here (not deferred to the SDK) so the
+	// `kind` stamp lands on the header at creation time.
+	if (parsed.chat) {
+		return SessionManager.create(cwd, parsed.sessionDir, undefined, { kind: "chat" });
 	}
 	// Default case (new session) returns undefined, SDK will create one
 	return undefined;
@@ -1066,8 +1074,21 @@ export async function buildSessionOptions(
 		options.titleSystemPrompt = titleSystemPrompt;
 	}
 
-	// Tools
-	if (parsed.noTools) {
+	// Tools — chat mode implies no tools + a restricted registry (so nothing,
+	// including extension-registered tools, can be re-activated later). An
+	// explicit `--tools` narrows the list instead, mirroring `--no-tools`.
+	// Launch-time tool overrides are never persisted: a resumed chat session
+	// re-derives the empty set from `header.kind`.
+	const sessionKind = parsed.chat ? "chat" : (sessionManager?.getHeader()?.kind ?? "agent");
+	if (sessionKind === "chat") {
+		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
+		options.restrictToolNames = true;
+		// Chat prompt: append unless user explicitly overrode
+		if (!parsed.systemPrompt && !parsed.appendSystemPrompt) {
+			options.appendSystemPrompt = chatPromptContent;
+		}
+		// Stamp kind on new sessions (via SessionManager API, not CreateAgentSessionOptions)
+	} else if (parsed.noTools) {
 		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
 	} else if (parsed.tools) {
 		options.toolNames = parsed.tools;

@@ -374,6 +374,8 @@ export interface RpcSessionState {
 	/** Process-global agent pause state. */
 	agentsPaused: boolean;
 	agentsPausedAt?: number;
+	/** Session kind. Absent = "agent" (tools enabled); "chat" = tool-free conversation. Immutable per session. */
+	kind?: "chat";
 }
 
 export interface RpcAvailableSlashCommand {

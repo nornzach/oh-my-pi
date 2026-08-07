@@ -1042,6 +1042,7 @@ export class SessionManager {
 			cwd: this.#cwd,
 			parentSession: options?.parentSession,
 			providerPromptCacheKey: options?.providerPromptCacheKey,
+			kind: options?.kind,
 		};
 		const workspace = normalizeSessionWorkspace({
 			cwd: this.#cwd,
@@ -1544,7 +1545,9 @@ export class SessionManager {
 		const sessionDir = options?.sessionDir ?? SessionManager.getDefaultSessionDir(this.#cwd, undefined, storage);
 		const manager = new SessionManager(this.#cwd, sessionDir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		manager.#resetToNewSession();
+		// Kind inherits: a copy of a chat session must stay chat-stamped,
+		// or the copy would resume later with full tools (I1).
+		manager.#resetToNewSession({ kind: this.#header.kind });
 		manager.#sessionName = this.#sessionName;
 		manager.#titleSource = this.#titleSource;
 		manager.#titleUpdatedAt = this.#titleUpdatedAt;
@@ -2438,6 +2441,7 @@ export class SessionManager {
 			titleSource: this.#titleSource,
 			parentSession: this.#persist ? sourceSessionFile : undefined,
 			additionalDirectories: this.#additionalDirectories.length > 0 ? [...this.#additionalDirectories] : undefined,
+			kind: this.#header.kind,
 		};
 
 		const labels: LabelEntry[] = [];
@@ -2502,7 +2506,8 @@ export class SessionManager {
 
 		const manager = new SessionManager(this.#cwd, this.#sessionDir, true, this.#storage);
 		manager.#suppressBreadcrumb = this.#suppressBreadcrumb;
-		manager.#resetToNewSession({ parentSession: this.#sessionFile });
+		// Kind inherits — same strict-isolation rule as persistCopy.
+		manager.#resetToNewSession({ parentSession: this.#sessionFile, kind: this.#header.kind });
 		manager.#sessionName = this.#sessionName;
 		manager.#titleSource = this.#titleSource;
 		manager.#titleUpdatedAt = this.#titleUpdatedAt;
@@ -2550,10 +2555,15 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in the session header)
 	 * @param sessionDir Optional session directory; defaults to the cwd-derived dir.
 	 */
-	static create(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionManager {
+	static create(
+		cwd: string,
+		sessionDir?: string,
+		storage: SessionStorage = new FileSessionStorage(),
+		options?: NewSessionOptions,
+	): SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
-		manager.#resetToNewSession();
+		manager.#resetToNewSession(options);
 		return manager;
 	}
 
@@ -2609,6 +2619,7 @@ export class SessionManager {
 			{
 				parentSession: sourceHeader?.id,
 				providerPromptCacheKey: sourceHeader?.providerPromptCacheKey ?? sourceHeader?.id,
+				kind: sourceHeader?.kind,
 			},
 			options?.sessionFile,
 		);
@@ -2730,6 +2741,25 @@ export class SessionManager {
 			}
 		}
 		return { cwd: header?.cwd ?? getProjectDir(), init };
+	}
+
+	/**
+	 * Cold-read a session file's kind without taking a write lock. Returns
+	 * "chat" | "agent", with "agent" as the safe default on read failure.
+	 */
+	static async peekSessionKind(
+		filePath: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<"agent" | "chat"> {
+		let loaded: FileEntry[];
+		try {
+			loaded = await loadEntriesFromFile(filePath, storage);
+		} catch {
+			return "agent";
+		}
+		if (loaded.length === 0) return "agent";
+		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		return header?.kind ?? "agent";
 	}
 
 	/** Continue the most recent session, or create a new one if none exists. */

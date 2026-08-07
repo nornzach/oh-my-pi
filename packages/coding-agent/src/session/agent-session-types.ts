@@ -123,6 +123,13 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/**
+	 * True for a restricted session (chat kind / explicit restricted tool set).
+	 * Mode-arming RPCs (plan/goal/loop/vibe) must refuse: their prompts demand
+	 * tools the session does not have, and arming them silently would put the
+	 * model in a contradictory "mode rules + no tools" state.
+	 */
+	restrictToolNames?: boolean;
 	/** Whether the session spawn policy permits the read-only `scout` subagent. Defaults to true. */
 	scoutAllowedBySpawnPolicy?: boolean;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */

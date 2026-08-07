@@ -34,6 +34,7 @@ import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme 
 import type { AgentSession } from "../../session/agent-session";
 import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
+import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand, isTuiOnlyBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { sttClient } from "../../stt/asr-client";
@@ -1268,7 +1269,12 @@ export async function runRpcMode(
 						await reloadPluginState();
 					},
 					notifyTitleChanged: async () => {
-						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+						output({
+							type: "session_info_update",
+							title: session.sessionName,
+							sessionId: session.sessionId,
+							kind: session.sessionManager.getHeader()?.kind,
+						});
 					},
 					notifyConfigChanged: async () => {
 						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
@@ -1341,9 +1347,26 @@ export async function runRpcMode(
 				return success(id, "abort_and_prompt");
 			}
 
+			case "switch_session": {
+				// Guard: refuse cross-kind switches (I3 — reject rather than degrade)
+				const targetKind = (await SessionManager.peekSessionKind(command.sessionPath)) ?? "agent";
+				const ownKind = session.sessionManager.getHeader()?.kind ?? "agent";
+				if (targetKind !== ownKind) {
+					return error(
+						id,
+						"switch_session",
+						`Cannot switch from ${ownKind} session to ${targetKind} session. Open the target session in a new tab instead.`,
+						"session_kind_mismatch",
+					);
+				}
+				const result = await handleRpcSessionChange(session, command, subagentRegistry);
+				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
+				planApprovalController.syncArmed();
+				return success(id, result.type, result.data);
+			}
+
 			case "new_session":
 			case "drop_session":
-			case "switch_session":
 			case "branch":
 			case "fork": {
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
@@ -1391,6 +1414,7 @@ export async function runRpcMode(
 					prewalkArmed: session.getPrewalkState() !== undefined,
 					agentsPaused: agentPauseGate.paused,
 					agentsPausedAt: agentPauseGate.pausedAt,
+					kind: session.sessionManager.getHeader()?.kind,
 				};
 				return success(id, "get_state", state);
 			}
@@ -2299,6 +2323,12 @@ export async function runRpcMode(
 			}
 
 			case "set_plan_mode": {
+				// Mode arming needs tools the restricted (chat) session does not
+				// have — refuse rather than create a contradictory "plan rules +
+				// no tools" context (I3). Disarming stays allowed.
+				if (command.enabled && session.restrictToolNames) {
+					return error(id, "set_plan_mode", "Plan mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+				}
 				if (command.enabled) {
 					session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
 				} else {
@@ -2330,6 +2360,9 @@ export async function runRpcMode(
 			}
 
 			case "set_vibe_mode": {
+				if (command.enabled && session.restrictToolNames) {
+					return error(id, "set_vibe_mode", "Vibe mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+				}
 				try {
 					return success(id, "set_vibe_mode", await vibeModeController.setEnabled(command.enabled));
 				} catch (err: unknown) {
@@ -2342,6 +2375,9 @@ export async function runRpcMode(
 			}
 
 			case "guided_goal": {
+				if (session.restrictToolNames) {
+					return error(id, "guided_goal", "Goal mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+				}
 				try {
 					return success(id, "guided_goal", await goalModeController.startGuidedInterview(command.initial));
 				} catch (err: unknown) {
@@ -2399,6 +2435,9 @@ export async function runRpcMode(
 				}
 			}
 			case "set_goal": {
+				if (session.restrictToolNames) {
+					return error(id, "set_goal", "Goal mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+				}
 				try {
 					return success(id, "set_goal", await goalModeController.setGoal(command));
 				} catch (err: unknown) {
@@ -2411,6 +2450,9 @@ export async function runRpcMode(
 			}
 
 			case "set_loop_mode": {
+				if (command.enabled && session.restrictToolNames) {
+					return error(id, "set_loop_mode", "Loop mode is unavailable in a tool-free (chat) session.", "mode_unavailable_in_chat");
+				}
 				try {
 					return success(id, "set_loop_mode", loopModeController.setEnabled(command.enabled, command.args));
 				} catch (err: unknown) {

@@ -43,6 +43,11 @@ export interface SessionHeader {
 	previousSessionFiles?: string[];
 	/** Provider prompt-cache identity inherited by exact-route full forks. */
 	providerPromptCacheKey?: string;
+	/**
+	 * Session kind. Absent = "agent" (tools enabled). "chat" = tool-free
+	 * conversation; stamped at creation, never mutated.
+	 */
+	kind?: "chat";
 }
 
 export interface NewSessionOptions {
@@ -53,6 +58,8 @@ export interface NewSessionOptions {
 	drop?: boolean;
 	/** Additional workspace directories to seed on the new session. */
 	additionalDirectories?: string[];
+	/** Session kind to stamp on the new session header. */
+	kind?: "chat";
 }
 
 export interface SessionEntryBase {

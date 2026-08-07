@@ -65,6 +65,8 @@ export interface Args {
 	models?: string[];
 	tools?: string[];
 	noTools?: boolean;
+	/** Tool-free conversation session (stamps `kind:"chat"` on the session header). */
+	chat?: boolean;
 	noLsp?: boolean;
 	noPty?: boolean;
 	hooks?: string[];
@@ -245,6 +247,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
+		} else if (arg === "--chat") {
+			result.chat = true;
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
 		} else if (arg === "--no-lsp") {

@@ -427,6 +427,12 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	/**
+	 * True when this session runs a restricted tool set (chat kind or explicit
+	 * restriction). Mode-arming commands (plan/goal/loop/vibe) check this and
+	 * refuse: their prompts demand tools the session does not have.
+	 */
+	readonly restrictToolNames: boolean;
 	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
 	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
 	readonly yieldQueue: YieldQueue;
@@ -938,6 +944,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.restrictToolNames = config.restrictToolNames === true;
 		this.#modelRegistry = config.modelRegistry;
 		this.#codexResetCoordinator = config.codexResetCoordinator ?? defaultCodexAutoRedeemCoordinator;
 		const bashHost: BashRunnerHost = {
@@ -6618,6 +6625,9 @@ export class AgentSession {
 					await this.sessionManager.flush();
 				}
 				await this.sessionManager.newSession({
+					// A chat sidecar must never birth an agent-stamped file: the new
+					// session inherits the current kind (explicit options win).
+					kind: this.sessionManager.getHeader()?.kind,
 					...options,
 					additionalDirectories: this.settings.get("workspace.additionalDirectories"),
 				});
@@ -7977,7 +7987,9 @@ export class AgentSession {
 				if (!selectedEntry.parentId) {
 					const title = this.sessionManager.getSessionName();
 					const titleSource = this.sessionManager.titleSource;
-					await this.sessionManager.newSession({ parentSession: previousSessionFile });
+					// Kind inherits — a branch from a chat session's root must not
+					// convert the continuing sidecar onto an agent-stamped file.
+					await this.sessionManager.newSession({ kind: this.sessionManager.getHeader()?.kind, parentSession: previousSessionFile });
 					if (title) await this.sessionManager.setSessionName(title, titleSource);
 				} else {
 					this.sessionManager.createBranchedSession(selectedEntry.parentId);
