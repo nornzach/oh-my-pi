@@ -12,6 +12,7 @@
  */
 import { once } from "node:events";
 import { agentPauseGate } from "@oh-my-pi/pi-agent-core";
+import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, readLines, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -2365,11 +2366,22 @@ export async function runRpcMode(
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
-						// GUI consumers render input dialogs, so every prompt in a
-						// login flow — including pre-auth ones like region selection
-						// or a custom base URL — is satisfiable; no headless rejection.
+						// GUI consumers render input/select dialogs, so every prompt
+						// in a login flow — including pre-auth ones like region
+						// selection or a custom base URL — is satisfiable. Prompts
+						// carrying `options` render as a picker and return the
+						// 1-based index the provider's parsing expects. A dismissed
+						// dialog is a cancel, not an empty answer — an empty string
+						// would silently take the prompt's default branch.
 						onPrompt: async prompt => {
-							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
+							if (prompt.options?.length) {
+								const picked = await uiCtx.select(prompt.message, prompt.options, { timeout: 600_000 });
+								if (picked === undefined) throw new LoginCancelledError();
+								return String(prompt.options.indexOf(picked) + 1);
+							}
+							const value = await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 });
+							if (value === undefined) throw new LoginCancelledError();
+							return value;
 						},
 					});
 					// Provider-scoped online refresh so the just-persisted credential

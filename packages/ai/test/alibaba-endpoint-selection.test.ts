@@ -190,6 +190,19 @@ describe("alibaba-coding-plan endpoint selection", () => {
 
 		await expect(loginAlibabaCodingPlan(options)).rejects.toThrow("Login cancelled");
 	});
+
+	it("endpoint prompt carries picker options and still accepts the 1-based answer", async () => {
+		const seen: { options?: string[] }[] = [];
+		const prompts = ["1", "sk-test"];
+		await loginAlibabaCodingPlan({
+			onAuth: () => {},
+			onPrompt: async prompt => {
+				if (seen.length === 0) seen.push({ options: prompt.options });
+				return prompt.allowEmpty ? "" : (prompts.shift() ?? "");
+			},
+		});
+		expect(seen[0]?.options).toEqual(["International (default)", "China", "Custom"]);
+	});
 });
 
 describe("alibaba-coding-plan JSON apiKey", () => {

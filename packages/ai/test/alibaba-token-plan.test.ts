@@ -157,4 +157,18 @@ describe("QwenCloud Token Plan login", () => {
 		});
 		expect(providers.some(provider => provider.id === "alibaba-coding-plan")).toBe(true);
 	});
+
+	test("region prompt carries picker options and still accepts the 1-based answer", async () => {
+		const seen: { message: string; options?: string[] }[] = [];
+		const prompts = ["2", "sk-sp-test"];
+		await loginAlibabaTokenPlan({
+			onAuth: () => {},
+			onPrompt: async prompt => {
+				if (seen.length === 0) seen.push({ message: prompt.message, options: prompt.options });
+				return prompt.allowEmpty ? "" : (prompts.shift() ?? "");
+			},
+			fetch: () => Promise.resolve(Response.json({ data: [{ id: "qwen3.7-plus" }] })),
+		});
+		expect(seen[0]?.options).toEqual(["International (default)", "China (Beijing)", "Custom"]);
+	});
 });

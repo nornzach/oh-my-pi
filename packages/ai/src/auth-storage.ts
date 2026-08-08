@@ -25,6 +25,7 @@ import type {
 	OAuthAuthInfo,
 	OAuthController,
 	OAuthCredentials,
+	OAuthPrompt,
 	OAuthProvider,
 	OAuthProviderId,
 } from "./registry/oauth/types";
@@ -2830,7 +2831,7 @@ export class AuthStorage {
 			/** onAuth is required by auth-storage but optional in OAuthController */
 			onAuth: (info: OAuthAuthInfo) => void;
 			/** onPrompt is required for some providers (github-copilot, openai-codex) */
-			onPrompt: (prompt: { message: string; placeholder?: string }) => Promise<string>;
+			onPrompt: (prompt: OAuthPrompt) => Promise<string>;
 		},
 	): Promise<OAuthLoginIdentity | undefined> {
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo

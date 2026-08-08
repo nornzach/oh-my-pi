@@ -28,9 +28,9 @@ export async function loginAlibabaTokenPlan(options: OAuthController): Promise<s
 	}
 
 	const endpointChoice = await options.onPrompt({
-		message:
-			"Select QwenCloud Token Plan region: 1=International (default), 2=China (Beijing), 3=Custom — enter 1, 2, or 3",
+		message: "Select QwenCloud Token Plan region: 1=International (default), 2=China (Beijing), 3=Custom",
 		placeholder: "1",
+		options: ["International (default)", "China (Beijing)", "Custom"],
 	});
 	if (options.signal?.aborted) {
 		throw new AIError.LoginCancelledError();

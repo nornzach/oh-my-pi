@@ -37,6 +37,14 @@ export type OAuthPrompt = {
 	message: string;
 	placeholder?: string;
 	allowEmpty?: boolean;
+	/**
+	 * Optional choice list for picker-style UIs. When present, hosts with a
+	 * select dialog (RPC/GUI) render the options and return the 1-based index
+	 * of the picked entry as a string, so the provider's existing "1"/"2"/"3"
+	 * parsing works unchanged. Free-text hosts (TUI) ignore this and keep the
+	 * plain input prompt.
+	 */
+	options?: string[];
 };
 
 export type OAuthAuthInfo = {

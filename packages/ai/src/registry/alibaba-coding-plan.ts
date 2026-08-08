@@ -16,8 +16,9 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 
 	// Ask which endpoint to use
 	const endpointChoice = await options.onPrompt({
-		message: "Select Alibaba Coding Plan endpoint: 1=International (default), 2=China, 3=Custom — enter 1, 2, or 3",
+		message: "Select Alibaba Coding Plan endpoint: 1=International (default), 2=China, 3=Custom",
 		placeholder: "1",
+		options: ["International (default)", "China", "Custom"],
 	});
 
 	// Check for abort after endpoint selection (Escape returns "")
