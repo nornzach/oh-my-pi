@@ -2350,14 +2350,9 @@ export async function runRpcMode(
 					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
 				}
 				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that require interactive
-				// input before a browser URL cannot be satisfied headlessly; after
-				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
-				let authEmitted = false;
 				try {
 					await session.modelRegistry.authStorage.login(command.providerId, {
 						onAuth: info => {
-							authEmitted = true;
 							output({
 								type: "extension_ui_request",
 								id: Snowflake.next() as string,
@@ -2370,17 +2365,10 @@ export async function runRpcMode(
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
+						// GUI consumers render input dialogs, so every prompt in a
+						// login flow — including pre-auth ones like region selection
+						// or a custom base URL — is satisfiable; no headless rejection.
 						onPrompt: async prompt => {
-							if (!authEmitted) {
-								// onPrompt called before any auth URL — provider requires
-								// interactive input that cannot be satisfied headlessly.
-								return Promise.reject(
-									new Error(
-										`Provider '${command.providerId}' requires interactive prompts ` +
-											"which are not supported in RPC mode. Use the terminal UI to log in.",
-									),
-								);
-							}
 							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
 						},
 					});
