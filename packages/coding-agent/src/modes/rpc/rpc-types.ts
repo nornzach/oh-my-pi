@@ -184,12 +184,17 @@ export type RpcCommand =
 
 	// Domain inspection (read-only)
 	| { id?: string; type: "get_skills" }
+	| { id?: string; type: "get_skill_detail"; name: string }
 	| { id?: string; type: "get_hooks" }
 	| { id?: string; type: "get_mcp_servers" }
 	| { id?: string; type: "get_plugins" }
 	| { id?: string; type: "get_marketplaces" }
 	| { id?: string; type: "get_prompt_templates" }
 	| { id?: string; type: "get_memory_report" }
+	| { id?: string; type: "get_security_dashboard" }
+	| { id?: string; type: "get_security_scan"; scanId: string }
+	| { id?: string; type: "get_ssh_hosts" }
+	| { id?: string; type: "get_omp_update" }
 
 	// Session reports (structured TUI /context /tools /share /jobs parity)
 	| { id?: string; type: "get_context_report" }
@@ -211,6 +216,14 @@ export type RpcCommand =
 	// Domain actions (mutating). Payload ids are `hookId`/`pluginId` — the
 	// envelope `id` field is reserved for request correlation.
 	| { id?: string; type: "set_skill_enabled"; name: string; enabled: boolean }
+	| {
+			id?: string;
+			type: "manage_skill";
+			action: "create" | "update" | "delete";
+			name: string;
+			description?: string;
+			body?: string;
+	  }
 	| { id?: string; type: "set_hook_enabled"; hookId: string; enabled: boolean }
 	| { id?: string; type: "set_plugin_enabled"; pluginId: string; enabled: boolean; scope?: "user" | "project" }
 	| {
@@ -221,6 +234,32 @@ export type RpcCommand =
 			/** Config file for `remove` (defaults to project, mirroring `/mcp remove`). */
 			scope?: "user" | "project";
 	  }
+	| {
+			id?: string;
+			type: "security_start";
+			target: RpcSecurityTargetInput;
+	  }
+	| { id?: string; type: "security_cancel"; operationId: string }
+	| { id?: string; type: "security_validate"; scanId: string; findingId: string }
+	| {
+			id?: string;
+			type: "security_set_disposition";
+			scanId: string;
+			findingId: string;
+			status: RpcSecurityDispositionStatus;
+			rationale?: string;
+	  }
+	| {
+			id?: string;
+			type: "ssh_manage";
+			action: "create" | "update" | "delete";
+			scope: "user" | "project";
+			name: string;
+			previousName?: string;
+			previousScope?: "user" | "project";
+			host?: RpcSshHostInput;
+	  }
+	| { id?: string; type: "ssh_test"; host: RpcSshHostInput & { name: string } }
 
 	// Session tree (visual branch navigation)
 	| { id?: string; type: "get_session_tree" }
@@ -818,10 +857,29 @@ export interface RpcSkillInfo {
 	enabled: boolean;
 	/** Absolute path to the SKILL.md file. */
 	location: string;
+	/** Discovery provider id, e.g. "native", "codex", or "omp-managed". */
+	provider: string;
+	/** Human-readable discovery provider name. */
+	providerName: string;
+	/** Filesystem/config scope reported by capability discovery. */
+	level: "user" | "project" | "native";
+	/** Only managed skills can be changed or deleted through RPC. */
+	managed: boolean;
+	/** Hidden skills remain manually invocable but are omitted from model discovery. */
+	hidden: boolean;
 }
 
 export interface RpcSkillsResult {
 	skills: RpcSkillInfo[];
+}
+
+export interface RpcSkillDetail extends RpcSkillInfo {
+	body: string;
+}
+
+export interface RpcManageSkillResult {
+	action: "create" | "update" | "delete";
+	name: string;
 }
 
 /** A discovered pre/post tool hook. */
@@ -1070,6 +1128,118 @@ export interface RpcMemoryReport {
 	stats?: string;
 	/** `/memory diagnose` markdown payload. */
 	diagnosis?: string;
+}
+
+export type RpcSecurityDispositionStatus = "open" | "false_positive" | "accepted_risk" | "fixed" | "wont_fix";
+export type RpcSecuritySeverityLevel = "critical" | "high" | "medium" | "low" | "informational";
+
+export type RpcSecurityTargetInput =
+	| { kind: "repository" }
+	| { kind: "working_tree" }
+	| { kind: "ref_diff"; baseRevision: string; headRevision: string };
+
+export interface RpcSecurityFindingInfo {
+	id: string;
+	scanId: string;
+	title: string;
+	summary: string;
+	severity: RpcSecuritySeverityLevel;
+	confidence: "high" | "medium" | "low";
+	path?: string;
+	line?: number;
+	disposition: RpcSecurityDispositionStatus;
+	validation: "unvalidated" | "validated" | "rejected" | "partial" | "error";
+	remediation?: string;
+	evidence: Array<{ label: string; explanation: string; excerpt?: string; path?: string; line?: number }>;
+}
+
+export interface RpcSecurityScanInfo {
+	id: string;
+	status: "planned" | "running" | "completed" | "partial" | "cancelled" | "failed";
+	createdAt: string;
+	completedAt?: string;
+	producer: string;
+	findingCount: number;
+	target: {
+		kind: "repository" | "scoped_path" | "ref_diff" | "working_tree" | "imported";
+		displayName: string;
+		revision?: string;
+		baseRevision?: string;
+		headRevision?: string;
+	};
+}
+
+export interface RpcSecurityOperationInfo {
+	operationId: string;
+	planId: string;
+	scanId: string;
+	phase: "queued" | "preparing" | "reviewing" | "publishing" | "completed" | "partial" | "cancelled" | "failed";
+	createdAt: string;
+	updatedAt: string;
+	findingCount: number;
+	error?: string;
+}
+
+export interface RpcSecurityDashboardResult {
+	enabled: boolean;
+	modelReady: boolean;
+	modelLabel?: string;
+	repositoryRoot: string;
+	revision?: string;
+	scans: RpcSecurityScanInfo[];
+	operations: RpcSecurityOperationInfo[];
+	latest?: RpcSecurityScanResult;
+}
+
+export interface RpcSecurityScanResult {
+	scan: RpcSecurityScanInfo;
+	findings: RpcSecurityFindingInfo[];
+}
+
+export interface RpcSshHostInput {
+	host: string;
+	username?: string;
+	port?: number;
+	keyPath?: string;
+	description?: string;
+	compat?: boolean;
+}
+
+export interface RpcSshHostInfo extends RpcSshHostInput {
+	name: string;
+	scope: "user" | "project" | "native";
+	editable: boolean;
+	source: string;
+	os?: "windows" | "linux" | "macos" | "unknown";
+	shell?: "cmd" | "powershell" | "bash" | "zsh" | "sh" | "unknown";
+	compatShell?: "bash" | "sh";
+	transferShell?: "sh" | "bash" | "zsh";
+}
+
+export interface RpcSshHostsResult {
+	openSshAvailable: boolean;
+	hosts: RpcSshHostInfo[];
+	warnings: string[];
+}
+
+export interface RpcSshTestResult {
+	name: string;
+	ok: boolean;
+	checkedAt: string;
+	os?: RpcSshHostInfo["os"];
+	shell?: RpcSshHostInfo["shell"];
+	compatShell?: RpcSshHostInfo["compatShell"];
+	transferShell?: RpcSshHostInfo["transferShell"];
+	error?: string;
+}
+
+export interface RpcOmpUpdateResult {
+	currentVersion: string;
+	latestVersion: string;
+	updateAvailable: boolean;
+	checkedAt: string;
+	distribution: "bundled";
+	installStrategy: "gui-update";
 }
 
 /** A node in the session's branch tree (visual session navigation). */
@@ -1654,6 +1824,7 @@ export type RpcResponse =
 
 	// Domain inspection (read-only)
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: RpcSkillsResult }
+	| { id?: string; type: "response"; command: "get_skill_detail"; success: true; data: RpcSkillDetail }
 	| { id?: string; type: "response"; command: "get_agent_definitions"; success: true; data: RpcAgentDefinitionsResult }
 	| { id?: string; type: "response"; command: "get_hooks"; success: true; data: RpcHooksResult }
 	| { id?: string; type: "response"; command: "get_mcp_servers"; success: true; data: RpcMcpServersResult }
@@ -1667,6 +1838,16 @@ export type RpcResponse =
 			data: RpcPromptTemplatesResult;
 	  }
 	| { id?: string; type: "response"; command: "get_memory_report"; success: true; data: RpcMemoryReport }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_security_dashboard";
+			success: true;
+			data: RpcSecurityDashboardResult;
+	  }
+	| { id?: string; type: "response"; command: "get_security_scan"; success: true; data: RpcSecurityScanResult }
+	| { id?: string; type: "response"; command: "get_ssh_hosts"; success: true; data: RpcSshHostsResult }
+	| { id?: string; type: "response"; command: "get_omp_update"; success: true; data: RpcOmpUpdateResult }
 
 	// Session reports (read-only)
 	| { id?: string; type: "response"; command: "get_context_report"; success: true; data: RpcContextReportResult }
@@ -1693,12 +1874,31 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "manage_skill";
+			success: true;
+			data: RpcManageSkillResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "set_hook_enabled";
 			success: true;
 			data: { id: string; enabled: boolean };
 	  }
 	| { id?: string; type: "response"; command: "set_plugin_enabled"; success: true; data: RpcPluginSetEnabledResult }
 	| { id?: string; type: "response"; command: "mcp_action"; success: true; data: RpcMcpActionResult }
+	| { id?: string; type: "response"; command: "security_start"; success: true; data: RpcSecurityOperationInfo }
+	| { id?: string; type: "response"; command: "security_cancel"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "security_validate"; success: true; data: { accepted: true } }
+	| {
+			id?: string;
+			type: "response";
+			command: "security_set_disposition";
+			success: true;
+			data: RpcSecurityFindingInfo;
+	  }
+	| { id?: string; type: "response"; command: "ssh_manage"; success: true; data: RpcSshHostInfo | { deleted: true } }
+	| { id?: string; type: "response"; command: "ssh_test"; success: true; data: RpcSshTestResult }
 	| { id?: string; type: "response"; command: "get_session_tree"; success: true; data: RpcSessionTreeResult }
 	| { id?: string; type: "response"; command: "get_themes"; success: true; data: RpcThemesResult }
 	| { id?: string; type: "response"; command: "get_theme_colors"; success: true; data: RpcThemeColorsResult }

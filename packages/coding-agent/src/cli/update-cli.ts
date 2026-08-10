@@ -63,7 +63,7 @@ function currentNativeTag(): string {
 	return `${process.platform}-${process.arch}`;
 }
 
-interface ReleaseInfo {
+export interface ReleaseInfo {
 	tag: string;
 	version: string;
 }
@@ -472,7 +472,7 @@ async function resolveUpdateTarget(): Promise<UpdateTarget> {
  * Get the latest release info from the npm registry.
  * Uses npm instead of GitHub API to avoid unauthenticated rate limiting.
  */
-async function getLatestRelease(): Promise<ReleaseInfo> {
+export async function getLatestRelease(): Promise<ReleaseInfo> {
 	let response: Response;
 	try {
 		response = await fetch(`${NPM_REGISTRY}${PACKAGE}/latest`, {

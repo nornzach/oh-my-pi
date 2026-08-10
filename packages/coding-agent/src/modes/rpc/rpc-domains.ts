@@ -5,6 +5,7 @@
  * mutation of settings, registries, or runtime state.
  */
 import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
+import { MANAGED_SKILLS_PROVIDER_ID } from "../../autolearn/managed-skills";
 import { type Hook, hookCapability } from "../../capability/hook";
 import { templateUsesInlineArgPlaceholders } from "../../config/prompt-templates";
 import { loadCapability } from "../../discovery";
@@ -77,6 +78,11 @@ export async function buildRpcSkillsResult(session: AgentSession): Promise<RpcSk
 		source: skill.source,
 		enabled: enabledNames.has(skill.name),
 		location: skill.filePath,
+		provider: skill._source?.provider ?? skill.source.split(":", 1)[0] ?? "custom",
+		providerName: skill._source?.providerName ?? skill.source.split(":", 1)[0] ?? "Custom",
+		level: skill._source?.level ?? "user",
+		managed: skill._source?.provider === MANAGED_SKILLS_PROVIDER_ID,
+		hidden: skill.hide === true,
 	}));
 	return { skills };
 }

@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _sshHelpersForTests } from "../../src/ssh/connection-manager";
+import { _sshHelpersForTests, ensureConnection } from "../../src/ssh/connection-manager";
 
 const { runSshSync, runSshCaptureSync } = _sshHelpersForTests;
 
@@ -57,5 +57,26 @@ describe("SSH pre-command helpers bound their own runtime (#4232)", () => {
 		expect(elapsed).toBeLessThan(5_000);
 		expect(result.exitCode).not.toBe(0);
 		expect(result.stdout).toBe("");
+	}, 10_000);
+
+	it("shares an outer abort deadline instead of restarting the budget for each helper", async () => {
+		const started = Date.now();
+		const signal = AbortSignal.timeout(200);
+		const result = await runSshSync(["-o", "BatchMode=yes", "unreachable", "true"], 5_000, signal);
+
+		expect(Date.now() - started).toBeLessThan(5_000);
+		expect(signal.aborted).toBe(true);
+		expect(result.exitCode).not.toBe(0);
+	}, 10_000);
+
+	it("lets a caller abort while another connection attempt for the alias is pending", async () => {
+		const host = { name: `pending-${crypto.randomUUID()}`, host: "unreachable" };
+		const first = ensureConnection(host, AbortSignal.timeout(1_000)).catch(() => undefined);
+		await Bun.sleep(25);
+
+		const started = Date.now();
+		await expect(ensureConnection(host, AbortSignal.timeout(200))).rejects.toThrow();
+		expect(Date.now() - started).toBeLessThan(750);
+		await first;
 	}, 10_000);
 });

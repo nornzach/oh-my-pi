@@ -128,9 +128,11 @@ const SSH_HELPER_TIMEOUT_MS = 30_000;
 async function runSshSync(
 	args: string[],
 	timeoutMs = SSH_HELPER_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<{ exitCode: number | null; stderr: string }> {
 	const result = await ptree.exec(["ssh", ...args], {
 		timeout: timeoutMs,
+		signal,
 		allowNonZero: true,
 		allowAbort: true,
 		stderr: "full",
@@ -141,9 +143,11 @@ async function runSshSync(
 async function runSshCaptureSync(
 	args: string[],
 	timeoutMs = SSH_HELPER_TIMEOUT_MS,
+	signal?: AbortSignal,
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
 	const result = await ptree.exec(["ssh", ...args], {
 		timeout: timeoutMs,
+		signal,
 		allowNonZero: true,
 		allowAbort: true,
 		stderr: "full",
@@ -379,12 +383,13 @@ export function osFromUname(value: string): SSHHostOs | undefined {
 
 async function probeTransferShell(
 	host: SSHConnectionTarget,
+	signal?: AbortSignal,
 ): Promise<{ shell: SSHHostInfo["transferShell"]; uname: string }> {
 	for (const candidate of TRANSFER_SHELL_CANDIDATES) {
 		// `printf` is POSIX and emits no trailing newline, so we can pin the
 		// marker right against the uname output and split on it cleanly.
 		const remote = `${candidate} -lc 'printf "${TRANSFER_PROBE_MARKER}"; uname -s 2>/dev/null || true'`;
-		const probe = await runSshCaptureSync(await buildRemoteCommand(host, remote));
+		const probe = await runSshCaptureSync(await buildRemoteCommand(host, remote), SSH_HELPER_TIMEOUT_MS, signal);
 		if (probe.exitCode !== 0) continue;
 		const tail = findProbeMarker(probe.stdout, probe.stderr, TRANSFER_PROBE_MARKER);
 		if (tail === null) continue;
@@ -393,13 +398,13 @@ async function probeTransferShell(
 	return { shell: undefined, uname: "" };
 }
 
-async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
+async function probeHostInfo(host: SSHConnectionTarget, signal?: AbortSignal): Promise<SSHHostInfo> {
 	const command = `echo "${HOST_PROBE_MARKER}$OSTYPE|$SHELL|$BASH_VERSION" 2>/dev/null || echo "${HOST_PROBE_MARKER}%OS%|%COMSPEC%|"`;
-	const result = await runSshCaptureSync(await buildRemoteCommand(host, command));
+	const result = await runSshCaptureSync(await buildRemoteCommand(host, command), SSH_HELPER_TIMEOUT_MS, signal);
 	const payload = extractProbePayload(result.stdout, result.stderr);
 	if (payload === null) {
 		logger.debug("SSH host probe failed", { host: host.name, error: result.stderr });
-		const transferProbe = await probeTransferShell(host);
+		const transferProbe = await probeTransferShell(host, signal);
 		const fallback: SSHHostInfo = {
 			version: HOST_INFO_VERSION,
 			os: transferProbe.shell ? (osFromUname(transferProbe.uname) ?? "unknown") : "unknown",
@@ -455,7 +460,7 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	// than the self-reported login-shell name (#3719).
 	let transferShell: SSHHostInfo["transferShell"];
 	if (os !== "windows") {
-		const probe = await probeTransferShell(host);
+		const probe = await probeTransferShell(host, signal);
 		transferShell = probe.shell;
 		// `uname -s` from the same probe lets us recover the OS when the first
 		// probe couldn't classify it (e.g. the remote silently nuked `$OSTYPE`).
@@ -467,11 +472,19 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	const hasBash = !unexpandedPosixVars && (Boolean(bashVersion) || shell === "bash");
 	let compatShell: SSHHostInfo["compatShell"];
 	if (os === "windows" && host.compat !== false) {
-		const bashProbe = await runSshCaptureSync(await buildRemoteCommand(host, 'bash -lc "echo PI_BASH_OK"'));
+		const bashProbe = await runSshCaptureSync(
+			await buildRemoteCommand(host, 'bash -lc "echo PI_BASH_OK"'),
+			SSH_HELPER_TIMEOUT_MS,
+			signal,
+		);
 		if (bashProbe.exitCode === 0 && bashProbe.stdout.includes("PI_BASH_OK")) {
 			compatShell = "bash";
 		} else {
-			const shProbe = await runSshCaptureSync(await buildRemoteCommand(host, 'sh -lc "echo PI_SH_OK"'));
+			const shProbe = await runSshCaptureSync(
+				await buildRemoteCommand(host, 'sh -lc "echo PI_SH_OK"'),
+				SSH_HELPER_TIMEOUT_MS,
+				signal,
+			);
 			if (shProbe.exitCode === 0 && shProbe.stdout.includes("PI_SH_OK")) {
 				compatShell = "sh";
 			}
@@ -540,7 +553,7 @@ export function getCachedHostInfoSync(host: SSHConnectionTarget): SSHHostInfo | 
 	}
 }
 
-export async function ensureHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
+export async function ensureHostInfo(host: SSHConnectionTarget, signal?: AbortSignal): Promise<SSHHostInfo> {
 	const cached = hostInfoCache.get(host.name);
 	if (cached) {
 		const resolved = applyCompatOverride(host, cached);
@@ -549,10 +562,10 @@ export async function ensureHostInfo(host: SSHConnectionTarget): Promise<SSHHost
 	}
 	const fromDisk = await loadHostInfoFromDisk(host);
 	if (fromDisk && !shouldRefreshHostInfo(host, fromDisk)) return fromDisk;
-	await ensureConnection(host);
+	await ensureConnection(host, signal);
 	const current = hostInfoCache.get(host.name);
 	if (current && !shouldRefreshHostInfo(host, current)) return current;
-	return probeHostInfo(host);
+	return probeHostInfo(host, signal);
 }
 
 export async function buildRemoteCommand(
@@ -566,11 +579,28 @@ export async function buildRemoteCommand(
 
 let registered = false;
 
-export async function ensureConnection(host: SSHConnectionTarget): Promise<void> {
+async function waitForPendingConnection(pending: Promise<void>, signal?: AbortSignal): Promise<void> {
+	if (!signal) {
+		await pending;
+		return;
+	}
+	signal.throwIfAborted();
+	const aborted = Promise.withResolvers<void>();
+	const onAbort = () =>
+		aborted.reject(signal.reason instanceof Error ? signal.reason : new Error("SSH connection aborted"));
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		await Promise.race([pending, aborted.promise]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
+export async function ensureConnection(host: SSHConnectionTarget, signal?: AbortSignal): Promise<void> {
 	const key = host.name;
 	const pending = pendingConnections.get(key);
 	if (pending) {
-		await pending;
+		await waitForPendingConnection(pending, signal);
 		return;
 	}
 
@@ -590,21 +620,25 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 		if (!supportsSshControlMaster()) {
 			activeHosts.set(key, host);
 			if (!hostInfoCache.has(key) && !(await loadHostInfoFromDisk(host))) {
-				await probeHostInfo(host);
+				await probeHostInfo(host, signal);
 			}
 			return;
 		}
 
-		const check = await runSshSync(["-O", "check", ...buildCommonArgs(host), target]);
+		const check = await runSshSync(["-O", "check", ...buildCommonArgs(host), target], SSH_HELPER_TIMEOUT_MS, signal);
 		if (check.exitCode === 0) {
 			activeHosts.set(key, host);
 			if (!hostInfoCache.has(key) && !(await loadHostInfoFromDisk(host))) {
-				await probeHostInfo(host);
+				await probeHostInfo(host, signal);
 			}
 			return;
 		}
 
-		const start = await runSshSync(["-M", "-N", "-f", ...buildCommonArgs(host), target]);
+		const start = await runSshSync(
+			["-M", "-N", "-f", ...buildCommonArgs(host), target],
+			SSH_HELPER_TIMEOUT_MS,
+			signal,
+		);
 		if (start.exitCode !== 0) {
 			const detail = start.stderr ? `: ${start.stderr}` : "";
 			throw new Error(`Failed to start SSH master for ${target}${detail}`);
@@ -612,7 +646,7 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 
 		activeHosts.set(key, host);
 		if (!hostInfoCache.has(key) && !(await loadHostInfoFromDisk(host))) {
-			await probeHostInfo(host);
+			await probeHostInfo(host, signal);
 		}
 	})();
 
@@ -644,7 +678,7 @@ export async function invalidateHostMetadata(hostNames: Iterable<string>): Promi
 async function closeConnectionInternal(host: SSHConnectionTarget): Promise<void> {
 	if (!supportsSshControlMaster()) return;
 	const target = buildSshTarget(host.username, host.host);
-	await runSshSync(["-O", "exit", ...buildCommonArgs(host), target]);
+	await runSshSync(["-O", "exit", ...buildCommonArgs(host), target], 5_000);
 }
 
 export async function closeConnection(hostName: string): Promise<void> {

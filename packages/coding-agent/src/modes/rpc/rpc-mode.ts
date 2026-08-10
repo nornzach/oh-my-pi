@@ -83,6 +83,18 @@ import {
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcGoalModeController, RpcLoopModeController, RpcVibeModeController } from "./rpc-modes";
 import { runRpcOmfg } from "./rpc-omfg";
+import {
+	buildRpcOmpUpdate,
+	buildRpcSecurityDashboard,
+	buildRpcSecurityScan,
+	buildRpcSecurityValidationPrompt,
+	buildRpcSshHosts,
+	cancelRpcSecurityScan,
+	manageRpcSshHost,
+	setRpcSecurityDisposition,
+	startRpcSecurityScan,
+	testRpcSshHost,
+} from "./rpc-operations";
 import { applyRpcWriteLocalPaste } from "./rpc-paste";
 import { RpcPlanApprovalController } from "./rpc-plan";
 import {
@@ -113,6 +125,7 @@ import {
 } from "./rpc-session-actions";
 import { applyRpcForkFrom, applyRpcSwitchLeaf } from "./rpc-session-extra";
 import { buildRpcSessionTree } from "./rpc-session-tree";
+import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
 import type {
@@ -416,6 +429,10 @@ function isBackgroundRpcCommand(type: RpcCommand["type"]): boolean {
 		type === "pr_checkout" ||
 		type === "mcp_test" ||
 		type === "mcp_reauth" ||
+		type === "get_security_dashboard" ||
+		type === "security_start" ||
+		type === "ssh_test" ||
+		type === "get_omp_update" ||
 		type === "transcribe_audio" ||
 		type === "synthesize_speech" ||
 		type === "debug" ||
@@ -2715,6 +2732,14 @@ export async function runRpcMode(
 				}
 			}
 
+			case "get_skill_detail": {
+				try {
+					return success(id, "get_skill_detail", await buildRpcSkillDetail(session, command.name));
+				} catch (err: unknown) {
+					return error(id, "get_skill_detail", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "get_hooks": {
 				try {
 					const result = await buildRpcHooksResult(session);
@@ -2769,6 +2794,38 @@ export async function runRpcMode(
 				}
 			}
 
+			case "get_security_dashboard": {
+				try {
+					return success(id, "get_security_dashboard", await buildRpcSecurityDashboard(session));
+				} catch (err: unknown) {
+					return error(id, "get_security_dashboard", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_security_scan": {
+				try {
+					return success(id, "get_security_scan", await buildRpcSecurityScan(session, command.scanId));
+				} catch (err: unknown) {
+					return error(id, "get_security_scan", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_ssh_hosts": {
+				try {
+					return success(id, "get_ssh_hosts", await buildRpcSshHosts(session));
+				} catch (err: unknown) {
+					return error(id, "get_ssh_hosts", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_omp_update": {
+				try {
+					return success(id, "get_omp_update", await buildRpcOmpUpdate());
+				} catch (err: unknown) {
+					return error(id, "get_omp_update", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "get_context_report": {
 				return success(id, "get_context_report", buildRpcContextReport(session));
 			}
@@ -2796,10 +2853,26 @@ export async function runRpcMode(
 			case "set_skill_enabled": {
 				try {
 					const result = await applyRpcSkillEnabled(session, command.name, command.enabled);
-					await reloadPluginState();
+					await session.refreshSkills();
 					return success(id, "set_skill_enabled", result);
 				} catch (err: unknown) {
 					return error(id, "set_skill_enabled", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "manage_skill": {
+				try {
+					const result = await applyRpcManageSkill(
+						session,
+						command.action,
+						command.name,
+						command.description,
+						command.body,
+					);
+					await session.refreshSkills();
+					return success(id, "manage_skill", result);
+				} catch (err: unknown) {
+					return error(id, "manage_skill", err instanceof Error ? err.message : String(err));
 				}
 			}
 
@@ -2829,6 +2902,80 @@ export async function runRpcMode(
 				} catch (err: unknown) {
 					return error(id, "mcp_action", err instanceof Error ? err.message : String(err));
 				}
+			}
+
+			case "security_start": {
+				try {
+					return success(id, "security_start", await startRpcSecurityScan(session, command.target));
+				} catch (err: unknown) {
+					return error(id, "security_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "security_cancel": {
+				try {
+					return success(id, "security_cancel", await cancelRpcSecurityScan(session, command.operationId));
+				} catch (err: unknown) {
+					return error(id, "security_cancel", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "security_validate": {
+				try {
+					const prompt = await buildRpcSecurityValidationPrompt(session, command.scanId, command.findingId);
+					watchAndReportLocalOnlyPromptResult({
+						id,
+						startPrompt: () => session.prompt(prompt, { streamingBehavior: "followUp" }),
+						output,
+						onError: promptError => output(error(id, "security_validate", promptError.message)),
+						extensionUserMessageTracker,
+					});
+					return success(id, "security_validate", { accepted: true });
+				} catch (err: unknown) {
+					return error(id, "security_validate", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "security_set_disposition": {
+				try {
+					return success(
+						id,
+						"security_set_disposition",
+						await setRpcSecurityDisposition(
+							session,
+							command.scanId,
+							command.findingId,
+							command.status,
+							command.rationale,
+						),
+					);
+				} catch (err: unknown) {
+					return error(id, "security_set_disposition", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "ssh_manage": {
+				try {
+					return success(
+						id,
+						"ssh_manage",
+						await manageRpcSshHost(
+							session,
+							command.action,
+							command.scope,
+							command.name,
+							command.previousName,
+							command.previousScope,
+							command.host,
+						),
+					);
+				} catch (err: unknown) {
+					return error(id, "ssh_manage", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "ssh_test": {
+				return success(id, "ssh_test", await testRpcSshHost(command.host.name, command.host));
 			}
 
 			// =================================================================
