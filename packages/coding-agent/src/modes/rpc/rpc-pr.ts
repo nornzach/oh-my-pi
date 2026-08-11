@@ -11,8 +11,8 @@
  *
  * pr_draft is the one model call: completeSimple with an omptype tool schema
  * (commit/analysis/summary.ts pattern) fed by branch commits + name-status +
- * diffstat. pr_checkout reuses checkoutPullRequest (gh.ts, exported) so PR
- * worktrees land in the same ~/.omp/wt scheme as plan/20 tabs.
+ * diffstat. pr_checkout reuses the GitHub tool's checkoutPullRequest helper so
+ * PR worktrees land in the same ~/.omp/wt scheme as plan/20 tabs.
  */
 
 import * as fs from "node:fs/promises";
@@ -25,7 +25,8 @@ import { resolvePrimaryModel } from "../../commit/model-selection";
 import { extractToolCall } from "../../commit/utils";
 import type { AgentSession } from "../../session/agent-session";
 import { toReasoningEffort } from "../../thinking";
-import { checkoutPullRequest, parsePrUnifiedDiff } from "../../tools/gh";
+import { checkoutPullRequest } from "../../tools/gh-pr-checkout";
+import { parsePrUnifiedDiff } from "../../tools/gh-pr-diff";
 import * as git from "../../utils/git";
 import prDraftSystemPrompt from "./prompts/pr-draft-system.md" with { type: "text" };
 import prDraftUserPrompt from "./prompts/pr-draft-user.md" with { type: "text" };

@@ -29,7 +29,7 @@ export function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix:
 }
 
 /** /mcp subcommands whose argument is a server name (per their `usage: "<name>..."`). */
-const MCP_SERVER_NAME_SUBCOMMANDS: Readonly<Record<string, true>> = {
+export const MCP_SERVER_NAME_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	enable: true,
 	disable: true,
 	test: true,
@@ -40,7 +40,7 @@ const MCP_SERVER_NAME_SUBCOMMANDS: Readonly<Record<string, true>> = {
 };
 
 /** Subcommands that accept names found only in `userConfig.disabledServers`. */
-const MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
+export const MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	enable: true,
 	disable: true,
 };
@@ -50,7 +50,7 @@ const MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
  * `unauth` can clear persisted credentials without connecting; test,
  * reconnect, and reauth explicitly require an enabled server.
  */
-const MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
+export const MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	enable: true,
 	disable: true,
 	unauth: true,
@@ -114,11 +114,11 @@ export function buildMcpArgumentCompletions(
  * names, and a name that exists only in the user config is completed with
  * `--scope user` appended so the inserted command is directly executable.
  */
-async function buildMcpRemoveCompletions(
+export async function buildMcpRemoveCompletions(
 	rawSubcommand: string,
 	namePrefix: string,
+	cwd: string = getProjectDir(),
 ): Promise<AutocompleteItem[] | null> {
-	const cwd = getProjectDir();
 	let projectNames: string[];
 	let userNames: string[];
 	try {

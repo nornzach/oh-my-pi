@@ -2,7 +2,7 @@
  * `get_command_arg_completions` RPC action: dynamic slash-command argument
  * candidates for remote composers (TUI prompt-action-autocomplete parity).
  *
- * Static subcommand completion reuses the registry's builders verbatim. The
+ * Static subcommand completion reuses the shared completion builders verbatim. The
  * MCP server-name path re-implements collectMcpServerNames locally — the TUI
  * collector takes InteractiveModeContext, which RPC mode does not have; the
  * underlying data (user/project mcp config + the process-global MCPManager)
@@ -15,14 +15,14 @@ import { readMCPConfigFile } from "../../mcp/config-writer";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPConfigFile } from "../../mcp/types";
 import {
-	BUILTIN_SLASH_COMMANDS_INTERNAL,
 	buildArgumentCompletions,
 	buildDirectoryArgumentCompletions,
 	buildMcpRemoveCompletions,
 	MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS,
 	MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS,
 	MCP_SERVER_NAME_SUBCOMMANDS,
-} from "../../slash-commands/builtin-registry";
+} from "../../slash-commands/builtin-completions";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../../slash-commands/builtin-registry";
 
 export interface RpcArgCompletionItem {
 	value: string;
