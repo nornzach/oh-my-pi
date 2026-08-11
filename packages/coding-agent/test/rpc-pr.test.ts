@@ -10,7 +10,7 @@ import {
 	createRpcPr,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-pr";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh";
+import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh-pr-checkout";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

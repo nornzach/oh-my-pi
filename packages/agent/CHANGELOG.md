@@ -5,6 +5,11 @@
 ### Added
 
 - Added an optional `toLane` parameter to `Agent.moveQueuedMessage(queueId, toIndex, toLane?)`: the entry switches steering/follow-up lanes with its stable queue id intact (clamped into the target lane; crossings into steering notify steering waiters). Omitting `toLane` keeps the previous same-lane reorder behavior.
+## [17.2.13] - 2026-08-11
+
+### Fixed
+
+- Fixed Cursor sessions re-executing settled tools when an owned dialect projector rebuilds toolCall blocks: `snapshotAssistantContentBlock` now copies `kCursorExecResolved` explicitly so agent-loop still skips already-settled calls.
 
 ## [17.2.10] - 2026-08-06
 

@@ -16,11 +16,9 @@ import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, readLines, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
-import { reset as resetCapabilities } from "../../capability";
 import { getKnownRoleIds, getRoleInfo, MODEL_ROLES } from "../../config/model-roles";
 import { applyProviderGlobalsFromSettings } from "../../config/provider-globals";
 import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
-import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
