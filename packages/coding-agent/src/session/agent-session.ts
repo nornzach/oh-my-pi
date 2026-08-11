@@ -424,6 +424,49 @@ type SetSessionNameWithTrigger = (
 const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
 type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
 
+interface UserQueueLayout {
+	/** Non-user messages surrounding the visible user-entry slots. */
+	gaps: AgentMessage[][];
+	/** Visible user messages with any contiguous hidden companions attached. */
+	blocks: AgentMessage[][];
+}
+
+/**
+ * Split a raw agent queue into visible user-message blocks and the non-user
+ * gaps around them. Hidden user companions execute immediately before their
+ * user prompt, so they travel with that prompt during remove/reorder.
+ */
+function splitUserQueue(messages: readonly AgentMessage[]): UserQueueLayout {
+	const gaps: AgentMessage[][] = [[]];
+	const blocks: AgentMessage[][] = [];
+	let companions: AgentMessage[] = [];
+	for (const message of messages) {
+		if (isHiddenUserCompanion(message)) {
+			companions.push(message);
+			continue;
+		}
+		if (isUserQueuedMessage(message)) {
+			blocks.push([...companions, message]);
+			companions = [];
+			gaps.push([]);
+			continue;
+		}
+		gaps[gaps.length - 1]!.push(...companions, message);
+		companions = [];
+	}
+	gaps[gaps.length - 1]!.push(...companions);
+	return { gaps, blocks };
+}
+
+function joinUserQueue(layout: UserQueueLayout): AgentMessage[] {
+	const messages: AgentMessage[] = [];
+	for (let index = 0; index < layout.blocks.length; index++) {
+		messages.push(...layout.gaps[index]!, ...layout.blocks[index]!);
+	}
+	messages.push(...layout.gaps[layout.blocks.length]!);
+	return messages;
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -6349,32 +6392,124 @@ export class AgentSession {
 		const collect = (messages: readonly AgentMessage[]) =>
 			messages.filter(isUserQueuedMessage).flatMap(message => {
 				const id = this.agent.queueEntryId(message);
-				return id === undefined ? [] : [{ id, ...toRestoredQueuedMessage(message), timestamp: message.timestamp }];
+				return id === undefined
+					? []
+					: [
+							{
+								id,
+								...toRestoredQueuedMessage(message),
+								editable: message.role === "user",
+								timestamp: message.timestamp,
+							},
+						];
 			});
 		return { steering: collect(this.agent.peekSteeringQueue()), followUp: collect(this.agent.peekFollowUpQueue()) };
 	}
 
-	/** Remove one queued entry by stable queue id (RPC queue_remove). Returns
-	 *  false when the id matches no live entry. */
+	/** Remove one queued entry by stable queue id (RPC queue_remove). Hidden
+	 *  companions immediately preceding the entry travel with it. Returns false
+	 *  when the id matches no user-restorable live entry. */
 	removeQueuedMessageById(queueId: string): boolean {
-		if (this.agent.removeQueuedMessage(queueId) === undefined) return false;
+		const steering = splitUserQueue(this.agent.peekSteeringQueue());
+		const followUp = splitUserQueue(this.agent.peekFollowUpQueue());
+		let layout = steering;
+		let index = steering.blocks.findIndex(block => this.agent.queueEntryId(block[block.length - 1]!) === queueId);
+		if (index < 0) {
+			layout = followUp;
+			index = followUp.blocks.findIndex(block => this.agent.queueEntryId(block[block.length - 1]!) === queueId);
+		}
+		if (index < 0) return false;
+
+		layout.blocks.splice(index, 1);
+		layout.gaps[index]!.push(...layout.gaps.splice(index + 1, 1)[0]!);
+		this.agent.replaceQueues(joinUserQueue(steering), joinUserQueue(followUp));
 		this.#reconcileQueuedMessageDrain();
 		return true;
 	}
 
-	/** Reorder by stable queue id with clamped target (RPC queue_move).
-	 *  Same-lane when `toLane` is omitted; a lane switch re-runs drain
-	 *  reconciliation since per-lane counts changed (steering→followUp can
-	 *  drain like a removal, followUp→steering is a new arrival). Returns
-	 *  the lane and final index, or undefined for an unknown id. */
+	/** Replace the text of a plain queued user message while preserving its
+	 *  stable id, delivery lane, timestamp, images, and hidden companions.
+	 *  Structured user-attributed commands are deliberately read-only because
+	 *  their visible label is not their executable payload. */
+	editQueuedMessageById(queueId: string, text: string): boolean {
+		const normalizedText = text.trim();
+		if (normalizedText.length === 0) throw new Error("Queued message text cannot be empty");
+		const steering = this.agent.peekSteeringQueue();
+		const followUp = this.agent.peekFollowUpQueue();
+		const message =
+			steering.find(entry => this.agent.queueEntryId(entry) === queueId) ??
+			followUp.find(entry => this.agent.queueEntryId(entry) === queueId);
+		if (message === undefined) return false;
+		if (!isUserQueuedMessage(message)) return false;
+		if (message.role !== "user") {
+			throw new Error("Structured queued commands cannot be edited");
+		}
+
+		if (typeof message.content === "string") {
+			message.content = normalizedText;
+		} else {
+			let replaced = false;
+			message.content = message.content.map(part => {
+				if (replaced || part.type !== "text") return part;
+				replaced = true;
+				return { type: "text", text: normalizedText };
+			});
+			if (!replaced) message.content.unshift({ type: "text", text: normalizedText });
+		}
+		this.agent.replaceQueues(steering.slice(), followUp.slice());
+		return true;
+	}
+
+	/** Reorder by stable queue id and a visible-user target index. Hidden
+	 *  companions stay attached to their prompt, while unrelated advisor and
+	 *  internal messages retain their gap positions. `toLane` switches lanes.
+	 *  Returns the lane and final clamped visible index, or undefined for an
+	 *  unknown/non-user id. */
 	moveQueuedMessageById(
 		queueId: string,
 		toIndex: number,
 		toLane?: "steering" | "followUp",
 	): { lane: "steering" | "followUp"; index: number } | undefined {
-		const moved = this.agent.moveQueuedMessage(queueId, toIndex, toLane);
-		if (moved !== undefined && toLane !== undefined) this.#reconcileQueuedMessageDrain();
-		return moved;
+		const steering = splitUserQueue(this.agent.peekSteeringQueue());
+		const followUp = splitUserQueue(this.agent.peekFollowUpQueue());
+		let sourceLane: "steering" | "followUp" = "steering";
+		let source = steering;
+		let sourceIndex = steering.blocks.findIndex(
+			block => this.agent.queueEntryId(block[block.length - 1]!) === queueId,
+		);
+		if (sourceIndex < 0) {
+			sourceLane = "followUp";
+			source = followUp;
+			sourceIndex = followUp.blocks.findIndex(
+				block => this.agent.queueEntryId(block[block.length - 1]!) === queueId,
+			);
+		}
+		if (sourceIndex < 0) return undefined;
+
+		const targetLane = toLane ?? sourceLane;
+		if (targetLane === sourceLane) {
+			const [block] = source.blocks.splice(sourceIndex, 1);
+			const finalIndex = Math.max(
+				0,
+				Math.min(Number.isFinite(toIndex) ? Math.trunc(toIndex) : 0, source.blocks.length),
+			);
+			source.blocks.splice(finalIndex, 0, block!);
+			this.agent.replaceQueues(joinUserQueue(steering), joinUserQueue(followUp));
+			return { lane: targetLane, index: finalIndex };
+		}
+
+		const [block] = source.blocks.splice(sourceIndex, 1);
+		source.gaps[sourceIndex]!.push(...source.gaps.splice(sourceIndex + 1, 1)[0]!);
+		const target = targetLane === "steering" ? steering : followUp;
+		const finalIndex = Math.max(
+			0,
+			Math.min(Number.isFinite(toIndex) ? Math.trunc(toIndex) : 0, target.blocks.length),
+		);
+		target.blocks.splice(finalIndex, 0, block!);
+		target.gaps.splice(finalIndex + 1, 0, []);
+		this.agent.replaceQueues(joinUserQueue(steering), joinUserQueue(followUp));
+		this.#reconcileQueuedMessageDrain();
+		return { lane: targetLane, index: finalIndex };
 	}
 
 	/** Clear user-restorable queued entries (RPC queue_clear), lane-scoped when

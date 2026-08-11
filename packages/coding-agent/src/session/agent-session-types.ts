@@ -433,9 +433,12 @@ export interface RestoredQueuedMessageWithDelivery extends RestoredQueuedMessage
  * One user-restorable queued entry as surfaced to remote queue UIs: the
  * stable per-entry queue id (assigned at enqueue time, lane-prefixed) plus
  * the same text/images the editor-restore path surfaces. The payload of the
- * `queue_update` session event and the get_queue RPC.
+ * `queue_update` session event and the get_queue RPC. Plain user messages are
+ * editable; structured user-attributed commands remain read-only because
+ * their visible queue label is not their executable payload.
  */
 export interface SessionQueuedMessage extends RestoredQueuedMessage {
 	id: string;
+	editable: boolean;
 	timestamp: number;
 }

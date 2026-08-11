@@ -9,6 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	applyRpcGetQueue,
 	applyRpcQueueClear,
+	applyRpcQueueEdit,
 	applyRpcQueueMove,
 	applyRpcQueueRemove,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-queue";
@@ -81,12 +82,11 @@ function advisorCard(timestamp: number): AgentMessage {
 	} as AgentMessage;
 }
 
-/** Hidden companion of a user prompt (magic-keyword notice family). */
-function hiddenUserCompanion(timestamp: number): AgentMessage {
+function hiddenUserCompanion(timestamp: number, content = "notice"): AgentMessage {
 	return {
 		role: "custom",
 		customType: "ultrathink-notice",
-		content: "notice",
+		content,
 		display: false,
 		attribution: "user",
 		timestamp,
@@ -105,6 +105,18 @@ function hiddenInternalSteer(timestamp: number): AgentMessage {
 	} as AgentMessage;
 }
 
+function structuredUserCommand(timestamp: number): AgentMessage {
+	return {
+		role: "custom",
+		customType: "skill",
+		content: "expanded skill prompt",
+		display: true,
+		attribution: "user",
+		details: { __queueChipText: "/skill run" },
+		timestamp,
+	} as AgentMessage;
+}
+
 describe("applyRpcGetQueue", () => {
 	it("lists both lanes in insertion order with stable ids, text, and timestamps", () => {
 		session.agent.steer(userQueued("steer me", 100));
@@ -113,10 +125,10 @@ describe("applyRpcGetQueue", () => {
 
 		expect(applyRpcGetQueue(session)).toEqual({
 			steering: [
-				{ id: "s1", text: "steer me", timestamp: 100 },
-				{ id: "s3", text: "steer again", timestamp: 300 },
+				{ id: "s1", text: "steer me", editable: true, timestamp: 100 },
+				{ id: "s3", text: "steer again", editable: true, timestamp: 300 },
 			],
-			followUp: [{ id: "f2", text: "later", timestamp: 200 }],
+			followUp: [{ id: "f2", text: "later", editable: true, timestamp: 200 }],
 		});
 	});
 
@@ -152,6 +164,38 @@ describe("applyRpcGetQueue", () => {
 	});
 });
 
+describe("applyRpcQueueEdit", () => {
+	it("updates plain user text while preserving id, images, timestamp, and lane", () => {
+		const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+		session.agent.followUp({
+			role: "user",
+			content: [{ type: "text", text: "before" }, image],
+			attribution: "user",
+			timestamp: 42,
+		});
+		const before = applyRpcGetQueue(session).followUp[0]!;
+
+		expect(applyRpcQueueEdit(session, before.id, "  after  ")).toEqual({ updated: true });
+
+		expect(applyRpcGetQueue(session)).toEqual({
+			steering: [],
+			followUp: [{ id: before.id, text: "after", images: [image], editable: true, timestamp: 42 }],
+		});
+	});
+
+	it("rejects empty text and structured queued commands", () => {
+		session.agent.followUp(userQueued("plain", 1));
+		session.agent.followUp(structuredUserCommand(2));
+		const [plain, structured] = applyRpcGetQueue(session).followUp;
+
+		expect(() => applyRpcQueueEdit(session, plain!.id, " \n ")).toThrow("Queued message text cannot be empty");
+		expect(structured!.editable).toBe(false);
+		expect(() => applyRpcQueueEdit(session, structured!.id, "replacement")).toThrow(
+			"Structured queued commands cannot be edited",
+		);
+	});
+});
+
 describe("applyRpcQueueRemove", () => {
 	it("removes exactly the addressed entry from its lane", () => {
 		session.agent.steer(userQueued("drop me", 1));
@@ -164,6 +208,15 @@ describe("applyRpcQueueRemove", () => {
 		const queue = applyRpcGetQueue(session);
 		expect(queue.steering.map(entry => entry.text)).toEqual(["keep me"]);
 		expect(queue.followUp.map(entry => entry.text)).toEqual(["untouched"]);
+	});
+
+	it("removes the entry's contiguous hidden companions", () => {
+		session.agent.followUp(hiddenUserCompanion(1, "attached notice"));
+		session.agent.followUp(userQueued("drop me", 2));
+		const [target] = applyRpcGetQueue(session).followUp;
+
+		expect(applyRpcQueueRemove(session, target!.id)).toEqual({ removed: true });
+		expect(session.agent.peekFollowUpQueue()).toEqual([]);
 	});
 
 	it("throws on an unknown id (wire: error response)", () => {
@@ -215,6 +268,20 @@ describe("applyRpcQueueMove", () => {
 		expect(applyRpcGetQueue(session).followUp.map(entry => entry.text)).toEqual(["a", "b"]);
 	});
 
+	it("reorders by visible index and keeps hidden companions attached", () => {
+		session.agent.followUp(hiddenUserCompanion(1, "notice a"));
+		session.agent.followUp(userQueued("a", 2));
+		session.agent.followUp(hiddenUserCompanion(3, "notice b"));
+		session.agent.followUp(userQueued("b", 4));
+		const [, b] = applyRpcGetQueue(session).followUp;
+
+		expect(applyRpcQueueMove(session, b!.id, 0)).toEqual({ lane: "followUp", index: 0 });
+		expect(applyRpcGetQueue(session).followUp.map(entry => entry.text)).toEqual(["b", "a"]);
+		expect(
+			session.agent.peekFollowUpQueue().map(message => ("content" in message ? message.content : undefined)),
+		).toEqual(["notice b", "b", "notice a", "a"]);
+	});
+
 	it("throws on an unknown id", () => {
 		expect(() => applyRpcQueueMove(session, "f999", 0)).toThrow("Unknown queued message id: f999");
 	});
@@ -252,10 +319,29 @@ describe("applyRpcQueueClear", () => {
 	});
 });
 
+describe("queue RPC input validation", () => {
+	it("rejects malformed wire values before mutating either lane", () => {
+		session.agent.steer(userQueued("steer", 1));
+		session.agent.followUp(userQueued("follow-up", 2));
+		const before = applyRpcGetQueue(session);
+
+		expect(() => applyRpcQueueEdit(session, 1, "replacement")).toThrow("queueId must be a non-empty string");
+		expect(() => applyRpcQueueEdit(session, before.steering[0]!.id, null)).toThrow("text must be a string");
+		expect(() => applyRpcQueueRemove(session, null)).toThrow("queueId must be a non-empty string");
+		expect(() => applyRpcQueueMove(session, before.steering[0]!.id, "0")).toThrow("toIndex must be a finite number");
+		expect(() => applyRpcQueueMove(session, before.steering[0]!.id, 0, "other")).toThrow(
+			'toLane must be "steering" or "followUp"',
+		);
+		expect(() => applyRpcQueueClear(session, null)).toThrow('lane must be "steering" or "followUp"');
+
+		expect(applyRpcGetQueue(session)).toEqual(before);
+	});
+});
+
 describe("queue_update session event", () => {
 	interface QueueSnapshot {
-		steering: Array<{ id: string; text: string; timestamp: number }>;
-		followUp: Array<{ id: string; text: string; timestamp: number }>;
+		steering: Array<{ id: string; text: string; editable: boolean; timestamp: number }>;
+		followUp: Array<{ id: string; text: string; editable: boolean; timestamp: number }>;
 	}
 
 	/** Subscribe and collect every queue_update payload, in emission order. */
@@ -275,30 +361,34 @@ describe("queue_update session event", () => {
 		session.agent.followUp(userQueued("second", 2));
 
 		expect(updates).toEqual([
-			{ steering: [{ id: "s1", text: "first", timestamp: 1 }], followUp: [] },
+			{ steering: [{ id: "s1", text: "first", editable: true, timestamp: 1 }], followUp: [] },
 			{
-				steering: [{ id: "s1", text: "first", timestamp: 1 }],
-				followUp: [{ id: "f2", text: "second", timestamp: 2 }],
+				steering: [{ id: "s1", text: "first", editable: true, timestamp: 1 }],
+				followUp: [{ id: "f2", text: "second", editable: true, timestamp: 2 }],
 			},
 		]);
 	});
 
-	it("emits on remove, move, and clear with the post-mutation snapshot", () => {
+	it("emits on edit, remove, move, and clear with the post-mutation snapshot", () => {
 		session.agent.followUp(userQueued("a", 1));
 		session.agent.followUp(userQueued("b", 2));
 		const updates = collectQueueUpdates();
+		const [a, b] = applyRpcGetQueue(session).followUp;
 
-		session.removeQueuedMessageById(session.agent.queueEntryId(session.agent.peekFollowUpQueue()[0]) ?? "");
-		session.moveQueuedMessageById(session.agent.queueEntryId(session.agent.peekFollowUpQueue()[0]) ?? "", 0);
+		session.removeQueuedMessageById(a!.id);
+		session.editQueuedMessageById(b!.id, "edited");
+		session.moveQueuedMessageById(b!.id, 0);
 		session.agent.steer(advisorCard(3));
 		session.clearQueuedMessages();
 
-		// remove drops "a"; the move is a no-op reorder of the single survivor;
-		// the advisor-card enqueue fires but never appears; clear empties the lane.
+		// Every mutation publishes the complete visible queue. The advisor-card
+		// enqueue also fires, but the card itself remains filtered from the payload.
+		const edited = { id: "f2", text: "edited", editable: true, timestamp: 2 };
 		expect(updates).toEqual([
-			{ steering: [], followUp: [{ id: "f2", text: "b", timestamp: 2 }] },
-			{ steering: [], followUp: [{ id: "f2", text: "b", timestamp: 2 }] },
-			{ steering: [], followUp: [{ id: "f2", text: "b", timestamp: 2 }] },
+			{ steering: [], followUp: [{ id: "f2", text: "b", editable: true, timestamp: 2 }] },
+			{ steering: [], followUp: [edited] },
+			{ steering: [], followUp: [edited] },
+			{ steering: [], followUp: [edited] },
 			{ steering: [], followUp: [] },
 		]);
 		// The advisor card still sits in the agent queue — excluded from snapshots.
@@ -311,7 +401,10 @@ describe("queue_update session event", () => {
 
 		await session.agent.continue();
 
-		expect(updates[0]).toEqual({ steering: [{ id: "s1", text: "drain me", timestamp: 1 }], followUp: [] });
+		expect(updates[0]).toEqual({
+			steering: [{ id: "s1", text: "drain me", editable: true, timestamp: 1 }],
+			followUp: [],
+		});
 		expect(updates.at(-1)).toEqual({ steering: [], followUp: [] });
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});

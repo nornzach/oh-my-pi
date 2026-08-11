@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `queue_edit` RPC command so remote clients can update a pending plain-user steering or follow-up message without changing its stable queue id, delivery lane, attachments, or timestamp.
+
+### Fixed
+
+- Fixed remote queue operations addressing raw agent-queue positions instead of the visible user-message order, which could misorder entries and detach hidden image or magic-keyword companions from their prompt; malformed queue-management RPC inputs are now rejected before they can reorder or clear queues.
+- Fixed RPC and RPC UI startup without a configured model so clients can open provider setup and complete first-run configuration.
+- Fixed provider inventory RPC metadata so clients can distinguish registered credential flows from editable custom model-provider configuration, including API-key providers such as Tavily and DeepSeek.
+
 ## [17.2.14] - 2026-08-11
 
 ### Added

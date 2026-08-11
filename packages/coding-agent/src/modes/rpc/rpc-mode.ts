@@ -111,7 +111,13 @@ import {
 	createRpcPr,
 	RpcPrError,
 } from "./rpc-pr";
-import { applyRpcGetQueue, applyRpcQueueClear, applyRpcQueueMove, applyRpcQueueRemove } from "./rpc-queue";
+import {
+	applyRpcGetQueue,
+	applyRpcQueueClear,
+	applyRpcQueueEdit,
+	applyRpcQueueMove,
+	applyRpcQueueRemove,
+} from "./rpc-queue";
 import { buildRpcActiveTools, buildRpcContextReport, buildRpcJobs, shareRpcSession } from "./rpc-reports";
 import {
 	applyRpcFresh,
@@ -1672,6 +1678,14 @@ export async function runRpcMode(
 				return success(id, "get_queue", applyRpcGetQueue(session));
 			}
 
+			case "queue_edit": {
+				try {
+					return success(id, "queue_edit", applyRpcQueueEdit(session, command.queueId, command.text));
+				} catch (err) {
+					return error(id, "queue_edit", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "queue_remove": {
 				try {
 					return success(id, "queue_remove", applyRpcQueueRemove(session, command.queueId));
@@ -2367,7 +2381,7 @@ export async function runRpcMode(
 			case "login": {
 				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
 				if (!knownProvider) {
-					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
+					return error(id, "login", `Unknown login provider: ${command.providerId}`);
 				}
 				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
 				try {

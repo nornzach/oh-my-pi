@@ -160,9 +160,9 @@ export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaRes
 /** Enumerate configured providers with auth state and model counts. */
 export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResult {
 	const authStorage = session.modelRegistry.authStorage;
-	const oauthProviders = getOAuthProviders();
-	const oauthIds = new Set(oauthProviders.map(p => p.id));
-	const oauthNameById = new Map(oauthProviders.map(p => [p.id, p.name]));
+	const loginProviders = getOAuthProviders();
+	const loginIds = new Set(loginProviders.map(provider => provider.id));
+	const loginNameById = new Map(loginProviders.map(provider => [provider.id, provider.name]));
 
 	// Count models per provider from the available catalog.
 	const models = session.getAvailableModels();
@@ -171,8 +171,8 @@ export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResu
 		modelCountByProvider.set(model.provider, (modelCountByProvider.get(model.provider) ?? 0) + 1);
 	}
 
-	// Collect all provider ids: those with models + those with OAuth + those with auth.
-	const providerIds = new Set<string>([...modelCountByProvider.keys(), ...oauthIds]);
+	// Collect all provider ids: those with models + registered login flows + those with auth.
+	const providerIds = new Set<string>([...modelCountByProvider.keys(), ...loginIds]);
 
 	// Also include providers that have stored credentials but no models yet.
 	try {
@@ -191,7 +191,7 @@ export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResu
 	for (const id of providerIds) {
 		const authenticated = authStorage.hasAuth(id);
 		const identity = authenticated ? authStorage.getOAuthAccountIdentity(id, session.sessionId) : undefined;
-		const isOAuth = oauthIds.has(id);
+		const loginAvailable = loginIds.has(id);
 
 		// Determine auth kind.
 		let authKind: RpcProviderInfo["authKind"];
@@ -202,11 +202,11 @@ export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResu
 
 		providers.push({
 			id,
-			name: oauthNameById.get(id) ?? id,
+			name: loginNameById.get(id) ?? id,
 			authenticated,
 			authKind,
 			account: identity?.email ?? identity?.accountId,
-			oauth: isOAuth,
+			loginAvailable,
 			disabled: disabledProviders.has(id),
 			baseUrl: session.modelRegistry.getProviderBaseUrl(id),
 			modelCount: modelCountByProvider.get(id) ?? 0,

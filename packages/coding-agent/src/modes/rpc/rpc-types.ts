@@ -86,13 +86,14 @@ export type RpcCommand =
 	// Queue management (stable per-entry ids — never array indices, which
 	// drift under concurrent enqueue). `queueId` names the entry id surfaced
 	// by get_queue; it cannot ride the frame envelope's `id` slot, which is
-	// the request-correlation id. queue_move is a same-lane reorder with a
-	// clamped target unless `toLane` is given, in which case the entry
-	// switches lanes (the stable id survives the crossing); queue_clear
-	// drops user-restorable entries only (hidden companions ride out with
-	// them; advisor cards and internal steers survive), lane-scoped when
-	// `lane` is given.
+	// the request-correlation id. queue_edit changes plain user text while
+	// preserving attachments and delivery metadata. queue_move addresses the
+	// visible-user order, with a clamped target; `toLane` switches lanes while
+	// preserving the stable id. queue_clear drops user-restorable entries only
+	// (hidden companions ride out with them; advisor cards and internal steers
+	// survive), lane-scoped when `lane` is given.
 	| { id?: string; type: "get_queue" }
+	| { id?: string; type: "queue_edit"; queueId: string; text: string }
 	| { id?: string; type: "queue_remove"; queueId: string }
 	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
 	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
@@ -591,21 +592,27 @@ export interface RpcDequeueResult {
 /**
  * One user-restorable queued message surfaced by `get_queue`. `id` is the
  * stable per-entry queue id assigned at enqueue time (lane-prefixed counter
- * like `s1`/`f1`), valid for queue_remove/queue_move until the entry is
- * consumed or removed. Only user-authored, displayable entries appear here —
- * advisor cards, hidden companions, and internal steers are excluded.
+ * like `s1`/`f1`), valid for queue operations until the entry is consumed or
+ * removed. Only user-authored, displayable entries appear here; `editable`
+ * distinguishes plain user prompts from structured command payloads.
  */
 export interface RpcQueuedMessage {
 	id: string;
 	text: string;
 	images?: ImageContent[];
+	editable: boolean;
 	timestamp: number;
 }
 
-/** Result of a `get_queue` command: both lanes in insertion order. */
+/** Result of a `get_queue` command: both lanes in visible execution order. */
 export interface RpcGetQueueResult {
 	steering: RpcQueuedMessage[];
 	followUp: RpcQueuedMessage[];
+}
+
+/** Result of a `queue_edit` command. Unknown/read-only ids produce an error response. */
+export interface RpcQueueEditResult {
+	updated: true;
 }
 
 /** Result of a `queue_remove` command. Unknown ids produce an error response instead. */
@@ -613,7 +620,7 @@ export interface RpcQueueRemoveResult {
 	removed: true;
 }
 
-/** Result of a `queue_move` command: the entry's lane and its final (clamped) index. */
+/** Result of a `queue_move` command: the entry's lane and final visible index. */
 export interface RpcQueueMoveResult {
 	lane: "steering" | "followUp";
 	index: number;
@@ -728,8 +735,8 @@ export interface RpcProviderInfo {
 	authKind?: "oauth" | "apikey" | "env";
 	/** Account identity (email/org) for OAuth providers. */
 	account?: string;
-	/** True when the provider is an OAuth login target. */
-	oauth: boolean;
+	/** True when the provider has a registered interactive credential flow. */
+	loginAvailable: boolean;
 	/** True when the provider is disabled in settings. */
 	disabled: boolean;
 	/** Base URL override, when configured. */
