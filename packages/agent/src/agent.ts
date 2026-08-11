@@ -1103,26 +1103,52 @@ export class Agent {
 	}
 
 	/**
-	 * Move the queue entry carrying `queueId` to `toIndex` within its own lane
-	 * (same-lane reorder; lanes never mix). `toIndex` is clamped into the
-	 * valid post-removal range. Returns the lane and the final index, or
-	 * undefined when no entry carries the id.
+	 * Move the queue entry carrying `queueId` to `toIndex` (clamped into the
+	 * valid post-removal range). Without `toLane` this is a same-lane reorder;
+	 * with `toLane` the entry switches lanes — the stable queue id survives
+	 * the crossing (its prefix still names the ENQUEUE lane, never the current
+	 * one). A crossing into steering notifies steering waiters, since a new
+	 * steering arrival can unblock an installed wait. Returns the lane and
+	 * the final index, or undefined when no entry carries the id.
 	 */
-	moveQueuedMessage(queueId: string, toIndex: number): { lane: "steering" | "followUp"; index: number } | undefined {
-		const move = (
+	moveQueuedMessage(
+		queueId: string,
+		toIndex: number,
+		toLane?: "steering" | "followUp",
+	): { lane: "steering" | "followUp"; index: number } | undefined {
+		const clampIndex = (queue: AgentMessage[]): number =>
+			Math.max(0, Math.min(Number.isFinite(toIndex) ? Math.trunc(toIndex) : 0, queue.length));
+		const moveWithin = (
 			queue: AgentMessage[],
 			lane: "steering" | "followUp",
 		): { lane: "steering" | "followUp"; index: number } | undefined => {
 			const from = queue.findIndex(m => this.#queueIds.get(m) === queueId);
 			if (from < 0) return undefined;
 			const [message] = queue.splice(from, 1);
-			const clamped = Math.max(0, Math.min(Number.isFinite(toIndex) ? Math.trunc(toIndex) : 0, queue.length));
+			const clamped = clampIndex(queue);
 			queue.splice(clamped, 0, message);
 			return { lane, index: clamped };
 		};
-		const moved = move(this.#steeringQueue, "steering") ?? move(this.#followUpQueue, "followUp");
-		if (moved !== undefined) this.#notifyQueueChange();
-		return moved;
+		if (toLane === undefined) {
+			const moved = moveWithin(this.#steeringQueue, "steering") ?? moveWithin(this.#followUpQueue, "followUp");
+			if (moved !== undefined) this.#notifyQueueChange();
+			return moved;
+		}
+		const target = toLane === "steering" ? this.#steeringQueue : this.#followUpQueue;
+		if (target.some(m => this.#queueIds.get(m) === queueId)) {
+			const moved = moveWithin(target, toLane);
+			if (moved !== undefined) this.#notifyQueueChange();
+			return moved;
+		}
+		const source = toLane === "steering" ? this.#followUpQueue : this.#steeringQueue;
+		const from = source.findIndex(m => this.#queueIds.get(m) === queueId);
+		if (from < 0) return undefined;
+		const [message] = source.splice(from, 1);
+		const clamped = clampIndex(target);
+		target.splice(clamped, 0, message);
+		if (toLane === "steering") this.#notifySteeringWaiters();
+		this.#notifyQueueChange();
+		return { lane: toLane, index: clamped };
 	}
 
 	get isAborting(): boolean {

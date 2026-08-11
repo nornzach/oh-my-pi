@@ -1584,7 +1584,7 @@ describe("Agent — stable queue ids and lane ops", () => {
 		expect(agent.removeQueuedMessage("s999")).toBeUndefined();
 	});
 
-	it("moveQueuedMessage reorders within a lane, clamps the target, and never crosses lanes", () => {
+	it("moveQueuedMessage reorders within a lane, clamps the target, and stays in-lane without toLane", () => {
 		const agent = new Agent();
 		const a = userMessage("a");
 		const b = userMessage("b");
@@ -1611,6 +1611,31 @@ describe("Agent — stable queue ids and lane ops", () => {
 		// The steering lane is untouched by follow-up reorders (and vice versa).
 		expect(agent.peekSteeringQueue()).toEqual([other]);
 		expect(agent.moveQueuedMessage("f999", 0)).toBeUndefined();
+	});
+
+	it("moveQueuedMessage with toLane switches lanes, keeps the stable id, and clamps into the target lane", () => {
+		const agent = new Agent();
+		const steer = userMessage("interrupt now");
+		const a = userMessage("a");
+		const b = userMessage("b");
+		agent.steer(steer);
+		agent.followUp(a);
+		agent.followUp(b);
+
+		const steerId = agent.queueEntryId(steer) ?? "";
+		// Crossing appends at the clamped end of the target lane (99 → index 2).
+		expect(agent.moveQueuedMessage(steerId, 99, "followUp")).toEqual({ lane: "followUp", index: 2 });
+		expect(agent.peekSteeringQueue()).toEqual([]);
+		expect(agent.peekFollowUpQueue()).toEqual([a, b, steer]);
+		// The stable id survives the crossing and now addresses the follow-up lane.
+		expect(agent.queueEntryId(steer)).toBe(steerId);
+		expect(agent.moveQueuedMessage(steerId, 0, "steering")).toEqual({ lane: "steering", index: 0 });
+		expect(agent.peekFollowUpQueue()).toEqual([a, b]);
+		expect(agent.peekSteeringQueue()).toEqual([steer]);
+
+		// Explicit same-lane toLane still reorders within that lane.
+		expect(agent.moveQueuedMessage(steerId, 0, "steering")).toEqual({ lane: "steering", index: 0 });
+		expect(agent.moveQueuedMessage("f999", 0, "steering")).toBeUndefined();
 	});
 
 	it("drain honors the reordered queue and skips removed entries", async () => {

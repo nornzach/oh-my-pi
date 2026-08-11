@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional `toLane` parameter to `Agent.moveQueuedMessage(queueId, toIndex, toLane?)`: the entry switches steering/follow-up lanes with its stable queue id intact (clamped into the target lane; crossings into steering notify steering waiters). Omitting `toLane` keeps the previous same-lane reorder behavior.
+
 ## [17.2.10] - 2026-08-06
 
 ### Fixed

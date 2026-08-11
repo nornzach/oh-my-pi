@@ -5,6 +5,8 @@
 ## [17.2.12] - 2026-08-08
 ### Added
 
+- Added an optional `toLane` parameter to the `queue_move` RPC command: remote clients can move a queued entry between the steering and follow-up lanes (appended/clamped into the target lane, stable queue id preserved, drain reconciliation re-run on lane changes) instead of only reordering within its own lane.
+
 - Added native RPC management for GUI clients: skill discovery and scope-aware enablement, repository security scans, reusable SSH host configuration and connection probes, and structured omp update state. Operations validate inputs at the sidecar boundary and reuse the existing config, SSH, skill, and updater services.
 - Added thirteen RPC commands for the remaining long-lived and TUI-hosted workflows: `btw`/`btw_branch` (ephemeral side answers and optional branch promotion), `tan` (tangential background agents), `omfg` (interactive TTSR rule forging), `set_agents_paused`, `debug` (the full DAP-backed debug tool action surface), `live_start`/`live_toggle_mute`/`live_stop` with realtime `live_update` frames, and `collab_start`/`collab_join`/`collab_leave`/`get_collab_state` with editable/read-only relay links and participant state.
 

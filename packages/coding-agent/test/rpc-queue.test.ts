@@ -195,6 +195,26 @@ describe("applyRpcQueueMove", () => {
 		expect(applyRpcGetQueue(session).steering.map(entry => entry.text)).toEqual(["other lane"]);
 	});
 
+	it("switches lanes when toLane is given and keeps the stable id addressable", () => {
+		session.agent.steer(userQueued("interrupt", 1));
+		session.agent.followUp(userQueued("a", 2));
+		session.agent.followUp(userQueued("b", 3));
+		const [steer] = applyRpcGetQueue(session).steering;
+
+		// steering → followUp appends at the clamped end; the id keeps working.
+		expect(applyRpcQueueMove(session, steer.id, Number.MAX_SAFE_INTEGER, "followUp")).toEqual({
+			lane: "followUp",
+			index: 2,
+		});
+		expect(applyRpcGetQueue(session).steering).toEqual([]);
+		expect(applyRpcGetQueue(session).followUp.map(entry => entry.text)).toEqual(["a", "b", "interrupt"]);
+
+		// followUp → steering with an explicit index lands exactly there.
+		expect(applyRpcQueueMove(session, steer.id, 0, "steering")).toEqual({ lane: "steering", index: 0 });
+		expect(applyRpcGetQueue(session).steering.map(entry => entry.text)).toEqual(["interrupt"]);
+		expect(applyRpcGetQueue(session).followUp.map(entry => entry.text)).toEqual(["a", "b"]);
+	});
+
 	it("throws on an unknown id", () => {
 		expect(() => applyRpcQueueMove(session, "f999", 0)).toThrow("Unknown queued message id: f999");
 	});

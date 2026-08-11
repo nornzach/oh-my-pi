@@ -1684,7 +1684,11 @@ export async function runRpcMode(
 
 			case "queue_move": {
 				try {
-					return success(id, "queue_move", applyRpcQueueMove(session, command.queueId, command.toIndex));
+					return success(
+						id,
+						"queue_move",
+						applyRpcQueueMove(session, command.queueId, command.toIndex, command.toLane),
+					);
 				} catch (err) {
 					return error(id, "queue_move", err instanceof Error ? err.message : String(err));
 				}

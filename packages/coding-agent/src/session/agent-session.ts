@@ -6285,14 +6285,19 @@ export class AgentSession {
 		return true;
 	}
 
-	/** Same-lane reorder by stable queue id with clamped target (RPC
-	 *  queue_move). Returns the lane and final index, or undefined for an
-	 *  unknown id. */
+	/** Reorder by stable queue id with clamped target (RPC queue_move).
+	 *  Same-lane when `toLane` is omitted; a lane switch re-runs drain
+	 *  reconciliation since per-lane counts changed (steering→followUp can
+	 *  drain like a removal, followUp→steering is a new arrival). Returns
+	 *  the lane and final index, or undefined for an unknown id. */
 	moveQueuedMessageById(
 		queueId: string,
 		toIndex: number,
+		toLane?: "steering" | "followUp",
 	): { lane: "steering" | "followUp"; index: number } | undefined {
-		return this.agent.moveQueuedMessage(queueId, toIndex);
+		const moved = this.agent.moveQueuedMessage(queueId, toIndex, toLane);
+		if (moved !== undefined && toLane !== undefined) this.#reconcileQueuedMessageDrain();
+		return moved;
 	}
 
 	/** Clear user-restorable queued entries (RPC queue_clear), lane-scoped when

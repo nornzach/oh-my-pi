@@ -87,12 +87,14 @@ export type RpcCommand =
 	// drift under concurrent enqueue). `queueId` names the entry id surfaced
 	// by get_queue; it cannot ride the frame envelope's `id` slot, which is
 	// the request-correlation id. queue_move is a same-lane reorder with a
-	// clamped target; queue_clear drops user-restorable entries only (hidden
-	// companions ride out with them; advisor cards and internal steers
-	// survive), lane-scoped when `lane` is given.
+	// clamped target unless `toLane` is given, in which case the entry
+	// switches lanes (the stable id survives the crossing); queue_clear
+	// drops user-restorable entries only (hidden companions ride out with
+	// them; advisor cards and internal steers survive), lane-scoped when
+	// `lane` is given.
 	| { id?: string; type: "get_queue" }
 	| { id?: string; type: "queue_remove"; queueId: string }
-	| { id?: string; type: "queue_move"; queueId: string; toIndex: number }
+	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
 	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
 
 	// Compaction

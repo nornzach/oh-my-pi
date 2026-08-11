@@ -9,7 +9,8 @@
  *   entries only; advisor cards/hidden companions/internal steers excluded).
  * - queue_remove: AgentSession.removeQueuedMessageById; unknown id throws so
  *   the caller maps it to an error response.
- * - queue_move: AgentSession.moveQueuedMessageById (same-lane, clamped).
+ * - queue_move: AgentSession.moveQueuedMessageById (clamped; `toLane`
+ *   switches lanes, stable id survives).
  * - queue_clear: AgentSession.clearQueuedMessages — mirrors the default
  *   AgentSession.clearQueue keep-filter, lane-scoped on request.
  */
@@ -29,9 +30,14 @@ export function applyRpcQueueRemove(session: AgentSession, queueId: string): { r
 	return { removed: true };
 }
 
-/** Same-lane reorder by stable id with a clamped target. Throws on unknown id. */
-export function applyRpcQueueMove(session: AgentSession, queueId: string, toIndex: number): RpcQueueMoveResult {
-	const moved = session.moveQueuedMessageById(queueId, toIndex);
+/** Reorder by stable id with a clamped target; `toLane` switches lanes. Throws on unknown id. */
+export function applyRpcQueueMove(
+	session: AgentSession,
+	queueId: string,
+	toIndex: number,
+	toLane?: "steering" | "followUp",
+): RpcQueueMoveResult {
+	const moved = session.moveQueuedMessageById(queueId, toIndex, toLane);
 	if (moved === undefined) {
 		throw new Error(`Unknown queued message id: ${queueId}`);
 	}
