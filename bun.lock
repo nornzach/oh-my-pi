@@ -134,7 +134,7 @@
     },
     "packages/gui": {
       "name": "@oh-my-pi/omp-gui",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "dependencies": {
         "@codemirror/commands": "6.10.4",
         "@codemirror/lang-json": "^6.0.0",
