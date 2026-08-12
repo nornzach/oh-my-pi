@@ -60,6 +60,22 @@ describe("getDashboardStats time range", () => {
 		expect(allStats.overall.totalRequests).toBe(2);
 	});
 
+	it("counts cache writes in the cache hit denominator", async () => {
+		await initDb();
+
+		const message = makeMessage(Date.now(), "cache-write");
+		message.usage.input = 100;
+		message.usage.output = 0;
+		message.usage.cacheRead = 300;
+		message.usage.cacheWrite = 100;
+		message.usage.totalTokens = 500;
+		insertMessageStats([message]);
+
+		const stats = await getDashboardStats("all");
+		expect(stats.overall.cacheRate).toBeCloseTo(0.6);
+		expect(stats.byModel[0]?.cacheRate).toBeCloseTo(0.6);
+	});
+
 	it("falls back to 24h for unknown range", async () => {
 		await initDb();
 

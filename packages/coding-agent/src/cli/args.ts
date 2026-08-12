@@ -56,6 +56,8 @@ export interface Args {
 	version?: boolean;
 	mode?: Mode;
 	noSession?: boolean;
+	/** Ignore the persistent autoResume setting for this launch and start fresh. */
+	noAutoResume?: boolean;
 	sessionDir?: string;
 	providerSessionId?: string;
 	providerPromptCacheKey?: string;
@@ -247,6 +249,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
+		} else if (arg === "--no-auto-resume") {
+			result.noAutoResume = true;
 		} else if (arg === "--chat") {
 			result.chat = true;
 		} else if (arg === "--no-tools") {

@@ -166,6 +166,14 @@ export class RpcSubagentRegistry {
 		for (const subagentId of this.#transcriptSessionFilesBySubagentId.keys()) {
 			addPruned(this.#staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
 		}
+		// Registry-only rows (parked/advisor refs restored independently of task
+		// frames) belong to the old session too. Mark them stale before clearing,
+		// otherwise getSubagents() immediately merges them back into the new one.
+		for (const ref of AgentRegistry.global().list()) {
+			if (ref.id !== MAIN_AGENT_ID && ref.kind !== "main") {
+				addPruned(this.#staleSubagentIds, ref.id, MAX_RETAINED_TRANSCRIPT_REFERENCES);
+			}
+		}
 		this.#subagents.clear();
 		this.#terminalSubagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
@@ -193,6 +201,11 @@ export class RpcSubagentRegistry {
 		// are impossible to discover from a GUI attachment.
 		for (const ref of AgentRegistry.global().list()) {
 			if (ref.id === MAIN_AGENT_ID || ref.kind === "main") continue;
+			// Session changes clear the RPC roster but deliberately keep process-
+			// global refs alive for lifecycle cleanup/history. Do not merge those
+			// old-session refs back into the freshly cleared roster. A genuine new
+			// lifecycle start removes the id from this set in handleLifecycle().
+			if (this.#staleSubagentIds.has(ref.id)) continue;
 			const existing = snapshots.get(ref.id);
 			// A bare ref must never resurrect a finished agent as live — see
 			// TERMINAL_SNAPSHOT_STATUSES. The terminal snapshot stays authoritative.

@@ -775,7 +775,7 @@ export async function createSessionManager(
 	// buildSessionOptions restores the session's model/thinking instead of
 	// overriding them with CLI defaults.
 	// BUT: --chat always creates a fresh chat session (I1: kind must match from creation).
-	if (!parsed.chat && activeSettings.get("autoResume")) {
+	if (!parsed.chat && !parsed.noAutoResume && activeSettings.get("autoResume")) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;

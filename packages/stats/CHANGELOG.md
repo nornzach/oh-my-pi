@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Included cache-write tokens in the cache hit-rate denominator so the metric reflects all prompt tokens.
+
 ## [17.2.10] - 2026-08-06
 
 ### Changed

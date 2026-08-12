@@ -8,6 +8,9 @@
 
 ### Fixed
 
+- Fixed fresh RPC sessions re-populating their subagent roster from process-global refs retained by the previous session.
+- Fixed RPC session management so an idle stored session can be renamed without switching the caller into it, and session identity updates are emitted after rename, switch, fork, branch, or reset operations.
+- Fixed destructive RPC session deletion and current-session renaming remaining available while the session was streaming or compacting.
 - Fixed remote queue operations addressing raw agent-queue positions instead of the visible user-message order, which could misorder entries and detach hidden image or magic-keyword companions from their prompt; malformed queue-management RPC inputs are now rejected before they can reorder or clear queues.
 - Fixed RPC and RPC UI startup without a configured model so clients can open provider setup and complete first-run configuration.
 - Fixed provider inventory RPC metadata so clients can distinguish registered credential flows from editable custom model-provider configuration, including API-key providers such as Tavily and DeepSeek.

@@ -491,6 +491,7 @@ function buildAggregatedStats(rows: any[]): AggregatedStats {
 	const successfulRequests = totalRequests - failedRequests;
 	const totalInputTokens = row.total_input_tokens || 0;
 	const totalCacheReadTokens = row.total_cache_read_tokens || 0;
+	const totalCacheWriteTokens = row.total_cache_write_tokens || 0;
 	const totalPremiumRequests = row.total_premium_requests || 0;
 
 	return {
@@ -501,10 +502,10 @@ function buildAggregatedStats(rows: any[]): AggregatedStats {
 		totalInputTokens,
 		totalOutputTokens: row.total_output_tokens || 0,
 		totalCacheReadTokens,
-		totalCacheWriteTokens: row.total_cache_write_tokens || 0,
+		totalCacheWriteTokens,
 		cacheRate:
-			totalInputTokens + totalCacheReadTokens > 0
-				? totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens)
+			totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens > 0
+				? totalCacheReadTokens / (totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens)
 				: 0,
 		totalCost: row.total_cost || 0,
 		totalPremiumRequests,

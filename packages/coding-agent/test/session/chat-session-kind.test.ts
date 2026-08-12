@@ -202,6 +202,25 @@ describe("--chat + autoResume", () => {
 	});
 });
 
+describe("--no-auto-resume", () => {
+	it("forces a fresh launch when the persistent autoResume setting is enabled", async () => {
+		const cwd = makeTempDir("@omp-no-autoresume-");
+		const sessionDir = path.join(cwd, "sessions");
+		await writeSessionFile(sessionDir, "prior-agent");
+
+		const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
+		settings.override("autoResume", true);
+		const parsed = parseArgs(["--no-auto-resume"]);
+		parsed.sessionDir = sessionDir;
+
+		const manager = await createSessionManager(parsed, cwd, settings);
+		expect(parsed.noAutoResume).toBe(true);
+		expect(manager?.getEntries()).toHaveLength(0);
+		expect(manager?.getSessionId()).not.toBe("prior-agent");
+		expect(parsed.continue).toBeFalsy();
+	});
+});
+
 describe("session kind — inheritance through session-producing operations", () => {
 	it("persistCopy carries kind onto the copy", async () => {
 		const cwd = makeTempDir("@omp-chat-persistcopy-");

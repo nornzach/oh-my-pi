@@ -2875,6 +2875,41 @@ export class SessionManager {
 	static listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
 		return listAllSessions(storage);
 	}
+
+	/** Rename a managed, currently-unattached session without adopting it as the caller's session. */
+	static async renameStoredSession(
+		sessionPath: string,
+		name: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<boolean> {
+		const title = SessionManager.#cleanTitle(name);
+		if (!title) return false;
+
+		const target = path.resolve(sessionPath);
+		const sessionsRoot = path.resolve(getSessionsDir());
+		const relative = path.relative(sessionsRoot, target);
+		if (
+			!relative ||
+			relative === ".." ||
+			relative.startsWith(`..${path.sep}`) ||
+			path.isAbsolute(relative) ||
+			!target.endsWith(".jsonl") ||
+			!storage.existsSync(target)
+		) {
+			throw new Error("Session not found");
+		}
+
+		const manager = await SessionManager.open(target, path.dirname(target), storage, {
+			initialCwd: getProjectDir(),
+			suppressBreadcrumb: true,
+		});
+		try {
+			return await manager.setSessionName(title, "user", "external-rename");
+		} finally {
+			await manager.close();
+			manager.releaseRetainedEntries();
+		}
+	}
 }
 
 /**

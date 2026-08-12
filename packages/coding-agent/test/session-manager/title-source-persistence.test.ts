@@ -206,4 +206,28 @@ describe("session title source persistence", () => {
 		await expect(session.setSessionName("Second title", "user")).resolves.toBe(true);
 		expect(names).toEqual(["Manual title"]);
 	});
+
+	it("renames an idle stored session without adopting it", async () => {
+		const storage = new CountingTitleSlotStorage();
+		const session = SessionManager.create(cwd, undefined, storage);
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		await session.setSessionName("Old title", "auto");
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const sessionFile = session.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		await session.close();
+
+		expect(await SessionManager.renameStoredSession(sessionFile!, "  Renamed\u0000 idle   task  ", storage)).toBe(
+			true,
+		);
+
+		const reopened = await SessionManager.open(sessionFile!, undefined, storage);
+		expect(reopened.getSessionName()).toBe("Renamed idle task");
+		expect(reopened.titleSource).toBe("user");
+		const entries = await loadEntriesFromFile(sessionFile!, storage);
+		const titleChanges = entries.filter(entry => entry.type === TITLE_CHANGE_ENTRY_TYPE);
+		expect(titleChanges.at(-1)?.title).toBe("Renamed idle task");
+		expect(titleChanges.at(-1)?.trigger).toBe("external-rename");
+	});
 });

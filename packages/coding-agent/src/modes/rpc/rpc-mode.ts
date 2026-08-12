@@ -11,6 +11,7 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { once } from "node:events";
+import * as path from "node:path";
 import { agentPauseGate } from "@oh-my-pi/pi-agent-core";
 import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -216,7 +217,10 @@ export type RpcSessionChangeResult =
 	| { type: "branch"; data: { text: string; cancelled: boolean } }
 	| { type: "fork"; data: { cancelled: boolean } };
 
-export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
+export type RpcSessionChangeSession = Pick<
+	AgentSession,
+	"newSession" | "switchSession" | "branch" | "fork" | "isStreaming" | "isCompacting"
+>;
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true };
@@ -629,6 +633,9 @@ export async function handleRpcSessionChange(
 		}
 
 		case "drop_session": {
+			if (session.isStreaming || session.isCompacting) {
+				throw new Error("Cannot delete a session while it is running");
+			}
 			const cancelled = !(await session.newSession({ drop: true }));
 			if (!cancelled) subagentRegistry?.clear();
 			return { type: "drop_session", data: { cancelled } };
@@ -1231,6 +1238,16 @@ export async function runRpcMode(
 	const emitAvailableCommandsUpdate = async () => {
 		output({ type: "available_commands_update", commands: await getAvailableCommands() });
 	};
+	const emitSessionInfoUpdate = () => {
+		output({
+			type: "session_info_update",
+			// JSON.stringify drops undefined properties. Null is the protocol's
+			// explicit "clear the previous session title" value.
+			title: session.sessionName ?? null,
+			sessionId: session.sessionId,
+			kind: session.sessionManager.getHeader()?.kind,
+		});
+	};
 	session.subscribeCommandMetadataChanged(() => {
 		void emitAvailableCommandsUpdate();
 	});
@@ -1414,7 +1431,10 @@ export async function runRpcMode(
 					);
 				}
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
-				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
+				if (!result.data.cancelled) {
+					await emitAvailableCommandsUpdate();
+					emitSessionInfoUpdate();
+				}
 				planApprovalController.syncArmed();
 				return success(id, result.type, result.data);
 			}
@@ -1424,7 +1444,10 @@ export async function runRpcMode(
 			case "branch":
 			case "fork": {
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
-				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
+				if (!result.data.cancelled) {
+					await emitAvailableCommandsUpdate();
+					emitSessionInfoUpdate();
+				}
 				planApprovalController.syncArmed();
 				return success(id, result.type, result.data);
 			}
@@ -2295,10 +2318,19 @@ export async function runRpcMode(
 				if (!name) {
 					return error(id, "set_session_name", "Session name cannot be empty");
 				}
-				const applied = await session.setSessionName(name, "user");
+				const currentPath = session.sessionFile ? path.resolve(session.sessionFile) : undefined;
+				const targetPath = command.sessionPath ? path.resolve(command.sessionPath) : undefined;
+				const renamingCurrent = targetPath === undefined || targetPath === currentPath;
+				if (renamingCurrent && (session.isStreaming || session.isCompacting)) {
+					return error(id, "set_session_name", "Cannot rename a session while it is running");
+				}
+				const applied = renamingCurrent
+					? await session.setSessionName(name, "user")
+					: await SessionManager.renameStoredSession(targetPath, name);
 				if (!applied) {
 					return error(id, "set_session_name", "Session name cannot be empty");
 				}
+				if (renamingCurrent) emitSessionInfoUpdate();
 				return success(id, "set_session_name");
 			}
 

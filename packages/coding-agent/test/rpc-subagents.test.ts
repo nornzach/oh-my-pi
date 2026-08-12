@@ -74,10 +74,14 @@ type SessionChangeStubOptions = {
 	switchSession?: boolean;
 	fork?: boolean;
 	branch?: { selectedText: string; selectedImages: ImageContent[]; cancelled: boolean };
+	isStreaming?: boolean;
+	isCompacting?: boolean;
 };
 
 function createSessionChangeSession(options: SessionChangeStubOptions): RpcSessionChangeSession {
 	return {
+		isStreaming: options.isStreaming ?? false,
+		isCompacting: options.isCompacting ?? false,
 		newSession: async (_options?: unknown) => options.newSession ?? true,
 		switchSession: async (_sessionPath: string) => options.switchSession ?? true,
 		fork: async () => options.fork ?? true,
@@ -177,8 +181,23 @@ describe("RPC subagent registry", () => {
 	});
 
 	test("clears stale snapshots when the active RPC session changes", () => {
+		AgentRegistry.resetGlobalForTests();
 		const eventBus = new EventBus();
 		const registry = new RpcSubagentRegistry(eventBus, () => {});
+		AgentRegistry.global().register({
+			id: "SubagentA",
+			displayName: "SubagentA",
+			kind: "sub",
+			session: null,
+			status: "idle",
+		});
+		AgentRegistry.global().register({
+			id: "RegistryOnly",
+			displayName: "RegistryOnly",
+			kind: "advisor",
+			session: null,
+			status: "parked",
+		});
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SubagentA",
 			index: 0,
@@ -188,11 +207,23 @@ describe("RPC subagent registry", () => {
 			sessionFile: "/tmp/subagent.jsonl",
 		} satisfies SubagentLifecyclePayload);
 
-		expect(registry.getSubagents()).toHaveLength(1);
+		expect(registry.getSubagents()).toHaveLength(2);
 		registry.clear();
 
 		expect(registry.getSubagents()).toHaveLength(0);
+		// A real lifecycle in the new session may reuse the stable id and must
+		// become visible again instead of remaining permanently filtered.
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "SubagentA",
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			status: "started",
+			sessionFile: "/tmp/new-subagent.jsonl",
+		} satisfies SubagentLifecyclePayload);
+		expect(registry.getSubagents()).toMatchObject([{ id: "SubagentA", sessionFile: "/tmp/new-subagent.jsonl" }]);
 		registry.dispose();
+		AgentRegistry.resetGlobalForTests();
 	});
 
 	test("clears stale snapshots after successful RPC session changes", async () => {
@@ -308,6 +339,14 @@ describe("RPC subagent registry", () => {
 			data: { cancelled: false },
 		});
 		expect(receivedOptions).toEqual({ drop: true });
+	});
+
+	test("drop_session refuses to delete while the session is compacting", async () => {
+		const session = createSessionChangeSession({ isCompacting: true });
+
+		await expect(handleRpcSessionChange(session, { type: "drop_session" })).rejects.toThrow(
+			"Cannot delete a session while it is running",
+		);
 	});
 
 	test("retains terminal snapshots with last-known labels while retaining transcript selectors", () => {
