@@ -292,6 +292,7 @@ function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean 
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class StatusLineComponent implements Component {
+	#widthEpochRevision = 0;
 	#settings: StatusLineSettings = {};
 	#effectiveSettings: EffectiveStatusLineSettings | undefined;
 	#cachedBranch: string | null | undefined = undefined;
@@ -664,13 +665,25 @@ export class StatusLineComponent implements Component {
 			return;
 		}
 
-		const watchPath = git.repo.isReftableSync(repository)
-			? path.join(repository.gitDir, "reftable")
-			: repository.headPath;
+		// Watch the *directory* holding the ref state, not the HEAD file itself.
+		// git rewrites HEAD via a lock file + atomic rename (`HEAD.lock` → `HEAD`),
+		// which unlinks the original inode. An `fs.watch` bound to that file inode
+		// dies after the first branch switch and never fires again, freezing the
+		// displayed branch (issue #8412). A directory watch tracks the stable
+		// gitDir inode and survives the rename.
+		const isReftable = git.repo.isReftableSync(repository);
+		const watchPath = isReftable ? path.join(repository.gitDir, "reftable") : repository.gitDir;
 
 		try {
-			const watcher = fs.watch(watchPath, () => {
+			const watcher = fs.watch(watchPath, (_event, filename) => {
 				if (this.#disposed || this.#gitWatcher !== watcher) return;
+				// The gitDir sees churn from many entries (index, ORIG_HEAD, config,
+				// …); only HEAD moves change the branch. The rename surfaces as a
+				// `HEAD.lock` event, so match the `HEAD` prefix. The reftable dir
+				// holds only ref storage, so every change there is ref-relevant.
+				// `filename` may be null/undefined on some platforms or coalesced
+				// events — react rather than risk missing a HEAD move.
+				if (!isReftable && filename != null && !String(filename).startsWith("HEAD")) return;
 				this.invalidateGitCaches();
 				this.#onBranchChange?.();
 			});
@@ -719,6 +732,7 @@ export class StatusLineComponent implements Component {
 	}
 
 	invalidate(): void {
+		this.#widthEpochRevision++;
 		// Generic repaint invalidation (theme change, message event, model
 		// switch, …). Must NOT abort or restart a live reftable HEAD/PR resolve:
 		// the render path self-invalidates via cwd/context cache-miss checks, so
@@ -1446,10 +1460,15 @@ export class StatusLineComponent implements Component {
 					};
 					sevenDayTier = tier || undefined;
 				}
-				// Conservatively gate monthly status-line rendering to Cursor for now —
-				// Copilot/OpenCode also emit monthly windows, but their multi-bucket
-				// shape needs a dedicated selector before we surface `mo N%` for them.
-				if (activeProvider === "cursor" && (windowId === "monthly" || windowId === "30d")) {
+				// Monthly rendering is gated to providers with a single monthly
+				// bucket (Cursor's priority selector picks its personal rail;
+				// OpenCode Go emits exactly one). Copilot also emits monthly
+				// windows, but its multi-bucket shape needs a dedicated selector
+				// before we surface `mo N%` for it.
+				if (
+					(activeProvider === "cursor" || activeProvider === "opencode-go") &&
+					(windowId === "monthly" || windowId === "30d")
+				) {
 					const priority = cursorMonthlyPriority(l.id);
 					const shouldReplace =
 						!monthly ||
@@ -1869,7 +1888,7 @@ export class StatusLineComponent implements Component {
 		return leftGroup + gapFill + rightGroup;
 	}
 
-	getTopBorder(width: number): { content: string; width: number } {
+	getTopBorder(width: number): { content: string; width: number; revision: number } {
 		let content = this.#buildStatusLine(width);
 		if (this.#focusedAgentId && content) {
 			// Dim the whole bar while focus-proxied. Group/cap terminators emit full
@@ -1879,6 +1898,7 @@ export class StatusLineComponent implements Component {
 		return {
 			content,
 			width: visibleWidth(content),
+			revision: this.#widthEpochRevision,
 		};
 	}
 

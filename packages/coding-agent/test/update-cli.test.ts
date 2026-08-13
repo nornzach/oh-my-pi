@@ -12,23 +12,29 @@ import {
 	buildMiseForceInstallArgs,
 	buildMiseUpgradeArgs,
 	buildNpmInstallArgs,
+	buildRenameCleanupPackages,
 	downloadVerifiedBinary,
 	isMuslLinuxForTest,
+	migrateRenamedInstall,
 	parseUpdateArgs,
 	pruneBunInstallCache,
+	type ReleaseInfo,
+	type RenameMigrationSteps,
 	replaceBinaryForUpdate,
 	resolveBunGlobalNodeModulesDirFromLocations,
 	resolveReleaseBinaryAsset,
 	resolveReleaseDist,
+	resolveReleaseRename,
 	resolveUpdateMethodForTest,
 	shouldForceBinaryUpdate,
-	sweepStaleBackups,
+	sweepStaleUpdateArtifacts,
 	updateViaBinaryAt,
 	updateViaShimTakeover,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
+import { getThemeByName, setThemeInstance } from "../src/modes/theme/theme";
 
 const tempDirs: string[] = [];
 
@@ -102,6 +108,15 @@ describe("update-cli libc detection", () => {
 });
 
 describe("update-cli install target detection", () => {
+	it("leaves Nix store installations under Nix management", () => {
+		const method = resolveUpdateMethodForTest(
+			"/nix/store/0123456789-omp-17.2.15/bin/omp",
+			"/nix/store/9876543210-bun-1.3.14/bin",
+		);
+
+		expect(method).toBe("nix");
+	});
+
 	it("uses bun update when prioritized omp is inside bun global bin", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.bun/bin/omp", "/Users/test/.bun/bin");
 
@@ -240,6 +255,140 @@ describe("update-cli package manager commands", () => {
 		expect(args).toContain("@oh-my-pi/pi-coding-agent@16.3.15");
 		expect(args).toContain("@oh-my-pi/pi-natives@16.3.15");
 		expect(args).toContain("@oh-my-pi/pi-natives-win32-x64@16.3.15");
+	});
+});
+
+describe("update-cli npm rename contract", () => {
+	it("parses a well-formed omp.rename pointer and rejects malformed ones", () => {
+		expect(resolveReleaseRename({ omp: { rename: { package: "@new/omp", natives: "@new/natives" } } })).toEqual({
+			pkg: "@new/omp",
+			natives: "@new/natives",
+		});
+		expect(resolveReleaseRename({ omp: { rename: { package: "@new/omp" } } })).toEqual({
+			pkg: "@new/omp",
+			natives: undefined,
+		});
+		expect(resolveReleaseRename({ omp: { rename: { package: "" } } })).toBeUndefined();
+		expect(resolveReleaseRename({ omp: { rename: "@new/omp" } })).toBeUndefined();
+		expect(resolveReleaseRename({ omp: {} })).toBeUndefined();
+		expect(resolveReleaseRename(undefined)).toBeUndefined();
+	});
+
+	it("installs renamed package names in lock-step, with no old-name leftovers in the argv", () => {
+		const packages = { pkg: "@new/omp", natives: "@new/natives" };
+
+		const bunArgs = buildBunInstallArgs("17.0.0", "linux-x64", packages);
+		expect(bunArgs).toContain("@new/omp@17.0.0");
+		expect(bunArgs).toContain("@new/natives@17.0.0");
+		expect(bunArgs).toContain("@new/natives-linux-x64@17.0.0");
+		expect(bunArgs.some(arg => arg.startsWith("@oh-my-pi/"))).toBe(false);
+
+		expect(buildNpmInstallArgs("17.0.0", "linux-x64", packages)).toContain("@new/omp@17.0.0");
+	});
+
+	it("adds --force to npm argv only for rename migrations so the old package's bin can be clobbered", () => {
+		const packages = { pkg: "@new/omp", natives: "@new/natives" };
+		expect(buildNpmInstallArgs("17.0.0", "linux-x64", packages, { force: true })).toContain("--force");
+		expect(buildNpmInstallArgs("16.3.15", "win32-x64")).not.toContain("--force");
+	});
+
+	it("removes the old agent package and its natives companions when both names moved", () => {
+		const packages = { pkg: "@new/omp", natives: "@new/natives" };
+		expect(buildRenameCleanupPackages(packages, "darwin-arm64")).toEqual([
+			"@oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-natives",
+			"@oh-my-pi/pi-natives-darwin-arm64",
+		]);
+		expect(buildRenameCleanupPackages(packages, "linux-arm")).toEqual([
+			"@oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-natives",
+		]);
+	});
+
+	it("keeps the natives packages on an agent-only rename so cleanup cannot strip the addon the new install pinned", () => {
+		const packages = { pkg: "@new/omp", natives: "@oh-my-pi/pi-natives" };
+		expect(buildRenameCleanupPackages(packages, "darwin-arm64")).toEqual(["@oh-my-pi/pi-coding-agent"]);
+		expect(buildRenameCleanupPackages(packages, "linux-arm")).toEqual(["@oh-my-pi/pi-coding-agent"]);
+	});
+});
+
+describe("migrateRenamedInstall transaction", () => {
+	const release: ReleaseInfo = {
+		tag: "v999.1.0",
+		version: "999.1.0",
+		packages: { pkg: "@new/omp", natives: "@new/natives" },
+	};
+
+	function scriptedSteps(script: { install: number[]; removeOld?: number; verify: boolean[] }): {
+		steps: RenameMigrationSteps;
+		calls: string[];
+	} {
+		const calls: string[] = [];
+		let installs = 0;
+		let verifies = 0;
+		return {
+			calls,
+			steps: {
+				async install() {
+					calls.push("install");
+					return script.install[installs++] ?? 0;
+				},
+				async removeOld() {
+					calls.push("removeOld");
+					return script.removeOld ?? 0;
+				},
+				async verify() {
+					calls.push("verify");
+					return script.verify[verifies++]
+						? { ok: true, actual: "999.1.0", path: "/bin/omp" }
+						: { ok: false, path: "/bin/omp" };
+				},
+			},
+		};
+	}
+
+	it("never touches the old install when the new install fails", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { steps, calls } = scriptedSteps({ install: [1], verify: [] });
+
+		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow("left untouched");
+		expect(calls).toEqual(["install"]);
+	});
+
+	it("installs the new package before removing the old one and verifies the result", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { steps, calls } = scriptedSteps({ install: [0], verify: [true] });
+
+		await migrateRenamedInstall(release, steps);
+		expect(calls).toEqual(["install", "removeOld", "verify"]);
+	});
+
+	it("restores the bin link by reinstalling when old-package removal breaks verification", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, true] });
+
+		await migrateRenamedInstall(release, steps);
+		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
+	});
+
+	it("treats old-package removal failure as a warning when the new install verifies", async () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation(message => {
+			logs.push(String(message));
+		});
+		const { steps, calls } = scriptedSteps({ install: [0], removeOld: 1, verify: [true] });
+
+		await migrateRenamedInstall(release, steps);
+		expect(calls).toEqual(["install", "removeOld", "verify"]);
+		expect(logs.some(line => line.includes("could not remove the old"))).toBe(true);
+	});
+
+	it("aborts with a recovery hint when verification still fails after the restore install", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, false] });
+
+		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow("curl -fsSL https://omp.sh/install");
+		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
 	});
 });
 
@@ -610,7 +759,8 @@ describe("update-cli release binary integrity", () => {
 			expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
 			expect(await Bun.file(targetPath).text()).toBe(installed);
 			expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
-			expect(await Bun.file(`${targetPath}.new`).exists()).toBe(false);
+			const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
+			expect(newResidue).toEqual([]);
 		} finally {
 			if (previousGitHubToken === undefined) delete Bun.env.GITHUB_TOKEN;
 			else Bun.env.GITHUB_TOKEN = previousGitHubToken;
@@ -721,26 +871,41 @@ describe("update-cli binary replacement on locked backups", () => {
 	});
 });
 
-describe("update-cli stale backup sweep", () => {
-	it("reclaims timestamped and legacy backups while leaving unrelated .bak files", async () => {
+describe("update-cli stale update artifact sweep", () => {
+	it("reclaims timestamped and legacy backups and orphaned temps while sparing in-progress temps and unrelated files", async () => {
 		const dir = await makeTempDir();
 		const targetPath = path.join(dir, "omp.exe");
 		await Bun.write(targetPath, "current binary");
 		await Bun.write(`${targetPath}.bak`, "legacy backup");
 		await Bun.write(`${targetPath}.1700000000000.4242.bak`, "timestamped backup");
 		await Bun.write(`${targetPath}.1800000000000.99.bak`, "another backup");
-		// Must survive: foreign basename and a non-numeric middle segment.
+		// Orphaned temp files from a hard-killed download: reaped once older than
+		// the download window. Legacy fixed name and timestamped name both count.
+		const stale = new Date(Date.now() - 60 * 60 * 1000);
+		await Bun.write(`${targetPath}.new`, "legacy temp");
+		await fs.utimes(`${targetPath}.new`, stale, stale);
+		await Bun.write(`${targetPath}.1700000000000.4242.new`, "timestamped temp");
+		await fs.utimes(`${targetPath}.1700000000000.4242.new`, stale, stale);
+		// Must survive: a fresh temp still belongs to a concurrent, in-progress
+		// download (unique per attempt), plus foreign basenames and non-numeric
+		// middle segments.
+		await Bun.write(`${targetPath}.9999999999999.7.new`, "in-progress temp");
 		await Bun.write(path.join(dir, "notes.bak"), "keep me");
 		await Bun.write(`${targetPath}.config.bak`, "keep me too");
+		await Bun.write(`${targetPath}.config.new`, "keep me three");
 
-		await sweepStaleBackups(targetPath);
+		await sweepStaleUpdateArtifacts(targetPath);
 
 		expect(await Bun.file(targetPath).exists()).toBe(true);
 		expect(await Bun.file(`${targetPath}.bak`).exists()).toBe(false);
 		expect(await Bun.file(`${targetPath}.1700000000000.4242.bak`).exists()).toBe(false);
 		expect(await Bun.file(`${targetPath}.1800000000000.99.bak`).exists()).toBe(false);
+		expect(await Bun.file(`${targetPath}.new`).exists()).toBe(false);
+		expect(await Bun.file(`${targetPath}.1700000000000.4242.new`).exists()).toBe(false);
+		expect(await Bun.file(`${targetPath}.9999999999999.7.new`).exists()).toBe(true);
 		expect(await Bun.file(path.join(dir, "notes.bak")).exists()).toBe(true);
 		expect(await Bun.file(`${targetPath}.config.bak`).exists()).toBe(true);
+		expect(await Bun.file(`${targetPath}.config.new`).exists()).toBe(true);
 	});
 });
 
@@ -921,5 +1086,125 @@ describe("update-cli script-shim takeover", () => {
 		for (const name in shims) {
 			expect(await Bun.file(path.join(dir, name)).text()).toBe(shims[name]);
 		}
+	});
+});
+
+describe("update-cli concurrent binary updates", () => {
+	const version = "999.0.0";
+	const binaryName = "omp-linux-x64";
+	const url = `https://github.com/can1357/oh-my-pi/releases/download/v${version}/${binaryName}`;
+	const payload = Buffer.alloc(2048, 0x41);
+	const digest = `sha256:${createHash("sha256").update(payload).digest("hex")}`;
+
+	function metadata(): Response {
+		return Response.json({
+			tag_name: `v${version}`,
+			draft: false,
+			prerelease: false,
+			assets: [{ name: binaryName, state: "uploaded", size: payload.byteLength, digest, browser_download_url: url }],
+		});
+	}
+
+	const fastFetch = async (input: string | URL | Request): Promise<Response> => {
+		const requestUrl = String(input);
+		if (requestUrl.startsWith("https://api.github.com/")) return metadata();
+		if (requestUrl === url) return new Response(payload);
+		throw new Error(`Unexpected request: ${requestUrl}`);
+	};
+
+	const verify = async () => ({ ok: true, actual: version });
+
+	async function prepare(): Promise<{ dir: string; targetPath: string }> {
+		const loadedTheme = await getThemeByName("dark");
+		if (!loadedTheme) throw new Error("theme unavailable");
+		setThemeInstance(loadedTheme);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, "omp");
+		await Bun.write(targetPath, "old binary");
+		return { dir, targetPath };
+	}
+
+	// Regression for #8434: two overlapping `omp update` runs must not share a
+	// temp path. Run A downloads slowly and only finishes after run B has fully
+	// installed. With the old fixed `<binary>.new` temp name, B's pre-download
+	// unlink deleted A's temp file, so A's chmod failed with ENOENT even though
+	// its size + digest passed. Unique temp paths keep the two runs independent.
+	it("lets an overlapping slow run install after a fast run completes, instead of failing chmod with ENOENT", async () => {
+		const { dir, targetPath } = await prepare();
+
+		const aWroteFirstChunk = Promise.withResolvers<void>();
+		const letAFinish = Promise.withResolvers<void>();
+		const slowFetch = async (input: string | URL | Request): Promise<Response> => {
+			const requestUrl = String(input);
+			if (requestUrl.startsWith("https://api.github.com/")) return metadata();
+			if (requestUrl === url) {
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						async start(controller) {
+							controller.enqueue(payload.subarray(0, 1024));
+							aWroteFirstChunk.resolve();
+							await letAFinish.promise;
+							controller.enqueue(payload.subarray(1024));
+							controller.close();
+						},
+					}),
+				);
+			}
+			throw new Error(`Unexpected request: ${requestUrl}`);
+		};
+
+		const runA = updateViaBinaryAt(targetPath, version, {
+			binaryName,
+			fetchImpl: slowFetch,
+			verifyInstalledVersion: verify,
+		});
+		await aWroteFirstChunk.promise;
+		await updateViaBinaryAt(targetPath, version, {
+			binaryName,
+			fetchImpl: fastFetch,
+			verifyInstalledVersion: verify,
+		});
+		letAFinish.resolve();
+		await runA;
+
+		expect(await Bun.file(targetPath).bytes()).toEqual(new Uint8Array(payload));
+		const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
+		expect(residue).toEqual([]);
+	});
+
+	// Regression: a failed verification must still roll back its own backup even
+	// when another update completes while it is held. The per-target lock
+	// serializes the swap + sweep, so the concurrent run's sweep cannot reclaim
+	// the live backup before the rollback renames it back.
+	it("rolls back its backup when verification fails while another update runs", async () => {
+		const { dir, targetPath } = await prepare();
+
+		const enteredVerify = Promise.withResolvers<void>();
+		const releaseVerify = Promise.withResolvers<void>();
+		const failingVerify = async () => {
+			enteredVerify.resolve();
+			await releaseVerify.promise;
+			return { ok: false, actual: "0.0.0", path: targetPath };
+		};
+
+		const runA = updateViaBinaryAt(targetPath, version, {
+			binaryName,
+			fetchImpl: fastFetch,
+			verifyInstalledVersion: failingVerify,
+		});
+		await enteredVerify.promise;
+		const runB = updateViaBinaryAt(targetPath, version, {
+			binaryName,
+			fetchImpl: fastFetch,
+			verifyInstalledVersion: verify,
+		});
+		releaseVerify.resolve();
+		await expect(runA).rejects.toThrow(/still reports 0\.0\.0 \(expected 999\.0\.0\)/);
+		await runB;
+
+		expect(await Bun.file(targetPath).bytes()).toEqual(new Uint8Array(payload));
+		const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".bak") || name.endsWith(".new"));
+		expect(residue).toEqual([]);
 	});
 });

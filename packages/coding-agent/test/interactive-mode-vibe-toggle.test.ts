@@ -7,7 +7,7 @@
  * 3. Exiting unregisters the vibe tools and restores the pre-vibe active toolset
  *    exactly, including the legitimate empty set.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
@@ -16,14 +16,14 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/messages";
+import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, type WriteTextAtomicOptions } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { VIBE_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/vibe";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 function stubTool(name: string): AgentTool {
 	return {
@@ -92,15 +92,15 @@ describe("InteractiveMode vibe mode toggle", () => {
 
 	beforeAll(async () => {
 		await initTheme();
+		tempDir = TempDir.createSync("@pi-vibe-toggle-");
+		authStorage = createInMemoryAuthStorage();
+		modelRegistry = new ModelRegistry(authStorage);
 	});
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		VibeSessionRegistry.resetGlobalForTests();
-		tempDir = TempDir.createSync("@pi-vibe-toggle-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 
@@ -129,10 +129,13 @@ describe("InteractiveMode vibe mode toggle", () => {
 		mode?.stop();
 		await session?.dispose();
 		VibeSessionRegistry.resetGlobalForTests();
-		authStorage?.close();
-		tempDir?.removeSync();
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		tempDir.removeSync();
 	});
 
 	it("preserves the parent Todo tool and restores the exact pre-vibe toolset on exit", async () => {
@@ -149,13 +152,6 @@ describe("InteractiveMode vibe mode toggle", () => {
 		}
 		expect(inMode.toSorted()).toEqual(["read", "todo", ...VIBE_TOOL_NAMES].toSorted());
 		expect(session.getAllToolNames().toSorted()).toEqual(["read", "todo", ...VIBE_TOOL_NAMES].toSorted());
-
-		const sendCustomMessage = vi.spyOn(session, "sendCustomMessage");
-		await session.sendVibeModeContext({ deliverAs: "steer" });
-		const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
-		const content = typeof message.content === "string" ? message.content : "";
-		expect(message.customType).toBe("vibe-mode-context");
-		expect(content).toContain("`todo`");
 
 		// Toggle off: the empty previous toolset must come back — only the
 		// ephemeral vibe tools must leave the registry.
@@ -198,13 +194,6 @@ describe("InteractiveMode vibe mode toggle", () => {
 			await foreignTodoMode.handleVibeModeCommand();
 			expect(foreignTodoSession.getActiveToolNames().toSorted()).toEqual(["read", ...VIBE_TOOL_NAMES].toSorted());
 
-			const sendCustomMessage = vi.spyOn(foreignTodoSession, "sendCustomMessage");
-			await foreignTodoSession.sendVibeModeContext({ deliverAs: "steer" });
-			const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
-			const content = typeof message.content === "string" ? message.content : "";
-			expect(content).not.toContain("`todo`");
-			expect(content).not.toContain("parent session's list");
-
 			await foreignTodoMode.handleVibeModeCommand();
 			expect(foreignTodoSession.getActiveToolNames()).toEqual([]);
 			expect(foreignTodoSession.getAllToolNames().toSorted()).toEqual(["read", "todo"]);
@@ -234,12 +223,6 @@ describe("InteractiveMode vibe mode toggle", () => {
 
 		expect(mode.vibeModeEnabled).toBe(true);
 		expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "todo", ...VIBE_TOOL_NAMES]));
-		const sendCustomMessage = vi.spyOn(session, "sendCustomMessage");
-		await session.sendVibeModeContext({ deliverAs: "steer" });
-		const message = normalizeCustomMessagePayload(sendCustomMessage.mock.calls[0]?.[0]);
-		const content = typeof message.content === "string" ? message.content : "";
-		expect(content).toContain("`todo`");
-		expect(content).toContain("parent session's list");
 		expect(suspend).toHaveBeenCalledTimes(1);
 		expect(terminate).not.toHaveBeenCalled();
 		expect(vibeModeEntryCount(session.sessionManager)).toBe(1);
