@@ -920,7 +920,9 @@ describe("antigravity discovery collapsing", () => {
 			fetcher: defaultFetcher,
 		});
 
-		expect(requestedUrls[0]).toContain(ANTIGRAVITY_PRIMARY_ENDPOINT);
+		const discoveryUrl = requestedUrls.find(url => url.includes("/v1internal:fetchAvailableModels"));
+		expect(discoveryUrl).toBeDefined();
+		expect(discoveryUrl).toContain(ANTIGRAVITY_PRIMARY_ENDPOINT);
 		expect(models?.[0]?.baseUrl).toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
 	});
 });

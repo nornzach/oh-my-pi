@@ -26,6 +26,7 @@ import {
 	resolveReleaseDist,
 	resolveReleaseRename,
 	resolveUpdateMethodForTest,
+	resolveUpdateTargetFromPath,
 	shouldForceBinaryUpdate,
 	sweepStaleUpdateArtifacts,
 	updateViaBinaryAt,
@@ -39,7 +40,7 @@ import { getThemeByName, setThemeInstance } from "../src/modes/theme/theme";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-test-"));
+	const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-test-")));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -185,6 +186,89 @@ describe("update-cli install target detection", () => {
 		});
 
 		expect(method).toBe("npm");
+	});
+
+	it("updates the standalone binary behind a foreign npm-bin alias without replacing the alias", async () => {
+		const dir = await makeTempDir();
+		const npmBinDir = path.join(dir, ".npm-global", "bin");
+		const standalonePath = path.join(dir, ".local", "bin", "omp");
+		const aliasPath = path.join(npmBinDir, "omp");
+		await fs.mkdir(npmBinDir, { recursive: true });
+		await Bun.write(standalonePath, "binary");
+		await fs.symlink(standalonePath, aliasPath);
+
+		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+			allowPackageManagers: true,
+			npmBinDir,
+		});
+
+		expect(target).toEqual({ method: "binary", path: standalonePath, replacesSymlink: false });
+		expect(await fs.readlink(aliasPath)).toBe(standalonePath);
+	});
+
+	it("keeps an npm-linked checkout under npm management instead of overwriting its resolved script", async () => {
+		const dir = await makeTempDir();
+		const npmPrefix = path.join(dir, ".npm-global");
+		const npmBinDir = path.join(npmPrefix, "bin");
+		const packagePath = path.join(npmPrefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
+		const checkoutPath = path.join(dir, "checkout");
+		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+		const aliasPath = path.join(npmBinDir, "omp");
+		await fs.mkdir(npmBinDir, { recursive: true });
+		await fs.mkdir(path.dirname(packagePath), { recursive: true });
+		await Bun.write(checkoutCli, "linked checkout");
+		await fs.symlink(checkoutPath, packagePath, "junction");
+		await fs.symlink(path.relative(npmBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+
+		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+			allowPackageManagers: true,
+			npmBinDir,
+		});
+
+		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+		expect(target).toEqual({ method: "npm", path: aliasPath });
+		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
+	});
+
+	it("treats a Bun-bin alias into ~/.bun/custom as foreign", async () => {
+		const dir = await makeTempDir();
+		const bunDir = path.join(dir, ".bun");
+		const bunBinDir = path.join(bunDir, "bin");
+		const standalonePath = path.join(bunDir, "custom", "omp");
+		const aliasPath = path.join(bunBinDir, "omp");
+		await fs.mkdir(bunBinDir, { recursive: true });
+		await Bun.write(standalonePath, "binary");
+		await fs.symlink(path.relative(bunBinDir, standalonePath), aliasPath);
+
+		const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
+			allowPackageManagers: true,
+		});
+
+		expect(target).toEqual({ method: "binary", path: standalonePath, replacesSymlink: false });
+	});
+
+	it("keeps a split-root Bun-linked checkout under Bun management instead of overwriting its script", async () => {
+		const dir = await makeTempDir();
+		const bunBinDir = path.join(dir, "bun-bin");
+		const bunGlobalDir = path.join(dir, "bun-global");
+		const packagePath = path.join(bunGlobalDir, "node_modules", "@oh-my-pi", "pi-coding-agent");
+		const checkoutPath = path.join(dir, "checkout");
+		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+		const aliasPath = path.join(bunBinDir, "omp");
+		await fs.mkdir(bunBinDir, { recursive: true });
+		await fs.mkdir(path.dirname(packagePath), { recursive: true });
+		await Bun.write(checkoutCli, "linked checkout");
+		await fs.symlink(checkoutPath, packagePath, "junction");
+		await fs.symlink(path.relative(bunBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+
+		const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
+			allowPackageManagers: true,
+			bunGlobalDir,
+		});
+
+		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+		expect(target).toEqual({ method: "bun", path: aliasPath });
+		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
 	});
 
 	it("uses binary update when prioritized omp is outside bun global bin", () => {
@@ -437,13 +521,23 @@ describe("update-cli bun install command", () => {
 		expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
 	});
 
-	it("derives global node_modules from supported bun global locations", () => {
-		expect(resolveBunGlobalNodeModulesDirFromLocations(path.join("home", ".bun", "bin"), undefined)).toBe(
-			path.join("home", ".bun", "install", "global", "node_modules"),
-		);
+	it("derives global node_modules from supported Bun locations with the explicit global directory taking precedence", () => {
 		expect(
-			resolveBunGlobalNodeModulesDirFromLocations(undefined, path.join("home", ".bun", "install", "cache")),
+			resolveBunGlobalNodeModulesDirFromLocations({
+				globalBinDir: path.join("home", ".bun", "bin"),
+			}),
 		).toBe(path.join("home", ".bun", "install", "global", "node_modules"));
+		expect(
+			resolveBunGlobalNodeModulesDirFromLocations({
+				cacheDir: path.join("home", ".bun", "install", "cache"),
+			}),
+		).toBe(path.join("home", ".bun", "install", "global", "node_modules"));
+		expect(
+			resolveBunGlobalNodeModulesDirFromLocations({
+				globalDir: path.join("root", "bun-global"),
+				globalBinDir: path.join("root", "bun-bin"),
+			}),
+		).toBe(path.join("root", "bun-global", "node_modules"));
 	});
 });
 

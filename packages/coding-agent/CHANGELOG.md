@@ -14,6 +14,22 @@
 - Fixed remote queue operations addressing raw agent-queue positions instead of the visible user-message order, which could misorder entries and detach hidden image or magic-keyword companions from their prompt; malformed queue-management RPC inputs are now rejected before they can reorder or clear queues.
 - Fixed RPC and RPC UI startup without a configured model so clients can open provider setup and complete first-run configuration.
 - Fixed provider inventory RPC metadata so clients can distinguish registered credential flows from editable custom model-provider configuration, including API-key providers such as Tavily and DeepSeek.
+## [17.3.3] - 2026-08-14
+
+### Fixed
+
+- Automatically continued Gemini turns that stopped after thinking without final output, using a bounded final-answer reminder instead of exhausting generic retries.
+- Retried Gemini `MALFORMED_FUNCTION_CALL` failures when every emitted tool call was proven unexecuted, while preserving real tool-result and visible-output replay guards.
+- Kept current terminal retry errors in one pinned banner with attempt context while surfacing local continuation failures instead of stale provider errors.
+
+## [17.3.2] - 2026-08-13
+
+### Fixed
+
+- Fixed the parent TUI stalling after a subagent submits its result until terminal focus or resize wakes the event loop ([#8462](https://github.com/can1357/oh-my-pi/issues/8462)).
+- Fixed `omp update` misclassifying foreign npm/bun bin aliases while preserving package-manager ownership for globally linked checkouts ([#8468](https://github.com/can1357/oh-my-pi/issues/8468)).
+- Fixed `read` hashline headers collapsing nested in-workspace paths to the bare basename, which let a same-basename file at the session cwd capture a verbatim follow-up `edit` and deterministically reject it with `hash is not from this session`. Headers now retain the workspace-relative path (e.g. `[src/settings.json#0063]`) ([#8482](https://github.com/can1357/oh-my-pi/issues/8482)).
+
 ## [17.3.1] - 2026-08-13
 
 ### Fixed

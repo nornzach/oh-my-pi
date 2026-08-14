@@ -77,6 +77,14 @@ function thinkingOnlyStop(): MockResponse {
 	};
 }
 
+function emptyProviderResponse(): MockResponse {
+	return {
+		content: [{ type: "thinking", thinking: "I finished reasoning but omitted the final answer." }],
+		stopReason: "error",
+		errorMessage: "Cloud Code Assist API returned a thought-only response without final output",
+	};
+}
+
 function signedThinkingOnlyStop(): MockResponse {
 	const content: ThinkingContent = { type: "thinking", thinking: "", thinkingSignature: "nonempty" };
 	return {
@@ -243,6 +251,67 @@ describe("AgentSession empty stop guard", () => {
 		expect(assistantText(session.agent.state.messages)).toContain("finished after thinking-only retry");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
 		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+	});
+
+	it("continues with an output reminder after a Cloud Code Assist empty response", async () => {
+		const { session, mock } = await createHarness([
+			emptyProviderResponse(),
+			{ content: ["finished after provider-empty retry"], stopReason: "stop" },
+		]);
+
+		await session.prompt("finish the response");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(assistantText(session.agent.state.messages)).toContain("finished after provider-empty retry");
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+		expect(
+			session.agent.state.messages.some(message => message.role === "assistant" && message.stopReason === "error"),
+		).toBe(false);
+	});
+
+	it("caps provider-empty recovery without consuming generic retries and accepts the next prompt", async () => {
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { session, mock } = await createHarness(
+			[emptyProviderResponse(), emptyProviderResponse(), emptyProviderResponse(), emptyProviderResponse()],
+			{
+				"retry.enabled": true,
+				"retry.baseDelayMs": 5,
+				"retry.maxDelayMs": 5_000,
+				"retry.maxRetries": 2,
+			},
+		);
+		const retryStartEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_start" }>> = [];
+		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await expectPromptCompletes(session.prompt("finish the response after reasoning"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
+		expect(retryStartEvents).toHaveLength(0);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+		});
+		expect(retryEndEvents[0]?.finalError).toContain("no final output");
+		expect(session.isRetrying).toBe(false);
+		expect(session.retryAttempt).toBe(0);
+
+		mock.push({ content: ["fresh final answer"], stopReason: "stop" });
+		await expectPromptCompletes(session.prompt("continue"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(5);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(session.isRetrying).toBe(false);
+		expect(assistantText(session.agent.state.messages)).toContain("fresh final answer");
 	});
 
 	it("accepts a signed thinking-only stop without retrying", async () => {
