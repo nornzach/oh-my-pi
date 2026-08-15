@@ -213,8 +213,10 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("RPC mode", () => {
 	test("should set and get thinking level", async () => {
 		await client.start();
 
-		// Set thinking level
-		await client.setThinkingLevel(Effort.High);
+		// The mutation receipt is authoritative so event-driven hosts can update
+		// immediately even if the matching async event is coalesced or missed.
+		const receipt = await client.setThinkingLevel(Effort.High);
+		expect(receipt).toEqual({ thinkingLevel: Effort.High, thinkingConfigured: Effort.High });
 
 		// Verify via state
 		const state = await client.getState();

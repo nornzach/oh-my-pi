@@ -442,6 +442,12 @@ export interface RpcSessionState {
 	kind?: "chat";
 }
 
+/** Authoritative selector/effective pair returned after set_thinking_level. */
+export interface RpcThinkingLevelState {
+	thinkingLevel: ThinkingLevel | undefined;
+	thinkingConfigured: ConfiguredThinkingLevel | undefined;
+}
+
 export interface RpcAvailableSlashCommand {
 	name: string;
 	aliases?: string[];
@@ -1607,7 +1613,13 @@ export type RpcResponse =
 	  }
 
 	// Thinking
-	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_thinking_level";
+			success: true;
+			data: RpcThinkingLevelState;
+	  }
 	| {
 			id?: string;
 			type: "response";

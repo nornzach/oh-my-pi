@@ -1661,7 +1661,10 @@ export async function runRpcMode(
 
 			case "set_thinking_level": {
 				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
+				return success(id, "set_thinking_level", {
+					thinkingLevel: session.thinkingLevel,
+					thinkingConfigured: session.configuredThinkingLevel(),
+				});
 			}
 
 			case "cycle_thinking_level": {

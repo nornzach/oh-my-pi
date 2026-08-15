@@ -12,6 +12,7 @@ import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
 import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
+import type { ConfiguredThinkingLevel } from "../../thinking";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
@@ -39,6 +40,7 @@ import type {
 	RpcSubagentProgressFrame,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
+	RpcThinkingLevelState,
 } from "./rpc-types";
 
 /** Distributive Omit that works with union types */
@@ -693,8 +695,9 @@ export class RpcClient {
 	/**
 	 * Set thinking level.
 	 */
-	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
-		await this.#send({ type: "set_thinking_level", level });
+	async setThinkingLevel(level: ConfiguredThinkingLevel): Promise<RpcThinkingLevelState> {
+		const response = await this.#send({ type: "set_thinking_level", level });
+		return this.#getData(response);
 	}
 
 	/**
