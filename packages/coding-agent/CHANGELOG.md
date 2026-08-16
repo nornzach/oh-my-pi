@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed RPC provider/model inventories staying stale after cross-process credential or `models.yml` changes, preserved refresh requests that arrive during discovery, emitted completion updates after bounded responses, surfaced provider discovery state, and added native authentication, pagination, names, capabilities, and token limits for Anthropic Messages-compatible model discovery.
 - Fixed `set_thinking_level` RPC success responses omitting the effective and configured levels, which left event-driven clients unable to confirm the applied selector when an update event was delayed or coalesced.
 - Fixed fresh RPC sessions re-populating their subagent roster from process-global refs retained by the previous session.
 - Fixed RPC session management so an idle stored session can be renamed without switching the caller into it, and session identity updates are emitted after rename, switch, fork, branch, or reset operations.

@@ -135,6 +135,7 @@ import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
 import type {
+	RpcAvailableModelsResult,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -146,6 +147,7 @@ import type {
 	RpcHostUriCancelRequest,
 	RpcHostUriRequest,
 	RpcHostUriResult,
+	RpcModelCatalogUpdateFrame,
 	RpcReloadPluginsResult,
 	RpcResponse,
 	RpcSessionState,
@@ -1279,11 +1281,52 @@ export async function runRpcMode(
 	// partial) models and unblock the queue; the refresh keeps running in the
 	// background and the next listing will reflect it once it completes.
 	const DISCOVERY_WAIT_MS = 4_000;
-	const awaitDiscoveryBounded = (): Promise<void> =>
-		Promise.race([
-			session.modelRegistry.awaitBackgroundRefresh(),
-			new Promise<void>(resolve => setTimeout(resolve, DISCOVERY_WAIT_MS)),
-		]);
+	const awaitDiscoveryBounded = async (refresh: Promise<void>): Promise<boolean> => {
+		const timeout = Promise.withResolvers<false>();
+		const timer = setTimeout(() => timeout.resolve(false), DISCOVERY_WAIT_MS);
+		try {
+			return await Promise.race([refresh.then(() => true as const), timeout.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	const modelCatalogSnapshot = (refreshPending: boolean): RpcAvailableModelsResult => ({
+		models: session.getAvailableModels(),
+		discoveryStates: session.modelRegistry.getProviderDiscoveryStates(),
+		refreshPending,
+		generation: session.modelRegistry.getCatalogGeneration(),
+	});
+	const modelCatalogUpdateFrame = (): RpcModelCatalogUpdateFrame => ({
+		type: "model_catalog_update",
+		...modelCatalogSnapshot(false),
+		...buildRpcProvidersResult(session),
+	});
+	let lastCatalogEventGeneration = -1;
+	const emitModelCatalogUpdate = (): void => {
+		const frame = modelCatalogUpdateFrame();
+		if (frame.generation <= lastCatalogEventGeneration) return;
+		lastCatalogEventGeneration = frame.generation;
+		output(frame);
+	};
+	let watchedCatalogRefresh: Promise<void> | undefined;
+	const watchCatalogRefresh = (refresh: Promise<void>): void => {
+		if (watchedCatalogRefresh === refresh) return;
+		watchedCatalogRefresh = refresh;
+		void refresh.finally(() => {
+			if (watchedCatalogRefresh === refresh) watchedCatalogRefresh = undefined;
+			emitModelCatalogUpdate();
+		});
+	};
+	const refreshModelCatalog = async (forceRefresh: boolean): Promise<RpcAvailableModelsResult> => {
+		const authGeneration = session.modelRegistry.authStorage.getGeneration();
+		await session.modelRegistry.authStorage.reload();
+		const authChanged = session.modelRegistry.authStorage.getGeneration() !== authGeneration;
+		session.modelRegistry.refreshInBackground(forceRefresh || authChanged ? "online" : "online-if-uncached");
+		const refresh = session.modelRegistry.awaitBackgroundRefresh();
+		const completed = await awaitDiscoveryBounded(refresh);
+		if (!completed) watchCatalogRefresh(refresh);
+		return modelCatalogSnapshot(!completed);
+	};
 
 	// Workspace-directory mutations surface streaming refusals with the
 	// machine-readable "busy" code (TUI "Cannot … while streaming." parity);
@@ -1617,7 +1660,7 @@ export async function runRpcMode(
 					// populate seconds after session ready. Models already in
 					// the bundled catalog skip this await entirely so the RPC
 					// queue is not stalled behind unrelated discovery.
-					await awaitDiscoveryBounded();
+					await awaitDiscoveryBounded(session.modelRegistry.awaitBackgroundRefresh());
 					models = session.getAvailableModels();
 					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
 				}
@@ -1650,9 +1693,8 @@ export async function runRpcMode(
 			}
 
 			case "get_available_models": {
-				await awaitDiscoveryBounded();
-				const models = session.getAvailableModels();
-				return success(id, "get_available_models", { models });
+				const result = await refreshModelCatalog(command.forceRefresh === true);
+				return success(id, "get_available_models", result);
 			}
 
 			// =================================================================
@@ -2406,6 +2448,10 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "get_login_providers": {
+				// Every GUI tab owns a separate sidecar/AuthStorage snapshot. Reload
+				// before projecting auth state so a login/logout in another tab is
+				// visible without restarting this sidecar.
+				await session.modelRegistry.authStorage.reload();
 				const providers = getOAuthProviders().map(provider => ({
 					id: provider.id,
 					name: provider.name,
@@ -2458,6 +2504,7 @@ export async function runRpcMode(
 					// re-runs discovery instead of reusing a fresh authoritative cache
 					// row (#5780).
 					await session.modelRegistry.refreshProvider(command.providerId, "online");
+					emitModelCatalogUpdate();
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
 					return error(id, "login", err instanceof Error ? err.message : String(err));
@@ -2471,6 +2518,10 @@ export async function runRpcMode(
 			case "logout": {
 				try {
 					await session.modelRegistry.authStorage.logout(command.providerId);
+					// Recompose the provider without making an authenticated network
+					// request so catalog/auth filtering changes are visible immediately.
+					await session.modelRegistry.refreshProvider(command.providerId, "offline");
+					emitModelCatalogUpdate();
 					return success(id, "logout", { providerId: command.providerId });
 				} catch (err: unknown) {
 					return error(id, "logout", err instanceof Error ? err.message : String(err));
@@ -2531,7 +2582,8 @@ export async function runRpcMode(
 
 			case "get_providers": {
 				try {
-					const result = buildRpcProvidersResult(session);
+					const catalog = await refreshModelCatalog(command.forceRefresh === true);
+					const result = { ...buildRpcProvidersResult(session), ...catalog };
 					return success(id, "get_providers", result);
 				} catch (err: unknown) {
 					return error(id, "get_providers", err instanceof Error ? err.message : String(err));

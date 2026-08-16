@@ -36,6 +36,7 @@ import type { ProviderDiscovery } from "./models-config-schema";
 // "socket connection was closed unexpectedly").
 export const DISCOVERY_DEFAULT_CONTEXT_WINDOW = OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 export const DISCOVERY_DEFAULT_MAX_TOKENS = OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
+const MAX_MODEL_DISCOVERY_PAGES = 100;
 
 /**
  * Run `fn` with a hard deadline while also signalling cooperative transports
@@ -151,6 +152,8 @@ export interface DiscoveryProviderConfig {
 	api: Api;
 	baseUrl?: string;
 	headers?: Record<string, string>;
+	/** Force bearer auth even when the selected protocol has a native key header. */
+	authHeader?: boolean;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	discovery: ProviderDiscovery;
@@ -757,8 +760,31 @@ export async function discoverOpenAIModelsList(
 	const modelsUrl = `${baseUrl}/models`;
 
 	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
+	if (
+		providerConfig.api === "anthropic-messages" &&
+		!Object.keys(baseHeaders).some(name => name.toLowerCase() === "anthropic-version")
+	) {
+		baseHeaders["anthropic-version"] = "2023-06-01";
+	}
 	let headers = baseHeaders;
 	const timeoutMs = providerConfig.discovery.timeoutMs ?? 10_000;
+	interface ModelListItem {
+		id?: string;
+		display_name?: unknown;
+		max_model_len?: unknown;
+		context_length?: unknown;
+		max_input_tokens?: unknown;
+		max_tokens?: unknown;
+		capabilities?: unknown;
+		input?: unknown;
+		input_modalities?: unknown;
+		architecture?: unknown;
+	}
+	interface ModelListPayload {
+		data?: ModelListItem[];
+		has_more?: unknown;
+		last_id?: unknown;
+	}
 	const attempt = async (h: Record<string, string>) => {
 		const nativeMetadataPromise =
 			providerConfig.discovery.type === "lm-studio"
@@ -768,24 +794,29 @@ export async function discoverOpenAIModelsList(
 				: Promise.resolve(null);
 		const [payload, nativeMetadata] = await Promise.all([
 			withTimeoutSignal(timeoutMs, async signal => {
-				const res = await ctx.fetch(modelsUrl, {
-					headers: h,
-					signal,
-				});
-				if (!res.ok) {
-					throw new Error(`HTTP ${res.status} from ${modelsUrl}`);
+				const data: ModelListItem[] = [];
+				const seenCursors = new Set<string>();
+				let pageUrl = modelsUrl;
+				for (let page = 0; page < MAX_MODEL_DISCOVERY_PAGES; page += 1) {
+					const res = await ctx.fetch(pageUrl, { headers: h, signal });
+					if (!res.ok) throw new Error(`HTTP ${res.status} from ${pageUrl}`);
+					const payload = (await res.json()) as ModelListPayload;
+					data.push(...(Array.isArray(payload.data) ? payload.data : []));
+					if (providerConfig.api !== "anthropic-messages" || payload.has_more !== true) {
+						headers = h;
+						return { data } satisfies ModelListPayload;
+					}
+					const fallbackCursor = data.at(-1)?.id;
+					const cursor = typeof payload.last_id === "string" ? payload.last_id : fallbackCursor;
+					if (!cursor || seenCursors.has(cursor)) {
+						throw new Error(`Invalid pagination cursor from ${pageUrl}`);
+					}
+					seenCursors.add(cursor);
+					const nextUrl = new URL(modelsUrl);
+					nextUrl.searchParams.set("after_id", cursor);
+					pageUrl = nextUrl.toString();
 				}
-				headers = h;
-				return (await res.json()) as {
-					data?: Array<{
-						id?: string;
-						max_model_len?: unknown;
-						context_length?: unknown;
-						input?: unknown;
-						input_modalities?: unknown;
-						architecture?: unknown;
-					}>;
-				};
+				throw new Error(`Model discovery exceeded ${MAX_MODEL_DISCOVERY_PAGES} pages from ${modelsUrl}`);
 			}),
 			nativeMetadataPromise,
 		]);
@@ -793,7 +824,18 @@ export async function discoverOpenAIModelsList(
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const [payload, nativeMetadata] = apiKey
-		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		? await withAuth(apiKey, key => {
+				if (providerConfig.api !== "anthropic-messages" || providerConfig.authHeader === true) {
+					return attempt({ ...baseHeaders, Authorization: `Bearer ${key}` });
+				}
+				// Anthropic's Messages-compatible model-list endpoint uses the same
+				// authentication contract as /v1/messages. Preserve custom headers,
+				// replace any stale key case-insensitively, and supply the required
+				// version unless the user configured one explicitly above.
+				const anthropicHeaders = new Headers(baseHeaders);
+				anthropicHeaders.set("x-api-key", key);
+				return attempt(Object.fromEntries(anthropicHeaders.entries()));
+			})
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
 	const references = getBundledModelReferenceIndex();
@@ -816,17 +858,25 @@ export async function discoverOpenAIModelsList(
 		const contextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
+			toPositiveNumberOrUndefined(item.max_input_tokens) ??
 			nativeMetadataForModel?.contextWindow ??
 			reference?.contextWindow ??
 			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+		const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
+		const thinkingCapability = capabilities?.thinking ?? capabilities?.reasoning ?? capabilities?.extended_thinking;
+		const supportsThinking =
+			thinkingCapability === true || (isRecord(thinkingCapability) && thinkingCapability.supported === true);
+		const displayName =
+			typeof item.display_name === "string" && item.display_name.trim() ? item.display_name : undefined;
+		const advertisedMaxTokens = toPositiveNumberOrUndefined(item.max_tokens);
 		discovered.push(
 			buildModel({
 				id,
-				name: reference?.name ?? id,
+				name: displayName ?? reference?.name ?? id,
 				api: providerConfig.api,
 				provider: providerConfig.provider,
 				baseUrl,
-				reasoning: reference?.reasoning ?? false,
+				reasoning: supportsThinking || reference?.reasoning === true,
 				thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
 				input: nativeMetadataForModel?.input ??
 					extractOpenAIModelsListInputCapabilities(item) ??
@@ -840,7 +890,10 @@ export async function discoverOpenAIModelsList(
 				// Cap the reference's output limit at the discovered context
 				// window so an ID collision with a larger bundled model can
 				// never request more tokens than the local runtime advertises.
-				maxTokens: Math.min(reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api), contextWindow),
+				maxTokens: Math.min(
+					advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api),
+					contextWindow,
+				),
 				headers,
 				compat: {
 					supportsStore: false,

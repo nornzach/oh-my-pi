@@ -138,6 +138,76 @@ describe("issue #970 custom provider discovery", () => {
 		expect(deepseek?.maxTokens).toBe(32_768);
 	});
 
+	test("discovers Anthropic Messages-compatible models with native authentication headers", async () => {
+		fs.writeFileSync(
+			modelsPath,
+			[
+				"providers:",
+				"  claude-proxy:",
+				"    baseUrl: https://anthropic.example.com/v1",
+				"    apiKey: sk-ant-test",
+				"    api: anthropic-messages",
+				"    discovery:",
+				"      type: openai-models-list",
+			].join("\n"),
+		);
+
+		const requestedUrls: string[] = [];
+		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (
+			input,
+			init,
+		) => {
+			const url = String(input);
+			requestedUrls.push(url);
+			const headers = new Headers(init?.headers);
+			expect(headers.get("x-api-key")).toBe("sk-ant-test");
+			expect(headers.get("anthropic-version")).toBe("2023-06-01");
+			expect(headers.get("authorization")).toBeNull();
+			const payload = url.includes("after_id=")
+				? {
+						data: [
+							{
+								id: "claude-reasoning-custom",
+								display_name: "Claude Reasoning Custom",
+								capabilities: { thinking: { supported: true } },
+							},
+						],
+						has_more: false,
+					}
+				: {
+						data: [
+							{
+								id: "claude-sonnet-custom",
+								display_name: "Claude Sonnet Custom",
+								max_input_tokens: 200_000,
+								max_tokens: 64_000,
+							},
+						],
+						has_more: true,
+						last_id: "claude-sonnet-custom",
+					};
+			return new Response(JSON.stringify(payload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		};
+
+		const registry = new ModelRegistryImpl(authStorage, modelsPath, { fetch: fetchMock });
+		await registry.refreshProvider("claude-proxy");
+
+		expect(registry.getProviderDiscoveryState("claude-proxy")).toMatchObject({ status: "ok" });
+		const model = registry.find("claude-proxy", "claude-sonnet-custom");
+		expect(model?.api).toBe("anthropic-messages");
+		expect(model?.name).toBe("Claude Sonnet Custom");
+		expect(model?.contextWindow).toBe(200_000);
+		expect(model?.maxTokens).toBe(64_000);
+		expect(registry.find("claude-proxy", "claude-reasoning-custom")?.reasoning).toBe(true);
+		expect(requestedUrls).toEqual([
+			"https://anthropic.example.com/v1/models",
+			"https://anthropic.example.com/v1/models?after_id=claude-sonnet-custom",
+		]);
+	});
+
 	test("shows a provider-tab hint when discovery succeeds but returns zero models", async () => {
 		installTestTheme();
 		const hub = await createHub({

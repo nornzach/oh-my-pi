@@ -7,6 +7,7 @@
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { ProviderDiscoveryState } from "../../config/model-provider-discovery";
 import type { BashResult } from "../../exec/bash-executor";
 import type {
 	ContextUsage,
@@ -69,7 +70,7 @@ export type RpcCommand =
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
-	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_available_models"; forceRefresh?: boolean }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
@@ -145,7 +146,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_setting"; path: string; value: unknown }
 
 	// Providers
-	| { id?: string; type: "get_providers" }
+	| { id?: string; type: "get_providers"; forceRefresh?: boolean }
 
 	// Plan mode
 	| { id?: string; type: "set_plan_mode"; enabled: boolean }
@@ -753,6 +754,23 @@ export interface RpcProviderInfo {
 
 export interface RpcProvidersResult {
 	providers: RpcProviderInfo[];
+	models: Model[];
+	discoveryStates: ProviderDiscoveryState[];
+	refreshPending: boolean;
+	generation: number;
+}
+
+export interface RpcAvailableModelsResult {
+	models: Model[];
+	discoveryStates: ProviderDiscoveryState[];
+	refreshPending: boolean;
+	generation: number;
+}
+
+/** Emitted after a bounded model-listing response when discovery finishes later. */
+export interface RpcModelCatalogUpdateFrame extends RpcAvailableModelsResult {
+	type: "model_catalog_update";
+	providers: RpcProviderInfo[];
 }
 
 export interface RpcPlanModeState {
@@ -1304,6 +1322,8 @@ export interface RpcSubagentSnapshot {
 	agentSource?: AgentProgress["agentSource"];
 	description?: string;
 	status: string;
+	/** False when a registry ref claims running but has no turn in flight. */
+	live?: boolean;
 	task?: string;
 	assignment?: string;
 	sessionFile?: string;
@@ -1609,7 +1629,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_available_models";
 			success: true;
-			data: { models: Model[] };
+			data: RpcAvailableModelsResult;
 	  }
 
 	// Thinking

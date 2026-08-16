@@ -199,7 +199,8 @@ export class RpcSubagentRegistry {
 		// Hub is registry-backed, so merge idle, parked, aborted, and advisor
 		// refs here as well; otherwise revive and read-only advisor transcripts
 		// are impossible to discover from a GUI attachment.
-		for (const ref of AgentRegistry.global().list()) {
+		const agentRegistry = AgentRegistry.global();
+		for (const ref of agentRegistry.list()) {
 			if (ref.id === MAIN_AGENT_ID || ref.kind === "main") continue;
 			// Session changes clear the RPC roster but deliberately keep process-
 			// global refs alive for lifecycle cleanup/history. Do not merge those
@@ -219,6 +220,7 @@ export class RpcSubagentRegistry {
 				agentSource: existing?.agentSource,
 				description: existing?.description,
 				status: ref.status,
+				live: ref.status === "running" ? agentRegistry.isRunning(ref) : undefined,
 				task: existing?.task ?? ref.activity,
 				assignment: existing?.assignment,
 				sessionFile: ref.sessionFile ?? existing?.sessionFile,

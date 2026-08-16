@@ -20,7 +20,6 @@ import {
 import type { AgentSession } from "../../session/agent-session";
 import type {
 	RpcProviderInfo,
-	RpcProvidersResult,
 	RpcSettingEntry,
 	RpcSettingsSchemaResult,
 	RpcUsageLimit,
@@ -158,7 +157,7 @@ export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaRes
 // ============================================================================
 
 /** Enumerate configured providers with auth state and model counts. */
-export function buildRpcProvidersResult(session: AgentSession): RpcProvidersResult {
+export function buildRpcProvidersResult(session: AgentSession): { providers: RpcProviderInfo[] } {
 	const authStorage = session.modelRegistry.authStorage;
 	const loginProviders = getOAuthProviders();
 	const loginIds = new Set(loginProviders.map(provider => provider.id));

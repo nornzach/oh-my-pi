@@ -461,6 +461,25 @@ describe("RPC subagent registry", () => {
 		}
 	});
 
+	test("marks a claimed-running registry ref without an attached turn as stale", () => {
+		AgentRegistry.resetGlobalForTests();
+		try {
+			const registry = new RpcSubagentRegistry(new EventBus(), () => {});
+			AgentRegistry.global().register({
+				id: "Zombie",
+				displayName: "Zombie",
+				kind: "sub",
+				session: null,
+				status: "running",
+			});
+
+			expect(registry.getSubagents()).toMatchObject([{ id: "Zombie", status: "running", live: false }]);
+			registry.dispose();
+		} finally {
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
 	test("gates raw subagent events behind the events subscription level", () => {
 		const eventBus = new EventBus();
 		const frames: RpcSubagentFrame[] = [];

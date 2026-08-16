@@ -128,28 +128,32 @@ describe("ModelRegistry", () => {
 		await p;
 	});
 
-	test("refreshInBackground deduplicates: a second call while in-flight starts no new refresh", async () => {
-		// The guard `if (this.#backgroundRefresh) return` at the top of
-		// refreshInBackground prevents concurrent refreshes. A second call
-		// while the first is still pending must not invoke refresh() again.
+	test("refreshInBackground coalesces in-flight requests into one trailing refresh", async () => {
+		// A request arriving while discovery is running must not overlap the
+		// current fetch, but it also must not be dropped: models.yml/auth may have
+		// changed after the first refresh reloaded its snapshot.
 		const { promise, resolve } = Promise.withResolvers<void>();
-		const refreshSpy = vi.spyOn(registry, "refresh").mockReturnValue(promise);
+		const second = Promise.withResolvers<void>();
+		const refreshSpy = vi.spyOn(registry, "refresh").mockReturnValueOnce(promise).mockReturnValueOnce(second.promise);
 
 		registry.refreshInBackground();
 		registry.refreshInBackground();
-		registry.refreshInBackground();
+		registry.refreshInBackground("online");
 
 		expect(refreshSpy).toHaveBeenCalledTimes(1);
 
 		resolve();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(refreshSpy).toHaveBeenCalledTimes(2);
+		expect(refreshSpy).toHaveBeenNthCalledWith(2, "online");
+		second.resolve();
 		await registry.awaitBackgroundRefresh();
 
-		// After settle, #backgroundRefresh is cleared — a new call DOES start
-		// a fresh refresh.
+		// After the drain settles, a new request starts a new cycle.
 		const { promise: secondPromise, resolve: secondResolve } = Promise.withResolvers<void>();
 		refreshSpy.mockReturnValue(secondPromise);
 		registry.refreshInBackground();
-		expect(refreshSpy).toHaveBeenCalledTimes(2);
+		expect(refreshSpy).toHaveBeenCalledTimes(3);
 
 		secondResolve();
 		await registry.awaitBackgroundRefresh();

@@ -175,7 +175,10 @@ export class ModelRegistry {
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
 	#suppressedSelectors: Map<string, number> = new Map();
+	#refreshQueueTail: Promise<void> = Promise.resolve();
 	#backgroundRefresh?: Promise<void>;
+	#queuedBackgroundRefreshStrategy?: ModelRefreshStrategy;
+	#catalogGeneration = 0;
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -264,27 +267,58 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom config).
 	 */
 	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
-		this.#reloadStaticModels();
-		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
+		return this.#enqueueRefresh(async () => {
+			this.#reloadStaticModels();
+			this.#suppressedSelectors.clear();
+			await this.#refreshRuntimeDiscoveries(strategy);
+			this.#catalogGeneration += 1;
+		});
 	}
 
-	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
-		if (this.#backgroundRefresh) {
-			return;
-		}
-		const refreshPromise = this.refresh(strategy)
-			.catch(error => {
-				logger.warn("background model refresh failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			})
-			.finally(() => {
-				if (this.#backgroundRefresh === refreshPromise) {
-					this.#backgroundRefresh = undefined;
+	#enqueueRefresh(run: () => Promise<void>): Promise<void> {
+		const queued = this.#refreshQueueTail.then(run, run);
+		this.#refreshQueueTail = queued.catch(() => undefined);
+		return queued;
+	}
+
+	#mergeRefreshStrategy(
+		current: ModelRefreshStrategy | undefined,
+		requested: ModelRefreshStrategy,
+	): ModelRefreshStrategy {
+		if (current === "online" || requested === "online") return "online";
+		if (current === "online-if-uncached" || requested === "online-if-uncached") return "online-if-uncached";
+		return "offline";
+	}
+
+	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+		this.#queuedBackgroundRefreshStrategy = this.#mergeRefreshStrategy(
+			this.#queuedBackgroundRefreshStrategy,
+			strategy,
+		);
+		if (this.#backgroundRefresh) return this.#backgroundRefresh;
+
+		const drainPromise = (async () => {
+			while (this.#queuedBackgroundRefreshStrategy) {
+				const nextStrategy = this.#queuedBackgroundRefreshStrategy;
+				this.#queuedBackgroundRefreshStrategy = undefined;
+				try {
+					await this.refresh(nextStrategy);
+				} catch (error) {
+					logger.warn("background model refresh failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
 				}
-			});
-		this.#backgroundRefresh = refreshPromise;
+			}
+		})().finally(() => {
+			if (this.#backgroundRefresh === drainPromise) {
+				this.#backgroundRefresh = undefined;
+			}
+			if (this.#queuedBackgroundRefreshStrategy) {
+				this.refreshInBackground(this.#queuedBackgroundRefreshStrategy);
+			}
+		});
+		this.#backgroundRefresh = drainPromise;
+		return drainPromise;
 	}
 
 	/**
@@ -304,31 +338,34 @@ export class ModelRegistry {
 	 * remain swallowed by `refreshInBackground`'s existing `.catch`.
 	 */
 	async awaitBackgroundRefresh(): Promise<void> {
-		if (this.#backgroundRefresh) {
+		while (this.#backgroundRefresh) {
 			await this.#backgroundRefresh;
 		}
 	}
 
 	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		this.#reloadStaticModels();
-		for (const selector of this.#suppressedSelectors.keys()) {
-			if (selector.startsWith(`${providerId}/`)) {
-				this.#suppressedSelectors.delete(selector);
+		return this.#enqueueRefresh(async () => {
+			this.#reloadStaticModels();
+			for (const selector of this.#suppressedSelectors.keys()) {
+				if (selector.startsWith(`${providerId}/`)) {
+					this.#suppressedSelectors.delete(selector);
+				}
 			}
-		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
-		// #reloadStaticModels above may have rebuilt #models from static sources,
-		// dropping models previously discovered by OTHER runtime providers (their
-		// fetchDynamicModels results live only in #models + the SQLite cache, not
-		// in #loadModels' static inputs). Restore them from cache with the default
-		// online-if-uncached strategy: no network while their cached row is
-		// fresh, so the scoped refresh above stays the only forced fetch.
-		const otherRuntimeProviderIds = new Set(
-			[...this.#runtimeModelManagers.keys()].filter(runtimeId => runtimeId !== providerId),
-		);
-		if (otherRuntimeProviderIds.size > 0) {
-			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
-		}
+			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+			// #reloadStaticModels above may have rebuilt #models from static sources,
+			// dropping models previously discovered by OTHER runtime providers (their
+			// fetchDynamicModels results live only in #models + the SQLite cache, not
+			// in #loadModels' static inputs). Restore them from cache with the default
+			// online-if-uncached strategy: no network while their cached row is
+			// fresh, so the scoped refresh above stays the only forced fetch.
+			const otherRuntimeProviderIds = new Set(
+				[...this.#runtimeModelManagers.keys()].filter(runtimeId => runtimeId !== providerId),
+			);
+			if (otherRuntimeProviderIds.size > 0) {
+				await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
+			}
+			this.#catalogGeneration += 1;
+		});
 	}
 
 	/**
@@ -981,6 +1018,7 @@ export class ModelRegistry {
 					api: (providerConfig.api ?? "openai-completions") as Api,
 					baseUrl: providerConfig.baseUrl,
 					headers: resolvedProviderHeaders,
+					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 					remoteCompaction: providerConfig.remoteCompaction,
 					discovery: providerConfig.discovery,
@@ -1733,6 +1771,17 @@ export class ModelRegistry {
 
 	getProviderDiscoveryState(provider: string): ProviderDiscoveryState | undefined {
 		return this.#providerDiscoveryStates.get(provider);
+	}
+
+	getProviderDiscoveryStates(): ProviderDiscoveryState[] {
+		return [...this.#providerDiscoveryStates.values()].map(state => ({
+			...state,
+			models: [...state.models],
+		}));
+	}
+
+	getCatalogGeneration(): number {
+		return this.#catalogGeneration;
 	}
 
 	/**
