@@ -14,6 +14,7 @@ import type {
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 
+import { generateUnifiedDiffString } from "../edit/diff";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -99,6 +100,14 @@ import {
 
 const LOOSE_HASHLINE_HEADER_RE = /^\s*\[[^#\r\n]+#[^ \t\r\n]*\]\s*$/;
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
+/**
+ * Character budget per side for the overwrite diff carried in
+ * `WriteToolDetails`. The diff rides the tool result into the session JSONL
+ * (the same transport that forced edit-tool snapshot pruning in #3786), so
+ * oversize writes degrade to the bare `overwritten` flag instead of
+ * ballooning the transcript.
+ */
+const MAX_WRITE_DIFF_TEXT_CHARS = 128_000;
 const URI_LIKE_WRITE_PATH_RE = /^([a-z][a-z0-9+.-]*):\/{1,2}(.*)$/i;
 const XD_MISSING_DELIMITER_RE = /^xd\/+(.*)$/i;
 const XD_SCHEME_NEAR_MISSES: Record<string, true> = { dx: true, xdd: true, xdt: true };
@@ -311,8 +320,44 @@ export interface WriteToolDetails {
 	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
 	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
 	resolvedPath?: string;
+	/** Set when the target file already existed before the write — i.e. the write
+	 * overwrote content rather than creating a new file. */
+	overwritten?: boolean;
+	/** Unified diff from the pre-write content to the content that landed on disk,
+	 * in the same numbered format as the edit tool's `perFileResults[].diff`.
+	 * Omitted for creates, identical-content rewrites, either side exceeding
+	 * {@link MAX_WRITE_DIFF_TEXT_CHARS}, or a diff-generation failure. */
+	diff?: string;
+	/** First changed line in the new file, paired with {@link diff}. */
+	firstChangedLine?: number;
 	/** Set when the write dispatched an `xd://` tool device; drives renderer delegation. */
 	xdev?: XdevDispatch;
+}
+
+/**
+ * Compute the overwrite-diff detail fields for a write result: a unified diff
+ * from the pre-write content to the content that landed on disk, in the edit
+ * tool's numbered format so renderers can reuse the edit DiffView.
+ * Best-effort by contract — identical contents, oversize payloads, or a diff
+ * failure all degrade to no diff fields, never to a failed write.
+ */
+function overwriteDiffFields(
+	previousContent: string,
+	writtenContent: string,
+): Pick<WriteToolDetails, "diff" | "firstChangedLine"> {
+	if (
+		previousContent === writtenContent ||
+		previousContent.length > MAX_WRITE_DIFF_TEXT_CHARS ||
+		writtenContent.length > MAX_WRITE_DIFF_TEXT_CHARS
+	) {
+		return {};
+	}
+	try {
+		const { diff, firstChangedLine } = generateUnifiedDiffString(previousContent, writtenContent, 3);
+		return diff.length > 0 ? { diff, firstChangedLine } : {};
+	} catch {
+		return {};
+	}
 }
 
 /**
@@ -1262,8 +1307,19 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 
 			// Check if file exists and is auto-generated before overwriting
-			if (await fs.exists(absolutePath)) {
+			const targetExisted = await fs.exists(absolutePath);
+			let previousContent: string | undefined;
+			if (targetExisted) {
 				await assertEditableFile(absolutePath, path, this.session.settings);
+				// Capture the pre-write content for the overwrite diff in the result
+				// details. Best-effort: a read failure or an oversize file drops the
+				// diff fields but must never block the write itself.
+				try {
+					const oldText = await Bun.file(absolutePath).text();
+					if (oldText.length <= MAX_WRITE_DIFF_TEXT_CHARS) previousContent = oldText;
+				} catch {
+					// previousContent stays undefined; the result carries only `overwritten`.
+				}
 			}
 
 			const displayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
@@ -1290,7 +1346,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
+					details: {
+						resolvedPath: absolutePath,
+						madeExecutable: madeExecutable || undefined,
+						overwritten: targetExisted || undefined,
+						// Diff against the verified post-write text (not the requested
+						// content) so client drift such as format-on-save shows up.
+						...(previousContent !== undefined ? overwriteDiffFields(previousContent, bridgeWrite.text) : {}),
+					},
 				};
 			}
 
@@ -1317,10 +1380,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (madeExecutable) {
 				resultText += `\n${EXECUTABLE_NOTICE}`;
 			}
+			const overwriteFields =
+				previousContent !== undefined ? overwriteDiffFields(previousContent, cleanContent) : {};
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
+					details: {
+						resolvedPath: absolutePath,
+						madeExecutable: madeExecutable || undefined,
+						overwritten: targetExisted || undefined,
+						...overwriteFields,
+					},
 				};
 			}
 
@@ -1330,6 +1400,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					resolvedPath: absolutePath,
 					diagnostics,
 					madeExecutable: madeExecutable || undefined,
+					overwritten: targetExisted || undefined,
+					...overwriteFields,
 					meta: outputMeta()
 						.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
 						.get(),
