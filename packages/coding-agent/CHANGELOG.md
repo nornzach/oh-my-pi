@@ -16,6 +16,26 @@
 - Fixed remote queue operations addressing raw agent-queue positions instead of the visible user-message order, which could misorder entries and detach hidden image or magic-keyword companions from their prompt; malformed queue-management RPC inputs are now rejected before they can reorder or clear queues.
 - Fixed RPC and RPC UI startup without a configured model so clients can open provider setup and complete first-run configuration.
 - Fixed provider inventory RPC metadata so clients can distinguish registered credential flows from editable custom model-provider configuration, including API-key providers such as Tavily and DeepSeek.
+## [17.3.7] - 2026-08-17
+
+### Changed
+
+- Send the `omp/<version>` User-Agent on xAI chat (`xai` and `xai-oauth`) unless the request already set its own ([#8840](https://github.com/can1357/oh-my-pi/pull/8840) by [@Jaaneek](https://github.com/Jaaneek)).
+
+## [17.3.6] - 2026-08-17
+
+### Added
+
+- Added `ExtensionAPI.registerFileWriteFallback(handler)` and `ExtensionAPI.registerFileDeleteFallback(handler)`, letting an extension supply a fallback writer or deleter that is consulted when a native `write`, `edit`, or `apply_patch` byte-write or unlink is denied with a permission error (`EPERM`/`EACCES`/`EROFS`) — for hosts that embed the agent inside a sandbox that denies direct filesystem access but exposes a privileged channel. The brokered path is symlink-resolved so a handler's allowlist sees the real destination, a destination that cannot be resolved is not brokered at all, and `req.sessionId` names the session that issued the mutation so a handler sharing the process-wide registry can enforce policy per session. See [`docs/extensions.md`](../../docs/extensions.md).
+
+### Changed
+
+- Updated the default model for XAI_API_KEY (xai) and SuperGrok OAuth (xai-oauth) to grok-4.6. Automatic model selection continues to prefer paid xai/grok-4.6 when only XAI_API_KEY is set, with xai-oauth/grok-4.6 still available explicitly.
+
+### Fixed
+
+- Fixed `omp stats` and `/stats` dashboards being unreachable from container hosts by accepting an explicit `--host` bind address while preserving the `127.0.0.1` default.
+
 ## [17.3.5] - 2026-08-16
 
 ### Added

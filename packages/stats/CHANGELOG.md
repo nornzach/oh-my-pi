@@ -5,6 +5,12 @@
 ### Fixed
 
 - Included cache-write tokens in the cache hit-rate denominator so the metric reflects all prompt tokens.
+## [17.3.6] - 2026-08-17
+
+### Fixed
+
+- Fixed the stats dashboard being unreachable from container hosts by accepting an explicit `--host` bind address while preserving loopback-only binding and same-origin API access by default.
+
 ## [17.3.0] - 2026-08-13
 
 ### Added
