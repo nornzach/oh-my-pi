@@ -290,6 +290,12 @@ interface UiBase {
 	group?: string;
 	label: string;
 	description: string;
+	/**
+	 * Risk note. Marks the settings row with a warning glyph and renders above
+	 * the description in warning styling. For settings that can get the user
+	 * rate-limited, flagged, or banned — not for merely advanced options.
+	 */
+	warning?: string;
 	/** Condition function name - setting only shown when true */
 	condition?: string;
 }
@@ -1229,6 +1235,8 @@ export const SETTINGS_SCHEMA = {
 			group: "Thinking",
 			label: "External Thinking",
 			description: "Private scratchpad; not shown to user. Disables supported GPT, Claude, and Gemini reasoning",
+			warning:
+				"At your own risk: providers have flagged this request shape as abuse, up to account-level enforcement",
 		},
 	},
 
@@ -5340,6 +5348,39 @@ export const SETTINGS_SCHEMA = {
 				{ value: "auto", label: "Auto", description: "Use model/provider default websocket behavior" },
 				{ value: "off", label: "Off", description: "Disable websockets for OpenAI Codex models" },
 				{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
+			],
+		},
+	},
+
+	"providers.cacheRetention": {
+		type: "enum",
+		values: ["auto", "short", "long", "none"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			group: "Protocol",
+			label: "Prompt Cache Retention",
+			description:
+				"Prompt-cache retention forwarded to providers that support it (Anthropic, Bedrock, OpenRouter, OpenAI)",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description:
+						"Provider default — Anthropic uses 5m entries kept warm by idle keep-alive refreshes; PI_CACHE_RETENTION still applies",
+				},
+				{
+					value: "short",
+					label: "Short (5m)",
+					description:
+						"Cheapest cache writes; Anthropic keeps the entry warm with bounded keep-alive refreshes while idle",
+				},
+				{
+					value: "long",
+					label: "Long (1h)",
+					description: "1h TTL where the provider supports it; pricier writes, no keep-alive refresh requests",
+				},
+				{ value: "none", label: "Off", description: "Disable prompt caching and cache-affinity routing" },
 			],
 		},
 	},

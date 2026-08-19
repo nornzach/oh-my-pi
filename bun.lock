@@ -21,7 +21,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -40,7 +40,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/omptype": "catalog:",
@@ -63,7 +63,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/omptype": "catalog:",
@@ -76,7 +76,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -133,7 +133,7 @@
     },
     "packages/gui": {
       "name": "@oh-my-pi/omp-gui",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "dependencies": {
         "@codemirror/commands": "6.10.4",
         "@codemirror/lang-json": "^6.0.0",
@@ -187,7 +187,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -231,7 +231,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -257,7 +257,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -265,7 +265,7 @@
     },
     "packages/omptype": {
       "name": "@oh-my-pi/omptype",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "devDependencies": {
         "@ark/attest": "0.56.3",
         "@ark/schema": "0.56.2",
@@ -278,7 +278,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -292,7 +292,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -317,7 +317,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -353,7 +353,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
       },
@@ -363,7 +363,7 @@
     },
     "packages/wire": {
       "name": "@oh-my-pi/pi-wire",
-      "version": "17.3.7",
+      "version": "17.3.8",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -401,19 +401,19 @@
     "@bufbuild/protoc-gen-es": "^2.12.1",
     "@huggingface/transformers": "^4.2.0",
     "@napi-rs/cli": "3.7.2",
-    "@oh-my-pi/hashline": "17.3.7",
-    "@oh-my-pi/omp-stats": "17.3.7",
-    "@oh-my-pi/omptype": "17.3.7",
-    "@oh-my-pi/pi-agent-core": "17.3.7",
-    "@oh-my-pi/pi-ai": "17.3.7",
-    "@oh-my-pi/pi-catalog": "17.3.7",
-    "@oh-my-pi/pi-coding-agent": "17.3.7",
-    "@oh-my-pi/pi-mnemopi": "17.3.7",
-    "@oh-my-pi/pi-natives": "17.3.7",
-    "@oh-my-pi/pi-tui": "17.3.7",
-    "@oh-my-pi/pi-utils": "17.3.7",
-    "@oh-my-pi/pi-wire": "17.3.7",
-    "@oh-my-pi/snapcompact": "17.3.7",
+    "@oh-my-pi/hashline": "17.3.8",
+    "@oh-my-pi/omp-stats": "17.3.8",
+    "@oh-my-pi/omptype": "17.3.8",
+    "@oh-my-pi/pi-agent-core": "17.3.8",
+    "@oh-my-pi/pi-ai": "17.3.8",
+    "@oh-my-pi/pi-catalog": "17.3.8",
+    "@oh-my-pi/pi-coding-agent": "17.3.8",
+    "@oh-my-pi/pi-mnemopi": "17.3.8",
+    "@oh-my-pi/pi-natives": "17.3.8",
+    "@oh-my-pi/pi-tui": "17.3.8",
+    "@oh-my-pi/pi-utils": "17.3.8",
+    "@oh-my-pi/pi-wire": "17.3.8",
+    "@oh-my-pi/snapcompact": "17.3.8",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.220.0",
     "@opentelemetry/context-async-hooks": "^2.9.0",
@@ -559,7 +559,7 @@
 
     "@codemirror/state": ["@codemirror/state@6.7.1", "https://registry.npmmirror.com/@codemirror/state/-/state-6.7.1.tgz", { "dependencies": { "@marijn/find-cluster-break": "^1.0.0" } }, "sha512-9QzNDgE4EYDnAHfrTlR2lwiPciiOymLtwKK+8yHQzCc7GXhAP9xdEbEJFy2IWB1j9UGUl9BsgMmTo/ImA02T7A=="],
 
-    "@codemirror/view": ["@codemirror/view@6.43.8", "https://registry.npmmirror.com/@codemirror/view/-/view-6.43.8.tgz", { "dependencies": { "@codemirror/state": "^6.7.0", "crelt": "^1.0.6", "style-mod": "^4.1.0", "w3c-keyname": "^2.2.4" } }, "sha512-qtItTDssZ/5GFfi94hrILu9j/VUeFPDPkhovEfmWFj2ipTxnzPB8DdHgfbb8HYTzLTYhrndKmyQxXUz/PDLenw=="],
+    "@codemirror/view": ["@codemirror/view@6.43.9", "https://registry.npmmirror.com/@codemirror/view/-/view-6.43.9.tgz", { "dependencies": { "@codemirror/state": "^6.7.0", "crelt": "^1.0.6", "style-mod": "^4.1.0", "w3c-keyname": "^2.2.4" } }, "sha512-sTuUzTpPMFebRhg6dawChoKKgndIwfjmJgKVxBefPElcU2NwQ6AFroupk0SFqEerQyZOGRfDNnSN8Dw/lMAsXw=="],
 
     "@dnd-kit/accessibility": ["@dnd-kit/accessibility@3.1.1", "https://registry.npmmirror.com/@dnd-kit/accessibility/-/accessibility-3.1.1.tgz", { "dependencies": { "tslib": "^2.0.0" }, "peerDependencies": { "react": ">=16.8.0" } }, "sha512-2P+YgaXF+gRsIihwwY1gCsQSYnu9Zyj2py8kY5fFvUM1qm2WA2u639R6YNVfU4GWr+ZM5mqEsfHZZLoRONbemw=="],
 
@@ -987,7 +987,7 @@
 
     "@oxc-project/types": ["@oxc-project/types@0.144.0", "https://registry.npmmirror.com/@oxc-project/types/-/types-0.144.0.tgz", {}, "sha512-nuhZIOLuI6TFQ32I/WnUx+SCPY7SdSKwgnFHydAuoS1+Z4BRcaP+RRJmGzl9lw+0OFF7UmaESf7KQRXaNLHypg=="],
 
-    "@peculiar/asn1-schema": ["@peculiar/asn1-schema@2.8.0", "https://registry.npmmirror.com/@peculiar/asn1-schema/-/asn1-schema-2.8.0.tgz", { "dependencies": { "@peculiar/utils": "^2.0.2", "asn1js": "^3.0.10", "tslib": "^2.8.1" } }, "sha512-7YT0U/ze0tF2QOBbE15gKZwy5tvgGyLRiRHLzhlbOpf7BT032oBSd0haZqXn5W6l26WLlu3dyxzjM+2638/z2Q=="],
+    "@peculiar/asn1-schema": ["@peculiar/asn1-schema@2.9.0", "https://registry.npmmirror.com/@peculiar/asn1-schema/-/asn1-schema-2.9.0.tgz", { "dependencies": { "@peculiar/utils": "^2.0.2", "asn1js": "^3.0.10", "tslib": "^2.8.1" } }, "sha512-AKvPMOM7LfK0uFe1m7o7+veOa8xQGPqsqOrKi3QKgCElzwjGp39mbhr2g7mt/v/mXQHiIvJmDj5cJS173x8Q9Q=="],
 
     "@peculiar/json-schema": ["@peculiar/json-schema@1.1.12", "https://registry.npmmirror.com/@peculiar/json-schema/-/json-schema-1.1.12.tgz", { "dependencies": { "tslib": "^2.0.0" } }, "sha512-coUfuoMeIB7B8/NMekxaDzLhaYmp0HZNPEjYRm9goRou8UZIC3z21s0sL9AWoCw4EG876QyO3kYrc61WNF9B/w=="],
 
@@ -1575,7 +1575,7 @@
 
     "date-fns": ["date-fns@4.4.0", "https://registry.npmmirror.com/date-fns/-/date-fns-4.4.0.tgz", {}, "sha512-+1UMbeh68lH1SegH83CGWwpb6OHHbpSgr3+s5Eww5M4CAgswBpoWS0AjTOfEJ33HiYKz1hdj/KTFprzXHmq/6w=="],
 
-    "dayjs": ["dayjs@1.11.21", "https://registry.npmmirror.com/dayjs/-/dayjs-1.11.21.tgz", {}, "sha512-98IT+HOahAisibz/yjKbzuOBwYcjJ7BCLPzARyHiyEBmRz4fatF+KPJszEHXsGYjUG234aH/cOjW1wwTbKUZlA=="],
+    "dayjs": ["dayjs@1.11.22", "https://registry.npmmirror.com/dayjs/-/dayjs-1.11.22.tgz", {}, "sha512-1YRnxzt/AabP3GHxnaB9/b+ZScCKu5TeF+co+BWG+lnWVIwEcTFc1FVE0WLNmNO3sA6GGXL40i5qkHfbLzpwrg=="],
 
     "debounce-fn": ["debounce-fn@6.0.0", "https://registry.npmmirror.com/debounce-fn/-/debounce-fn-6.0.0.tgz", { "dependencies": { "mimic-function": "^5.0.0" } }, "sha512-rBMW+F2TXryBwB54Q0d8drNEI+TfoS9JpNTAoVpukbWEhjXQq4rySFYLaqXMFXwdv61Zb2OHtj5bviSoimqxRQ=="],
 
@@ -1639,7 +1639,7 @@
 
     "electron-store": ["electron-store@10.1.0", "https://registry.npmmirror.com/electron-store/-/electron-store-10.1.0.tgz", { "dependencies": { "conf": "^14.0.0", "type-fest": "^4.41.0" } }, "sha512-oL8bRy7pVCLpwhmXy05Rh/L6O93+k9t6dqSw0+MckIc3OmCTZm6Mp04Q4f/J0rtu84Ky6ywkR8ivtGOmrq+16w=="],
 
-    "electron-to-chromium": ["electron-to-chromium@1.5.406", "https://registry.npmmirror.com/electron-to-chromium/-/electron-to-chromium-1.5.406.tgz", {}, "sha512-hWH5ORBi3d0IipnMh7BN5GDTaAmrSSSWmznwt2zltdiRNEWoEQyTwF0FFSBxzHO7hLSRT6loQu3IQGV0wg/Tvg=="],
+    "electron-to-chromium": ["electron-to-chromium@1.5.407", "https://registry.npmmirror.com/electron-to-chromium/-/electron-to-chromium-1.5.407.tgz", {}, "sha512-4R8XgQOdfxexCd/u63lRm6wCHjECwI45MV9wxAs2ggtfWe2hwlo1ql97jKsju2IcJ+jFSTwBssyYoiWhh7mauQ=="],
 
     "electron-updater": ["electron-updater@6.8.9", "https://registry.npmmirror.com/electron-updater/-/electron-updater-6.8.9.tgz", { "dependencies": { "builder-util-runtime": "9.7.0", "fs-extra": "^10.1.0", "js-yaml": "^4.1.0", "lazy-val": "^1.0.5", "lodash.escaperegexp": "^4.1.2", "lodash.isequal": "^4.5.0", "semver": "~7.7.3", "tiny-typed-emitter": "^2.1.0" } }, "sha512-ZhVxM9iGONUpZGI1FxdMRgJjUFXi7AYGVa5PwKlO1tV1/4zDxQmfKpXOHVztKrd6L9rLcFjERvi1Mf2vxyTkig=="],
 
