@@ -1,7 +1,29 @@
 import { describe, expect, it, vi } from "bun:test";
-import { type PendingExtensionRequest, requestRpcDialog } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import {
+	type PendingExtensionRequest,
+	reportDroppedPrompt,
+	requestRpcDialog,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 
 describe("RPC extension UI", () => {
+	it("returns a dropped prompt and its images to the host editor", () => {
+		const output = vi.fn<(frame: object) => void>();
+
+		reportDroppedPrompt(output, {
+			text: "keep my exact prompt",
+			images: [{ type: "image", data: "cG5n", mimeType: "image/png" }],
+		});
+
+		expect(output).toHaveBeenCalledWith({
+			type: "extension_ui_request",
+			id: expect.any(String),
+			method: "set_editor_text",
+			text: "keep my exact prompt",
+			images: [{ type: "image", data: "cG5n", mimeType: "image/png" }],
+			prepend: true,
+		});
+	});
+
 	it("cancels the remote dialog when its signal aborts", async () => {
 		const pendingRequests = new Map<string, PendingExtensionRequest>();
 		const output = vi.fn<(frame: object) => void>();

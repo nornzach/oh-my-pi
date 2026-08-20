@@ -33,6 +33,7 @@ import {
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import type { DroppedPrompt } from "../../session/agent-session-types";
 import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { SessionManager } from "../../session/session-manager";
@@ -203,6 +204,21 @@ type RpcOutput = (
 		| RpcHostUriCancelRequest
 		| object,
 ) => void;
+
+/** Return a prompt that never reached the agent to an RPC host's editor. */
+export function reportDroppedPrompt(
+	output: (frame: RpcExtensionUIRequest | object) => void,
+	prompt: DroppedPrompt,
+): void {
+	output({
+		type: "extension_ui_request",
+		id: Snowflake.next() as string,
+		method: "set_editor_text",
+		text: prompt.text,
+		images: prompt.images,
+		prepend: true,
+	} satisfies RpcExtensionUIRequest);
+}
 
 export type RpcSessionChangeCommand = Extract<
 	RpcCommand,
@@ -1165,16 +1181,7 @@ export async function runRpcMode(
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
 	setToolUIContext?.(rpcUiContext, true);
-	session.setPromptDropped(prompt => {
-		output({
-			type: "extension_ui_request",
-			id: Snowflake.next() as string,
-			method: "set_editor_text",
-			text: prompt.text,
-			images: prompt.images,
-			prepend: true,
-		} satisfies RpcExtensionUIRequest);
-	});
+	session.setPromptDropped(prompt => reportDroppedPrompt(output, prompt));
 	const liveController = new RpcLiveController(session, output);
 	const collabController = new RpcCollabController({
 		session,
