@@ -1165,6 +1165,16 @@ export async function runRpcMode(
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
 	setToolUIContext?.(rpcUiContext, true);
+	session.setPromptDropped(prompt => {
+		output({
+			type: "extension_ui_request",
+			id: Snowflake.next() as string,
+			method: "set_editor_text",
+			text: prompt.text,
+			images: prompt.images,
+			prepend: true,
+		} satisfies RpcExtensionUIRequest);
+	});
 	const liveController = new RpcLiveController(session, output);
 	const collabController = new RpcCollabController({
 		session,

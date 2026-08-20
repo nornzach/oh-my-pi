@@ -223,6 +223,8 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 export const TUI_ONLY_SETTING_PATHS: Record<string, true> = {
 	// Appearance: terminal renderer, status line, inline images.
 	symbolPreset: true,
+	"composer.shape": true,
+	"statusLine.contextLine": true,
 	"statusLine.separator": true,
 	"statusLine.sessionAccent": true,
 	"statusLine.transparent": true,
