@@ -5,6 +5,24 @@
 ### Added
 
 - Added an optional `toLane` parameter to `Agent.moveQueuedMessage(queueId, toIndex, toLane?)`: the entry switches steering/follow-up lanes with its stable queue id intact (clamped into the target lane; crossings into steering notify steering waiters). Omitting `toLane` keeps the previous same-lane reorder behavior.
+## [17.4.0] - 2026-08-20
+
+### Breaking Changes
+
+- Replaced global token counting functions (`countTokens`, `countTokensConservatively`, `setTokenizerModel`, and `estimateTokens`) with model-scoped, immutable `Tokenizer` instances (`agent.tokenizer`). Use `tokenizer.countTokens(text, mode?)`, `tokenizer.countMessage(message)`, or `tokenizer.countMessages(messages)`.
+- Updated context management functions (`findCutPoint`, `prepareBranchEntries`, `collectShakeRegions`, `pruneToolOutputs`, `pruneSupersededToolResults`, and `trimRemoteCompactionInputToContextWindow`) to require an explicit `Tokenizer` instance.
+
+### Added
+
+- Added `Tokenizer.checkTokenBudget(text, budget)` to efficiently verify if text fits within a token limit using fast byte-bound checks before falling back to full tokenization.
+- Added provider-anchored transcript token estimation (`findTranscriptUsageAnchor`, `isTranscriptUsageAnchor`, `estimateTranscriptTokens`) to calculate transcript token counts incrementally from the latest reported assistant turn usage.
+- Added `remotePreserveReusable()` to check whether a previous remote compaction payload remains reusable with the active model.
+
+### Changed
+
+- Expanded native tokenizer support across catalog models, adding exact embedded token counting for Claude, Qwen 3.5+, DeepSeek V3/V4/R1, Kimi K2/K3, and GLM-5+ models. `Tokenizer` now constructs from a resolved catalog `Model`.
+- `createCompactionSummaryMessage` takes an options object after `(summary, tokensBefore, timestamp)`; `CompactionSummaryMessage` gained optional `method` and `tokensAfter` display metadata.
+
 ## [17.3.8] - 2026-08-19
 
 ### Fixed

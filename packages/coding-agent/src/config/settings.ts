@@ -38,6 +38,7 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
+import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
 import { AUTO_IMAGE_PROVIDER_ORDER, isImageProviderId } from "../tools/image-providers";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { INSPECT_IMAGE_MODES } from "../utils/inspect-image-mode";
@@ -1622,15 +1623,56 @@ export class Settings {
 			raw["edit.mode"] = "hashline";
 		}
 
-		// compaction.strategy: removed local-model shake-summary mode; plain shake
-		// keeps the same mechanical artifact-backed reduction without background CPU.
-		const compactionObj = raw.compaction as Record<string, unknown> | undefined;
-		if (compactionObj?.strategy === "shake-summary") {
-			compactionObj.strategy = "shake";
+		// compaction.strategy / compaction.remoteEnabled → compaction.methodOrder.
+		// The old single strategy could not express a capability-dependent fallback
+		// chain. Preserve explicit legacy intent while new installs use the
+		// server → snapcompact → handoff → shake → soft default.
+		const compactionObj = isRecord(raw.compaction) ? raw.compaction : undefined;
+		const configuredMethodOrder = compactionObj?.methodOrder ?? raw["compaction.methodOrder"];
+		const legacyStrategy = compactionObj?.strategy ?? raw["compaction.strategy"];
+		const legacyRemoteEnabled = compactionObj?.remoteEnabled ?? raw["compaction.remoteEnabled"];
+		if (!Array.isArray(configuredMethodOrder)) {
+			const remoteEnabled = legacyRemoteEnabled !== false;
+			const strategy = legacyStrategy === "shake-summary" ? "shake" : legacyStrategy;
+			let methodOrder: CompactionMethod[] | undefined;
+			switch (strategy) {
+				case "context-full":
+					methodOrder = remoteEnabled ? ["remote", "soft"] : ["soft"];
+					break;
+				case "handoff":
+					methodOrder = remoteEnabled ? ["handoff", "remote", "soft"] : ["handoff", "soft"];
+					break;
+				case "shake":
+					methodOrder = remoteEnabled ? ["shake", "remote", "soft"] : ["shake", "soft"];
+					break;
+				case "snapcompact":
+					methodOrder = remoteEnabled ? ["snapcompact", "remote", "soft"] : ["snapcompact", "soft"];
+					break;
+				case "off":
+					methodOrder = [];
+					break;
+				default:
+					if (legacyRemoteEnabled === false) {
+						methodOrder = DEFAULT_COMPACTION_METHOD_ORDER.filter(method => method !== "remote");
+					}
+			}
+			if (methodOrder) {
+				const root = compactionObj ?? {};
+				root.methodOrder = methodOrder;
+				raw.compaction = root;
+			}
+		} else if (!compactionObj || compactionObj.methodOrder === undefined) {
+			const root = compactionObj ?? {};
+			root.methodOrder = configuredMethodOrder;
+			raw.compaction = root;
 		}
-		if (raw["compaction.strategy"] === "shake-summary") {
-			raw["compaction.strategy"] = "shake";
+		if (compactionObj) {
+			delete compactionObj.strategy;
+			delete compactionObj.remoteEnabled;
 		}
+		delete raw["compaction.strategy"];
+		delete raw["compaction.remoteEnabled"];
+		delete raw["compaction.methodOrder"];
 
 		// snapcompact.systemPrompt: boolean -> scoped enum.
 		const snapcompactObj = raw.snapcompact as Record<string, unknown> | undefined;
@@ -2466,6 +2508,7 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"hindsight.bankId": () => hindsightScopeSignal.fire(),
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
+	extendedContext: () => extendedContextSignal.fire(),
 	"worktree.base": value => {
 		const dir = typeof value === "string" && value.trim() ? value : undefined;
 		// Always call so an unset/empty value clears a previously-applied override.
@@ -2493,6 +2536,17 @@ const modelRolesSignal = new SettingSignal("modelRoles");
 
 /** Subscribe to model role changes. Returns an unsubscribe function. */
 export const onModelRolesChanged: (cb: () => void) => () => void = modelRolesSignal.on.bind(modelRolesSignal);
+
+/** Fires when `extendedContext` changes at runtime. */
+const extendedContextSignal = new SettingSignal("extendedContext");
+
+/**
+ * Subscribe to extended-context setting changes. Sessions re-derive their
+ * model's effective context window (the registry clamps premium long-context
+ * models to the standard-pricing threshold while the setting is off).
+ * Returns an unsubscribe function.
+ */
+export const onExtendedContextChanged = (cb: () => void) => extendedContextSignal.on(cb);
 
 /** Fires when `statusLine.sessionAccent` changes at runtime. */
 const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");

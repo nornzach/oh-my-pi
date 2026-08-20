@@ -112,6 +112,7 @@ export interface InteractiveModeContext {
 	subagentContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
+	cleanseContainer: Container;
 	errorBannerContainer: Container;
 	modelCycleContainer: Container;
 	deferredCommandContainer: Container;
@@ -120,6 +121,7 @@ export interface InteractiveModeContext {
 	hookWidgetContainerAbove: Container;
 	hookWidgetContainerBelow: Container;
 	statusLine: StatusLineComponent;
+	syncComposerShape(): void;
 
 	// Session access
 	session: AgentSession;
@@ -450,6 +452,9 @@ export interface InteractiveModeContext {
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;
 	handleOmfgEscape(): boolean;
+	handleCleanseCommand(args: string): Promise<void>;
+	hasActiveCleanse(): boolean;
+	handleCleanseEscape(): boolean;
 	cycleThinkingLevel(): void;
 	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;

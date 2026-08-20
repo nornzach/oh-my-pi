@@ -895,7 +895,7 @@ export function createSubagentSettings(
 	return Settings.isolated(
 		{
 			...snapshot,
-			// Async jobs and bash auto-backgrounding are inherited from the parent:
+			// Async jobs and bash/eval auto-backgrounding are inherited from the parent:
 			// background jobs are owner-routed to the subagent's own session, and
 			// the run driver's quiescence barrier + teardown reap guarantee no
 			// owner job outlives the run, so worktree capture/cleanup stays

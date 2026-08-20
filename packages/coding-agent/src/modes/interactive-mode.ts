@@ -26,6 +26,7 @@ import type {
 import {
 	Container,
 	clearRenderCache,
+	getComposerStyle,
 	Loader,
 	Markdown,
 	ProcessTerminal,
@@ -103,6 +104,7 @@ import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
+	type DroppedPrompt,
 	type ResolvedRoleModel,
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 } from "../session/agent-session";
@@ -123,7 +125,7 @@ import type { ConfiguredThinkingLevel } from "../thinking";
 import { tinyTitleClient } from "../tiny/title-client";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
+import { formatMoreItems, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import {
 	formatPhaseDisplayName,
@@ -170,6 +172,7 @@ import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "./components/
 import { TranscriptContainer } from "./components/transcript-container";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
 import { BtwController } from "./controllers/btw-controller";
+import { CleanseCommandController } from "./controllers/cleanse-command-controller";
 import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
@@ -488,13 +491,15 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 						TRUNCATE_LENGTHS.SHORT,
 						columns - visibleWidth(displayId) - visibleWidth(Bun.stripANSI(badge)) - 10,
 					);
-					line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(replaceTabs(distinctDescription), budget))}`;
+					const formatted = replaceTabs(distinctDescription).replace(/\s*[\r\n]+\s*/g, " ↵ ");
+					line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(formatted, budget))}`;
 				} else {
 					// No spawn description: fall back to a muted task preview, same as
 					// the inline task rows when a row has no label.
 					const taskPreview = session.progress?.task?.trim();
 					if (taskPreview && !labelEchoesHandle(session.id, taskPreview)) {
-						line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
+						const formatted = replaceTabs(taskPreview).replace(/\s*[\r\n]+\s*/g, " ↵ ");
+						line += ` ${theme.fg("muted", truncateToWidth(formatted, TRUNCATE_LENGTHS.SHORT))}`;
 					}
 				}
 				return line;
@@ -526,6 +531,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	subagentContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
+	cleanseContainer: Container;
 	errorBannerContainer: Container;
 	modelCycleContainer: Container;
 	deferredCommandContainer: Container;
@@ -679,6 +685,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #btwController: BtwController;
 	readonly #tanCommandController: TanCommandController;
 	readonly #omfgController: OmfgController;
+	readonly #cleanseController: CleanseCommandController;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #liveCommandController: LiveCommandController;
@@ -816,6 +823,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentContainer = new AnchoredLiveContainer();
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
+		this.cleanseContainer = new AnchoredLiveContainer();
 		this.errorBannerContainer = new AnchoredLiveContainer();
 		this.modelCycleContainer = new AnchoredLiveContainer();
 		this.deferredCommandContainer = new AnchoredLiveContainer();
@@ -898,6 +906,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#btwController = new BtwController(this);
 		this.#tanCommandController = new TanCommandController(this);
 		this.#omfgController = new OmfgController(this);
+		this.#cleanseController = new CleanseCommandController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
@@ -909,6 +918,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setTitleGenerationStart?.(() => {
 			this.#inputController.notifyTitleGenerationStart();
 		});
+		this.session.setPromptDropped?.(prompt => this.#restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
@@ -1078,6 +1088,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.addChild(this.subagentContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
+		this.ui.addChild(this.cleanseContainer);
 		this.ui.addChild(this.errorBannerContainer);
 		this.ui.addChild(this.modelCycleContainer);
 		this.ui.addChild(this.deferredCommandContainer);
@@ -1085,11 +1096,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// HUDs, just above the editor's hook-widget top margin — so it reads next to
 		// the prompt while keeping the one-line gap above the editor.
 		this.ui.addChild(this.statusContainer);
-		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.hookWidgetContainerBelow);
+		this.ui.addChild(this.statusLine);
 		this.ui.setFocus(this.editor);
+		this.syncComposerShape();
 
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
@@ -1818,6 +1830,30 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
+	/**
+	 * Hands back a prompt the session dropped before dispatch (an Esc abort or
+	 * usage preflight denial raced turn setup). The message was never persisted,
+	 * so the tree/branch selectors cannot offer it — remove the optimistic
+	 * transcript row and put the typed text back in the editor for editing.
+	 */
+	#restoreDroppedPrompt(prompt: DroppedPrompt): void {
+		this.clearOptimisticUserMessage();
+		this.#pendingWorkingMessage = undefined;
+		if (this.loadingAnimation) {
+			this.#stopLoadingAnimation(true);
+		}
+		this.rebuildChatFromMessages();
+		// The drop arrives asynchronously (after the abort settles); never clobber
+		// a draft the user has already started typing in the meantime.
+		if (!this.editor.getText().trim()) {
+			this.editor.pendingImages = prompt.images ? [...prompt.images] : [];
+			this.editor.pendingImageLinks = prompt.images ? prompt.images.map(() => undefined) : [];
+			this.editor.imageLinks = this.editor.pendingImageLinks;
+			this.editor.setText(prompt.text);
+		}
+		this.ui.requestRender();
+	}
+
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean {
 		if (this.#pendingSubmittedInput !== input || input.cancelled) {
 			return false;
@@ -1874,7 +1910,29 @@ export class InteractiveMode implements InteractiveModeContext {
 			transparent: settings.get("statusLine.transparent"),
 			segmentOptions: settings.get("statusLine.segmentOptions"),
 			compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
+			contextLine: settings.get("statusLine.contextLine"),
 		});
+	}
+	syncComposerShape(): void {
+		const shape = settings.get("composer.shape") ?? "box";
+		const style = getComposerStyle(shape);
+		this.editor.setBorderStyle(shape);
+		this.statusLine.setAutocompleteActiveProbe(() => this.editor.isAutocompleteActive());
+		switch (style.statusAttachment) {
+			case "top-border":
+				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
+				break;
+			case "top-rule-chip":
+				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getStandaloneTopBorder(availableWidth));
+				break;
+			case "none":
+				this.editor.setTopBorderProvider(undefined);
+				this.editor.setTopBorder(undefined);
+				break;
+		}
+		this.statusLine.setComposerStyle(style);
+		this.updateEditorBorderColor();
+		this.ui.requestRender();
 	}
 
 	#handleSessionAccentInputsChanged(): void {
@@ -2228,7 +2286,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const multiPhase = phases.length > 1;
 		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
-		const subsequentStageCap = 4; // stages shown after the active one (header count implies the rest)
+		const subsequentStageCap = 4; // stages shown after the active one (a trailing summary row covers the rest)
 		const activeTaskCap = 5; // open tasks previewed for the active stage
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
@@ -2266,7 +2324,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// One phase node. The active stage is highlighted with normal-brightness task
 		// progress; other stages render their whole row (name + progress) in the
-		// brighter muted gray. The root header carries overall stage progression.
+		// brighter muted gray. Overall progress lives in the tree spine (below).
 		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
 			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
 			// Closed, not just completed: the collapsed task window hides abandoned
@@ -2281,25 +2339,58 @@ export class InteractiveMode implements InteractiveModeContext {
 			return [header, ...renderTasks(phase)];
 		};
 
-		// Collapsed: active stage + a bounded number of following stages (the
-		// header's "n/total" count implies any not shown). Expanded: every stage
+		// Collapsed: active stage + a bounded number of following stages, with a
+		// "… n more stages" row for anything past the cap. Expanded: every stage
 		// from the top. Roman numerals stay tied to the real phase index.
 		const baseIdx = expanded ? 0 : activeIdx;
 		const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + subsequentStageCap);
-		const phaseTreeLines = renderTreeList(
-			{
-				items: phaseSlice,
-				expanded: true,
-				renderItem: (phase, ctx) => renderPhase(phase, baseIdx + ctx.index + 1, baseIdx + ctx.index === activeIdx),
-			},
-			theme,
-		);
+		const hiddenStages = phases.length - baseIdx - phaseSlice.length;
 
-		// Header carries overall stage progression, e.g. "Todos · 1/8".
-		const root =
-			theme.bold(theme.fg("accent", "Todos")) +
-			(multiPhase ? theme.fg("dim", ` · ${activeIdx + 1}/${phases.length}`) : "");
-		const lines = ["", root, ...phaseTreeLines.map(line => ` ${line}`)];
+		// Flatten the stage tree into content rows plus a per-row top-level spine
+		// glyph (`├─` for stage rows, `│` for continuations). The spine never
+		// closes downward — a short elbow tail (`└────`) ends the block instead,
+		// so spine + bend + tail form one continuous progress path.
+		const spineGlyphs: string[] = [];
+		const contentLines: string[] = [];
+		const pushBlock = (block: string | string[]): void => {
+			const rows = Array.isArray(block) ? block : [block];
+			if (rows.length === 0) return;
+			spineGlyphs.push(`${theme.tree.branch} `);
+			contentLines.push(replaceTabs(rows[0]!));
+			for (let i = 1; i < rows.length; i++) {
+				spineGlyphs.push(`${theme.tree.vertical}  `);
+				contentLines.push(replaceTabs(rows[i]!));
+			}
+		};
+		for (let i = 0; i < phaseSlice.length; i++) {
+			pushBlock(renderPhase(phaseSlice[i], baseIdx + i + 1, baseIdx + i === activeIdx));
+		}
+		if (hiddenStages > 0) {
+			pushBlock(theme.fg("muted", formatMoreItems(hiddenStages, "stage")));
+		}
+
+		// Closing tail: hook + a few horizontals. Every tail cell is 1 column in
+		// both glyph sets, so string slicing below splits it by visible cells.
+		const tailLen = 6;
+		const tail = theme.tree.hook + theme.tree.horizontal.repeat(Math.max(0, tailLen - visibleWidth(theme.tree.hook)));
+
+		// Overall progress (summed across every stage) fills the path in reading
+		// order: down the spine, around the bend, out along the tail.
+		// Clamp so partial progress lights at least one cell; a closed plan fills
+		// the entire path until the configured auto-clear removes the HUD.
+		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
+		const closedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
+		const pathLen = contentLines.length + tailLen;
+		let filled = Math.round((closedTasks / totalTasks) * pathLen);
+		if (closedTasks > 0) filled = Math.max(filled, 1);
+		if (closedTasks < totalTasks) filled = Math.min(filled, pathLen - 1);
+
+		const lines = ["", theme.bold(theme.fg("accent", "TODO"))];
+		for (let i = 0; i < contentLines.length; i++) {
+			lines.push(` ${theme.fg(i < filled ? "accent" : "dim", spineGlyphs[i]!)}${contentLines[i]}`);
+		}
+		const tailFilled = Math.max(0, Math.min(filled - contentLines.length, tail.length));
+		lines.push(` ${theme.fg("accent", tail.slice(0, tailFilled))}${theme.fg("dim", tail.slice(tailFilled))}`);
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 	}
 
@@ -4178,6 +4269,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.#extensionUiController.clearHookWidgets();
+		this.#extensionUiController.disposeComposerShapes();
 		for (const unsubscribe of this.#eventBusUnsubscribers) {
 			unsubscribe();
 		}
@@ -4216,6 +4308,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#cleanseController.dispose();
 		this.#focusController.dispose();
 
 		// Surface an explicit "Closing session…" line so the user sees a reason
@@ -4307,7 +4400,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		};
 		nextEditor.setShimmerRepaintHandler(() => this.ui.requestDirectWrite(nextEditor));
-		nextEditor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
+		this.editor = nextEditor;
+		this.syncComposerShape();
 		nextEditor.setMaxHeight(this.#computeEditorMaxHeight());
 		if (this.historyStorage) {
 			nextEditor.setHistoryStorage(this.historyStorage);
@@ -4764,6 +4858,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#prepareSessionSwitch(): void {
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#cleanseController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
 		this.#hidePlanReview();
@@ -4793,6 +4888,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#vibeSessionTransitionBlocked()) return;
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#cleanseController.dispose();
 		await this.#commandController.handleForkCommand();
 	}
 
@@ -5019,6 +5115,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#cleanseController.dispose();
 		this.resetObserverRegistry();
 		await this.#selectorController.handleResumeSession(sessionPath, { settingsFlushed: true });
 	}
@@ -5145,6 +5242,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 			this.#btwController.dispose();
 			this.#omfgController.dispose();
+			this.#cleanseController.dispose();
 			await this.renderInitialMessages({ clearTerminalHistory: true });
 			this.updateEditorBorderColor();
 			this.showStatus(
@@ -5165,6 +5263,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleOmfgEscape(): boolean {
 		return this.#omfgController.handleEscape();
+	}
+
+	handleCleanseCommand(args: string): Promise<void> {
+		return this.#cleanseController.start(args);
+	}
+
+	hasActiveCleanse(): boolean {
+		return this.#cleanseController.hasActiveRun();
+	}
+
+	handleCleanseEscape(): boolean {
+		return this.#cleanseController.handleEscape();
 	}
 
 	cycleThinkingLevel(): void {

@@ -3934,7 +3934,7 @@ describe("AgentSession retry fallback", () => {
 
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
-			"compaction.strategy": "context-full",
+			"compaction.methodOrder": ["soft"],
 			"compaction.thresholdPercent": 80,
 			"compaction.thresholdTokens": -1,
 			"contextPromotion.enabled": true,
@@ -4050,7 +4050,7 @@ describe("AgentSession retry fallback", () => {
 
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
-			"compaction.strategy": "context-full",
+			"compaction.methodOrder": ["soft"],
 			"compaction.thresholdPercent": 80,
 			"compaction.thresholdTokens": -1,
 			"contextPromotion.enabled": true,

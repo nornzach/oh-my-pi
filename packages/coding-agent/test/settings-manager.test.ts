@@ -951,6 +951,25 @@ describe("Settings", () => {
 		});
 	});
 
+	describe("compaction method migration", () => {
+		it("defaults to server, snapcompact, handoff, shake, then soft compaction", () => {
+			expect(Settings.isolated().get("compaction.methodOrder")).toEqual([
+				"remote",
+				"snapcompact",
+				"handoff",
+				"shake",
+				"soft",
+			]);
+		});
+
+		it("migrates a local-only legacy strategy to soft compaction", async () => {
+			await writeSettings({ compaction: { strategy: "context-full", remoteEnabled: false } });
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.get("compaction.methodOrder")).toEqual(["soft"]);
+		});
+	});
 	describe("migrations", () => {
 		it("consolidates legacy Exa suite toggles onto exa.enabled", async () => {
 			await writeSettings({

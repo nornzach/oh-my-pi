@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
 	type CompactionPreparation,
 	compact,
@@ -630,7 +631,7 @@ describe("remote compaction input forwarding", () => {
 			{ fetch: fetchMock },
 		);
 
-		const trimmed = trimRemoteCompactionInputToContextWindow(nativeInput, 1_000, "compact");
+		const trimmed = trimRemoteCompactionInputToContextWindow(nativeInput, new Tokenizer(), 1_000, "compact");
 		expect(trimmed.estimatedTokensAfter).toBeLessThanOrEqual(1_000);
 		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(true);
 		expect(requestInput?.find(item => item.type === "custom_tool_call_output")?.output).toBe(
@@ -646,7 +647,7 @@ describe("remote compaction input forwarding", () => {
 			{ type: "function_call_output", call_id: "call_2", output: "b".repeat(8_000) },
 		];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 1_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 1_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(2);
 		expect(result.input.slice(0, 2)).toEqual(input.slice(0, 2));
@@ -666,7 +667,7 @@ describe("remote compaction input forwarding", () => {
 			{ type: "function_call_output", call_id: "call_2", output: "useful latest result" },
 		];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 1_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 1_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(0);
 		expect(result.input).toEqual(input);
@@ -686,7 +687,7 @@ describe("remote compaction input forwarding", () => {
 			{ type: "function_call_output", call_id: "call_1", output: "useful result" },
 		];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 15_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 15_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(0);
 		expect(result.input).toEqual(input);
@@ -698,7 +699,7 @@ describe("remote compaction input forwarding", () => {
 		const output = Array.from({ length: 1_000 }, (_, index) => index.toString(16).padStart(8, "0")).join("");
 		const input = [{ type: "function_call_output", call_id: "call_1", output }];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 3_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 3_000, "compact");
 
 		expect(result.estimatedTokensBefore).toBeGreaterThan(3_000);
 		expect(result.rewrittenOutputs).toBe(1);
@@ -720,7 +721,7 @@ describe("remote compaction input forwarding", () => {
 			attachment,
 		];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 15_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 15_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(1);
 		expect(result.input[0].output).toBe(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE);
@@ -740,7 +741,7 @@ describe("remote compaction input forwarding", () => {
 			{ type: "function_call_output", call_id: "call_1", output: "useful result".repeat(2_000) },
 		];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 15_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 15_000, "compact");
 
 		expect(result.estimatedTokensBefore).toBeGreaterThan(15_000);
 		expect(result.rewrittenOutputs).toBe(1);
@@ -750,7 +751,7 @@ describe("remote compaction input forwarding", () => {
 	test("returns semantically unchanged input when it already fits", () => {
 		const input = [{ type: "function_call_output", call_id: "call_1", output: "small" }];
 
-		const result = trimRemoteCompactionInputToContextWindow(input, 1_000, "compact");
+		const result = trimRemoteCompactionInputToContextWindow(input, new Tokenizer(), 1_000, "compact");
 
 		expect(result.rewrittenOutputs).toBe(0);
 		expect(result.input).toEqual(input);

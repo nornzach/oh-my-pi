@@ -844,6 +844,29 @@ function isImplicitDisableWhenNotRequested(disableMode: OpenAIReasoningDisableMo
 	);
 }
 
+/**
+ * Whether a redundant `tool_choice: "auto"` should be dropped to keep
+ * reasoning alive. Hosts with `disableReasoningOnToolChoice` (DeepSeek family
+ * on e.g. Fireworks) silently turn reasoning off whenever any `tool_choice`
+ * is present. "auto" is already the provider default, so omitting it is
+ * wire-neutral for tool selection; forced and "none" choices are semantic and
+ * still win over reasoning (#1207).
+ */
+export function shouldDropAutoToolChoiceForReasoning(
+	model: Pick<Model, "reasoning">,
+	compat: { disableReasoningOnToolChoice: boolean },
+	toolChoice: unknown,
+	options: { reasoning?: string; disableReasoning?: boolean } | undefined,
+): boolean {
+	return (
+		toolChoice === "auto" &&
+		compat.disableReasoningOnToolChoice &&
+		Boolean(model.reasoning) &&
+		options?.reasoning !== undefined &&
+		!options.disableReasoning
+	);
+}
+
 export function resolveOpenAICompatPolicy<TApi extends Api>(
 	model: Model<TApi>,
 	options: ResolveOpenAICompatPolicyOptions,

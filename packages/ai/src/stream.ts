@@ -40,7 +40,7 @@ import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import { streamPiNative } from "./providers/pi-native-client";
 // Heavy provider stream functions are imported lazily via register-builtins,
 // which wraps each provider module in a dynamic import. This keeps the
-// AWS SDK, google-auth-library, @google/genai, @bufbuild/protobuf, and
+// AWS SDK, google-auth-library, @google/genai, and
 // other provider SDKs out of the CLI startup parse graph. The
 // gitlab-duo / kimi / synthetic providers stay eager because their modules
 // export routing predicates (isGitLabDuoModel, isKimiModel, isSyntheticModel)
