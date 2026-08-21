@@ -1005,3 +1005,59 @@ describe("MarketplaceManager", () => {
 		});
 	});
 });
+
+describe("official marketplace seeding", () => {
+	function createSeedingContext(options?: { seed?: boolean; existingRegistry?: object }): {
+		manager: MarketplaceManager;
+		registryPath: string;
+		tmpDir: string;
+	} {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-seed-"));
+		const registryPath = path.join(tmpDir, "marketplaces.json");
+		if (options?.existingRegistry) {
+			fs.writeFileSync(registryPath, JSON.stringify(options.existingRegistry));
+		}
+		const manager = new MarketplaceManager({
+			marketplacesRegistryPath: registryPath,
+			installedRegistryPath: path.join(tmpDir, "installed_plugins.json"),
+			marketplacesCacheDir: path.join(tmpDir, "cache", "marketplaces"),
+			pluginsCacheDir: path.join(tmpDir, "cache", "plugins"),
+			seedOfficialMarketplace: options?.seed ?? false,
+		});
+		return { manager, registryPath, tmpDir };
+	}
+
+	it("seeds the official marketplace into a missing registry when opted in", async () => {
+		const seeded = createSeedingContext({ seed: true });
+		try {
+			const list = await seeded.manager.listMarketplaces();
+			expect(list.map(entry => entry.name)).toEqual(["official"]);
+			expect(list[0].sourceUri).toBe("nornzach/omp-plugins");
+			expect(list[0].sourceType).toBe("github");
+			expect(fs.existsSync(seeded.registryPath)).toBe(true);
+			// Idempotent: a second read must not duplicate the entry.
+			expect(await seeded.manager.listMarketplaces()).toHaveLength(1);
+		} finally {
+			removeSyncWithRetries(seeded.tmpDir);
+		}
+	});
+
+	it("never overwrites an existing registry, even an empty one", async () => {
+		const seeded = createSeedingContext({ existingRegistry: { version: 1, marketplaces: [] }, seed: true });
+		try {
+			expect(await seeded.manager.listMarketplaces()).toEqual([]);
+		} finally {
+			removeSyncWithRetries(seeded.tmpDir);
+		}
+	});
+
+	it("does not seed without the opt-in", async () => {
+		const unseeded = createSeedingContext();
+		try {
+			expect(await unseeded.manager.listMarketplaces()).toEqual([]);
+			expect(fs.existsSync(unseeded.registryPath)).toBe(false);
+		} finally {
+			removeSyncWithRetries(unseeded.tmpDir);
+		}
+	});
+});

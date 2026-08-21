@@ -9,10 +9,13 @@
  * Every mutation's caller (rpc-mode.ts) ends in `reloadPluginState()` so the
  * GUI receives a fresh `available_commands_update`.
  */
+import * as path from "node:path";
+import { PluginManager } from "../../extensibility/plugins/manager";
 import { classifySource } from "../../extensibility/plugins/marketplace";
+import type { PluginManifest } from "../../extensibility/plugins/types";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
-import type { RpcMarketplaceActionResult, RpcMarketplacePluginInfo } from "./rpc-types";
+import type { RpcMarketplaceActionResult, RpcMarketplacePluginInfo, RpcPluginActivation } from "./rpc-types";
 
 export type RpcMarketplaceAction = "add" | "remove" | "update" | "install" | "uninstall" | "upgrade" | "list_available";
 
@@ -28,6 +31,57 @@ function resolvePluginId(plugin: string | undefined, marketplace: string | undef
 		throw new Error(`Plugin "${plugin}" is not qualified; pass \`marketplace\` or a "name@marketplace" id.`);
 	}
 	return `${plugin}@${marketplace}`;
+}
+
+/**
+ * Whether a manifest ships executable entry points — extensions/tools/hooks on
+ * the base manifest or on features that would load (explicit selection, or
+ * manifest defaults when the selection is null). Extension factories bind only
+ * at session creation, so mutations touching these need a sidecar restart;
+ * commands and skills hot-reload through reloadPluginState.
+ */
+export function pluginRequiresRestart(manifest: PluginManifest, enabledFeatures: string[] | null): boolean {
+	for (const key of ["extensions", "tools", "hooks"] as const) {
+		const base = manifest[key];
+		if (Array.isArray(base) ? base.length > 0 : Boolean(base)) return true;
+		for (const [name, feature] of Object.entries(manifest.features ?? {})) {
+			const on = enabledFeatures === null ? feature.default !== false : enabledFeatures.includes(name);
+			const entries = feature[key];
+			if (on && entries !== undefined && entries.length > 0) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Post-mutation activation verdict for one installed plugin: reads its cached
+ * package.json manifest plus the persisted feature selection (manifest
+ * defaults when unreadable). Best-effort — an unreadable state resolves
+ * "live" so a broken read never turns a successful mutation into a failure.
+ */
+export async function installedPluginActivation(
+	installPath: string,
+	fallbackName: string,
+): Promise<RpcPluginActivation> {
+	try {
+		const pkg = (await Bun.file(path.join(installPath, "package.json")).json()) as {
+			name?: string;
+			omp?: PluginManifest;
+			pi?: PluginManifest;
+		};
+		const manifest = pkg.omp ?? pkg.pi;
+		if (!manifest) return "live";
+		const packageName = pkg.name?.trim() || fallbackName;
+		let enabledFeatures: string[] | null = null;
+		try {
+			enabledFeatures = await new PluginManager().getEnabledFeatures(packageName);
+		} catch {
+			// Fall back to manifest feature defaults.
+		}
+		return pluginRequiresRestart(manifest, enabledFeatures) ? "restart-required" : "live";
+	} catch {
+		return "live";
+	}
 }
 
 /**
@@ -72,16 +126,22 @@ export async function applyRpcMarketplaceAction(
 			case "install": {
 				if (!command.plugin?.trim()) return { ok: false, error: "Missing `plugin` for install." };
 				if (!command.marketplace?.trim()) return { ok: false, error: "Missing `marketplace` for install." };
-				await manager.installPlugin(command.plugin, command.marketplace);
-				return { ok: true };
+				const entry = await manager.installPlugin(command.plugin, command.marketplace);
+				return { ok: true, activation: await installedPluginActivation(entry.installPath, command.plugin) };
 			}
 			case "uninstall": {
+				// Live on disk immediately; an already-loaded extension instance
+				// unloads on the next restart — reported live so the mutation never
+				// demands a restart of its own.
 				await manager.uninstallPlugin(resolvePluginId(command.plugin, command.marketplace));
-				return { ok: true };
+				return { ok: true, activation: "live" };
 			}
 			case "upgrade": {
-				await manager.upgradePlugin(resolvePluginId(command.plugin, command.marketplace));
-				return { ok: true };
+				const entry = await manager.upgradePlugin(resolvePluginId(command.plugin, command.marketplace));
+				return {
+					ok: true,
+					activation: await installedPluginActivation(entry.installPath, command.plugin ?? ""),
+				};
 			}
 			case "list_available": {
 				// Catalogs are cache-backed (populated by add/update), so the
@@ -101,6 +161,12 @@ export async function applyRpcMarketplaceAction(
 							...(plugin.description !== undefined ? { description: plugin.description } : {}),
 							...(plugin.version !== undefined ? { version: plugin.version } : {}),
 							installed: installedIds.has(`${plugin.name}@${entry.name}`),
+							...(plugin.author?.name ? { author: plugin.author.name } : {}),
+							...(plugin.license !== undefined ? { license: plugin.license } : {}),
+							...(plugin.repository !== undefined ? { repository: plugin.repository } : {}),
+							...(plugin.homepage !== undefined ? { homepage: plugin.homepage } : {}),
+							...(plugin.category !== undefined ? { category: plugin.category } : {}),
+							...(plugin.tags !== undefined && plugin.tags.length > 0 ? { tags: plugin.tags } : {}),
 						});
 					}
 				}

@@ -191,6 +191,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_skill_detail"; name: string }
 	| { id?: string; type: "get_hooks" }
 	| { id?: string; type: "get_mcp_servers" }
+	| { id?: string; type: "get_gui_themes" }
 	| { id?: string; type: "get_plugins" }
 	| { id?: string; type: "get_marketplaces" }
 	| { id?: string; type: "get_prompt_templates" }
@@ -990,6 +991,17 @@ export interface RpcPluginsResult {
 	plugins: RpcPluginInfo[];
 }
 
+/** Theme tokens contributed by one enabled plugin's gui.theme asset. */
+export interface RpcGuiThemeInfo {
+	id: string;
+	tokens: Record<string, string>;
+}
+
+/** Result of `get_gui_themes`: declarative GUI theme tokens from enabled plugins. */
+export interface RpcGuiThemesResult {
+	themes: RpcGuiThemeInfo[];
+}
+
 /** A configured marketplace source. */
 export interface RpcMarketplaceInfo {
 	name: string;
@@ -1003,11 +1015,16 @@ export interface RpcMarketplacesResult {
 	marketplaces: RpcMarketplaceInfo[];
 }
 
+/** Whether a plugin mutation takes effect live or needs a sidecar restart to load/unload. */
+export type RpcPluginActivation = "live" | "restart-required";
+
 /** Result of `set_plugin_enabled`: which install channel persisted the toggle. */
 export interface RpcPluginSetEnabledResult {
 	id: string;
 	enabled: boolean;
 	channel: "npm" | "marketplace";
+	/** Executable plugins report restart-required in both directions (load/unload). */
+	activation?: RpcPluginActivation;
 }
 
 /** Result of `mcp_action`; `status` reports the live connection state when a manager is running. */
@@ -1080,6 +1097,13 @@ export interface RpcMarketplacePluginInfo {
 	description?: string;
 	version?: string;
 	installed: boolean;
+	/** Catalog metadata; each field is absent when the catalog entry omits it. */
+	author?: string;
+	license?: string;
+	repository?: string;
+	homepage?: string;
+	category?: string;
+	tags?: string[];
 }
 
 /**
@@ -1092,6 +1116,8 @@ export interface RpcMarketplaceActionResult {
 	ok: boolean;
 	error?: string;
 	plugins?: RpcMarketplacePluginInfo[];
+	/** install/upgrade verdict: restart-required when the plugin ships executable entry points. */
+	activation?: RpcPluginActivation;
 }
 
 /**
@@ -1117,6 +1143,8 @@ export interface RpcPluginDetail {
 export interface RpcPluginMutationResult {
 	ok: boolean;
 	error?: string;
+	/** Feature mutations that (de)activate executable entry points report restart-required. */
+	activation?: RpcPluginActivation;
 }
 
 /** A file-based prompt template. */
@@ -1871,6 +1899,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_mcp_servers"; success: true; data: RpcMcpServersResult }
 	| { id?: string; type: "response"; command: "get_plugins"; success: true; data: RpcPluginsResult }
 	| { id?: string; type: "response"; command: "get_marketplaces"; success: true; data: RpcMarketplacesResult }
+	| { id?: string; type: "response"; command: "get_gui_themes"; success: true; data: RpcGuiThemesResult }
 	| {
 			id?: string;
 			type: "response";

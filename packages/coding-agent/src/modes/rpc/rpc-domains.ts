@@ -219,6 +219,7 @@ export async function createDomainMarketplaceManager(cwd: string): Promise<Marke
 		marketplacesCacheDir: getMarketplacesCacheDir(),
 		pluginsCacheDir: getPluginsCacheDir(),
 		clearPluginRootsCache: clearPluginRootsAndCaches,
+		seedOfficialMarketplace: true,
 	});
 }
 

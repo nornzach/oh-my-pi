@@ -250,3 +250,70 @@ Plugin IDs (`name@marketplace`) must be at most 128 characters total.
 
 Valid examples: `my-plugin`, `code-review`, `wordpress.com`, `ai-firstify`
 Invalid examples: `-bad`, `bad-`, `.bad`, `Bad`, `under_score`
+
+## Authoring plugins
+
+A marketplace plugin is a directory with a `package.json` whose `omp` (or Claude-compatible `pi`) field declares its manifest:
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "omp": {
+    "description": "What the plugin does",
+    "extensions": ["ext.ts"],
+    "tools": "tools.ts",
+    "hooks": "hooks.ts",
+    "commands": ["commands/*.md"],
+    "features": {
+      "extra": { "description": "Optional extra", "default": false, "extensions": ["extra.ts"] }
+    },
+    "settings": {
+      "apiKey": { "type": "string", "secret": true, "description": "API key" }
+    },
+    "gui": { "theme": "./theme.json" }
+  }
+}
+```
+
+- `extensions` / `tools` / `hooks` are executable entry points. They load when a session is created, so installs, enables, disables, and feature changes that touch them report **restart-required** in the GUI; the sidecar restarts (resuming the session) to activate them.
+- `commands` and skills hot-reload through the reload pipeline — no restart needed.
+- Feature entries load only while the feature is enabled (`default: true` features load unless the user narrows the selection).
+- `settings` values are validated against this schema by the plugin settings UI; `secret: true` fields are write-only.
+
+### GUI theme tokens (`gui.theme`)
+
+Point `gui.theme` at a JSON file mapping **transcript-scoped token names** to CSS color values. The GUI validates every entry: unknown keys and non-color values are dropped individually, chrome tokens (accent, sidebar, titlebar, buttons) can never be overridden, and agent-provided themes win conflicts. Values must be hex (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`), functional (`rgb()`, `hsl()`, `oklch()`, `oklab()`, `lab()`, `lch()`, `color()`, `color-mix()`), or `var(--omp-…)` references.
+
+```json
+{ "mdLink": "#3b82f6", "thinkingLow": "oklch(0.7 0.05 250)", "toolSuccessBg": "#12251a" }
+```
+
+Recognized keys include `userMessageBg`, `customMessageBg`, `customMessageLabel`, `toolPendingBg`, `toolSuccessBg`, `toolErrorBg`, `toolOutput`, `mdHeading`, `mdLink`, `mdLinkUrl`, `mdCode`, `mdCodeBlock`, `mdCodeBlockBorder`, `mdQuote`, `mdQuoteBorder`, `mdHr`, `mdListBullet`, `toolDiffAdded`, `toolDiffRemoved`, `toolDiffContext`, `syntax*`, and `thinkingOff`…`thinkingXhigh` (see `TRANSCRIPT_OVERLAY_VARS` in the GUI's `themes.ts` for the authoritative list).
+
+### Packaging rules
+
+- Marketplace installs copy the plugin directory as-is — there is no install step. **Vendor everything**: commit `node_modules` or bundle to a single file; runtime dependencies are not resolved from a registry.
+- Git sources should pin an exact `sha` so upgrades are reproducible and auditable.
+- A plugin whose catalog name collides with an installed one fails the normal duplicate-name check.
+
+### Official marketplace catalog template
+
+```json
+{
+  "name": "official",
+  "owner": { "name": "omp maintainers" },
+  "plugins": [
+    {
+      "name": "example",
+      "source": { "source": "github", "repo": "nornzach/omp-plugins", "sha": "<full-commit-sha>", "path": "plugins/example" },
+      "description": "One-line description",
+      "version": "1.0.0",
+      "author": { "name": "Author" },
+      "license": "MIT",
+      "repository": "https://github.com/nornzach/omp-plugins"
+    }
+  ]
+}
+```
+

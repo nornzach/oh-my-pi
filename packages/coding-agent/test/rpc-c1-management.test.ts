@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as marketplaceModule from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import { applyRpcPluginEnabled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-actions";
 import { buildRpcMcpServersResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-domains";
 import { applyRpcMarketplaceAction } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-marketplace";
 import {
@@ -25,13 +27,34 @@ import {
 	applyRpcDeletePluginSetting,
 	applyRpcSetPluginFeatures,
 	applyRpcSetPluginSetting,
+	buildRpcGuiThemes,
 	buildRpcPluginDetail,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plugins";
 import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as piUtils from "@oh-my-pi/pi-utils";
+
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import * as fileLock from "@oh-my-pi/pi-utils/file-lock";
+
+/**
+ * Route every marketplace/registry path helper into the test's temp root.
+ * Spies the coding-agent barrel exports (live bindings) plus pi-utils
+ * getPluginsDir for the npm-channel lockfile reads.
+ */
+function spyMarketplacePaths(): void {
+	const pluginsDir = path.join(tmpRoot, "plugins");
+	fs.mkdirSync(pluginsDir, { recursive: true });
+	vi.spyOn(marketplaceModule, "getMarketplacesRegistryPath").mockReturnValue(path.join(tmpRoot, "marketplaces.json"));
+	vi.spyOn(marketplaceModule, "getMarketplacesCacheDir").mockReturnValue(
+		path.join(pluginsDir, "cache", "marketplaces"),
+	);
+	vi.spyOn(marketplaceModule, "getPluginsCacheDir").mockReturnValue(path.join(pluginsDir, "cache", "plugins"));
+	vi.spyOn(marketplaceModule, "getInstalledPluginsRegistryPath").mockReturnValue(
+		path.join(pluginsDir, "installed_plugins.json"),
+	);
+	vi.spyOn(piUtils, "getPluginsDir").mockReturnValue(pluginsDir);
+}
 
 /**
  * Contract tests for the C1 management RPC helpers (mcp add/test/reauth,
@@ -277,6 +300,135 @@ describe("applyRpcMarketplaceAction", () => {
 		const result = await applyRpcMarketplaceAction(stubSession(), { action: "add" });
 		expect(result).toEqual({ ok: false, error: "Missing `source` for marketplace add." });
 	});
+
+	it("list_available forwards catalog metadata to the wire", async () => {
+		spyMarketplacePaths();
+		const fixtureDir = path.join(tmpRoot, "fixture-marketplace");
+		fs.mkdirSync(path.join(fixtureDir, "plugins", "rich-plugin", ".claude-plugin"), { recursive: true });
+		fs.mkdirSync(path.join(fixtureDir, "plugins", "bare-plugin"), { recursive: true });
+		fs.mkdirSync(path.join(fixtureDir, ".claude-plugin"), { recursive: true });
+		fs.writeFileSync(
+			path.join(fixtureDir, ".claude-plugin", "marketplace.json"),
+			JSON.stringify({
+				name: "test-marketplace",
+				owner: { name: "Test Author" },
+				plugins: [
+					{
+						name: "rich-plugin",
+						source: "./plugins/rich-plugin",
+						description: "Full metadata",
+						version: "1.2.3",
+						author: { name: "Alice", email: "alice@example.com" },
+						homepage: "https://example.com/rich",
+						repository: "https://github.com/example/rich",
+						license: "MIT",
+						category: "productivity",
+						tags: ["search", "web"],
+					},
+					{ name: "bare-plugin", source: "./plugins/bare-plugin" },
+				],
+			}),
+		);
+
+		const added = await applyRpcMarketplaceAction(stubSession(), { action: "add", source: fixtureDir });
+		expect(added).toEqual({ ok: true });
+
+		const result = await applyRpcMarketplaceAction(stubSession(), {
+			action: "list_available",
+			marketplace: "test-marketplace",
+		});
+		expect(result.ok).toBe(true);
+		const rich = result.plugins?.find(plugin => plugin.name === "rich-plugin");
+		expect(rich).toMatchObject({
+			name: "rich-plugin",
+			description: "Full metadata",
+			version: "1.2.3",
+			author: "Alice",
+			license: "MIT",
+			repository: "https://github.com/example/rich",
+			homepage: "https://example.com/rich",
+			category: "productivity",
+			tags: ["search", "web"],
+			installed: false,
+		});
+		// Negative contract: a metadata-free catalog entry must not leak partial fields.
+		const bare = result.plugins?.find(plugin => plugin.name === "bare-plugin");
+		expect(bare).toEqual({ name: "bare-plugin", installed: false });
+	});
+
+	it("reports activation: executable vs resource-only installs and toggles", async () => {
+		spyMarketplacePaths();
+		const fixtureDir = path.join(tmpRoot, "fixture-marketplace");
+		for (const name of ["exe-plugin", "cmd-plugin", "feature-plugin"]) {
+			fs.mkdirSync(path.join(fixtureDir, "plugins", name), { recursive: true });
+		}
+		fs.mkdirSync(path.join(fixtureDir, ".claude-plugin"), { recursive: true });
+		fs.writeFileSync(
+			path.join(fixtureDir, "plugins", "exe-plugin", "package.json"),
+			JSON.stringify({ name: "exe-plugin", version: "1.0.0", omp: { extensions: ["ext.ts"] } }),
+		);
+		fs.writeFileSync(
+			path.join(fixtureDir, "plugins", "cmd-plugin", "package.json"),
+			JSON.stringify({ name: "cmd-plugin", version: "1.0.0", omp: { commands: ["cmd.md"] } }),
+		);
+		fs.writeFileSync(
+			path.join(fixtureDir, "plugins", "feature-plugin", "package.json"),
+			JSON.stringify({
+				name: "feature-plugin",
+				version: "1.0.0",
+				omp: { features: { ext: { extensions: ["a.ts"], default: false } } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(fixtureDir, ".claude-plugin", "marketplace.json"),
+			JSON.stringify({
+				name: "test-marketplace",
+				owner: { name: "Test Author" },
+				plugins: [
+					{ name: "exe-plugin", source: "./plugins/exe-plugin" },
+					{ name: "cmd-plugin", source: "./plugins/cmd-plugin" },
+					{ name: "feature-plugin", source: "./plugins/feature-plugin" },
+				],
+			}),
+		);
+
+		const session = stubSession();
+		expect(await applyRpcMarketplaceAction(session, { action: "add", source: fixtureDir })).toEqual({ ok: true });
+		expect(
+			await applyRpcMarketplaceAction(session, {
+				action: "install",
+				plugin: "exe-plugin",
+				marketplace: "test-marketplace",
+			}),
+		).toEqual({ ok: true, activation: "restart-required" });
+		expect(
+			await applyRpcMarketplaceAction(session, {
+				action: "install",
+				plugin: "cmd-plugin",
+				marketplace: "test-marketplace",
+			}),
+		).toEqual({ ok: true, activation: "live" });
+		// Feature-scoped executables that default off install live.
+		expect(
+			await applyRpcMarketplaceAction(session, {
+				action: "install",
+				plugin: "feature-plugin",
+				marketplace: "test-marketplace",
+			}),
+		).toEqual({ ok: true, activation: "live" });
+		// Enabling the feature flips the verdict to restart-required.
+		expect(await applyRpcSetPluginFeatures(session, "feature-plugin@test-marketplace", ["ext"])).toEqual({
+			ok: true,
+			activation: "restart-required",
+		});
+		// Disabling an executable plugin still needs a restart (to unload).
+		expect(await applyRpcPluginEnabled(session, "exe-plugin@test-marketplace", false)).toEqual({
+			id: "exe-plugin@test-marketplace",
+			enabled: false,
+			channel: "marketplace",
+			activation: "restart-required",
+		});
+	});
 });
 
 // ── Plugin detail & settings ────────────────────────────────────────────────
@@ -385,8 +537,10 @@ describe("buildRpcPluginDetail", () => {
 				{ id: "beta", enabled: false },
 			],
 		});
-
-		expect(await applyRpcSetPluginFeatures(stubSession(), "market-plugin@catalog", ["beta"])).toEqual({ ok: true });
+		expect(await applyRpcSetPluginFeatures(stubSession(), "market-plugin@catalog", ["beta"])).toEqual({
+			ok: true,
+			activation: "live",
+		});
 		const lock = JSON.parse(fs.readFileSync(path.join(tmpRoot, "plugins", "omp-plugins.lock.json"), "utf-8"));
 		expect(lock.plugins["market-plugin"].enabledFeatures).toEqual(["beta"]);
 	});
@@ -489,5 +643,53 @@ describe("background dispatch (dispatchRpcInputFrame)", () => {
 		const { promise: gate } = Promise.withResolvers<RpcResponse>();
 		const { deps } = makeDeps(async () => await gate);
 		expect(dispatchRpcInputFrame({ id: "t1", type: "mcp_test", name: "srv" }, deps)).toBeUndefined();
+	});
+});
+
+describe("buildRpcGuiThemes", () => {
+	function writeGuiThemeFixture(enabled: boolean): void {
+		const pluginsDir = path.join(tmpRoot, "plugins");
+		const nodeModules = path.join(pluginsDir, "node_modules", "theme-plugin");
+		fs.mkdirSync(nodeModules, { recursive: true });
+		fs.writeFileSync(
+			path.join(pluginsDir, "package.json"),
+			JSON.stringify({ dependencies: { "theme-plugin": "1.0.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(nodeModules, "package.json"),
+			JSON.stringify({
+				name: "theme-plugin",
+				version: "1.0.0",
+				omp: { gui: { theme: "./theme.json" } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(nodeModules, "theme.json"),
+			JSON.stringify({ thinkingBg: "#112233", accent: "oklch(0.7 0.1 200)", broken: 42 }),
+		);
+		vi.spyOn(piUtils, "getPluginsDir").mockReturnValue(pluginsDir);
+		vi.spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(pluginsDir, "node_modules"));
+		vi.spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(pluginsDir, "package.json"));
+		vi.spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(pluginsDir, "omp-plugins.lock.json"));
+		fs.writeFileSync(
+			path.join(pluginsDir, "omp-plugins.lock.json"),
+			JSON.stringify({ plugins: { "theme-plugin": { version: "1.0.0", enabled, enabledFeatures: null } } }),
+		);
+		vi.spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(path.join(tmpRoot, "plugin-overrides.json"));
+	}
+
+	it("collects string token values from an enabled plugin's gui.theme asset", async () => {
+		writeGuiThemeFixture(true);
+		const result = await buildRpcGuiThemes(stubSession());
+		// Non-string values are dropped; the wire carries a flat string map.
+		expect(result.themes).toEqual([
+			{ id: "theme-plugin", tokens: { thinkingBg: "#112233", accent: "oklch(0.7 0.1 200)" } },
+		]);
+	});
+
+	it("skips disabled plugins entirely", async () => {
+		writeGuiThemeFixture(false);
+		const result = await buildRpcGuiThemes(stubSession());
+		expect(result.themes).toEqual([]);
 	});
 });

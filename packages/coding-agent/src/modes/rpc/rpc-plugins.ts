@@ -15,12 +15,74 @@
  * `{ ok:false, error }` from the mutating helpers; `get_plugin_detail` throws
  * (its result shape has no error channel).
  */
+import * as path from "node:path";
+import { pathIsWithin } from "@oh-my-pi/pi-utils";
 import { PluginManager, validateSetting } from "../../extensibility/plugins/manager";
 import { parsePluginId } from "../../extensibility/plugins/marketplace";
 import type { InstalledPlugin, PluginManifest } from "../../extensibility/plugins/types";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
-import type { RpcPluginDetail, RpcPluginMutationResult } from "./rpc-types";
+import { pluginRequiresRestart } from "./rpc-marketplace";
+import type { RpcGuiThemeInfo, RpcGuiThemesResult, RpcPluginDetail, RpcPluginMutationResult } from "./rpc-types";
+/**
+ * Collect declarative GUI theme tokens from enabled plugins (both install
+ * channels, mirroring buildRpcPluginsResult): each manifest may point
+ * `gui.theme` at a JSON map of token values. Raw tokens cross the wire —
+ * key/value validation is the GUI's job (it owns the token registry).
+ * Unreadable or malformed assets skip their plugin; a broken theme must
+ * never fail the listing.
+ */
+export async function buildRpcGuiThemes(session: AgentSession): Promise<RpcGuiThemesResult> {
+	const cwd = session.sessionManager.getCwd();
+	const themes: RpcGuiThemeInfo[] = [];
+	const seen = new Set<string>();
+	const collect = async (
+		id: string,
+		pluginPath: string,
+		manifest: PluginManifest,
+		enabled: boolean,
+	): Promise<void> => {
+		if (!enabled || seen.has(id)) return;
+		seen.add(id);
+		const themePath = manifest.gui?.theme;
+		if (!themePath) return;
+		const resolved = path.resolve(pluginPath, themePath);
+		if (!pathIsWithin(pluginPath, resolved)) return;
+		try {
+			const parsed = (await Bun.file(resolved).json()) as Record<string, unknown>;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+			themes.push({
+				id,
+				tokens: Object.fromEntries(
+					Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+				),
+			});
+		} catch {
+			// Unreadable or malformed theme asset — skip the plugin.
+		}
+	};
+
+	const npmManager = new PluginManager(cwd);
+	for (const plugin of await npmManager.list()) {
+		await collect(plugin.name, plugin.path, plugin.manifest, plugin.enabled);
+	}
+	const marketplaceManager = await createDomainMarketplaceManager(cwd);
+	for (const summary of await marketplaceManager.listInstalledPlugins()) {
+		const entry = summary.entries[0];
+		if (!entry) continue;
+		try {
+			const pkg = (await Bun.file(path.join(entry.installPath, "package.json")).json()) as {
+				name?: string;
+				omp?: PluginManifest;
+				pi?: PluginManifest;
+			};
+			const manifest = pkg.omp ?? pkg.pi;
+			if (!manifest) continue;
+			await collect(summary.id, entry.installPath, manifest, entry.enabled !== false);
+		} catch {}
+	}
+	return { themes };
+}
 
 /** A `name@marketplace` id addresses its package by bare name; npm ids pass through. */
 function pluginNameFromId(pluginId: string): string {
@@ -133,7 +195,10 @@ export async function applyRpcSetPluginFeatures(
 			version: plugin.version,
 			manifest: plugin.manifest,
 		});
-		return { ok: true };
+		return {
+			ok: true,
+			activation: pluginRequiresRestart(plugin.manifest, features) ? "restart-required" : "live",
+		};
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}

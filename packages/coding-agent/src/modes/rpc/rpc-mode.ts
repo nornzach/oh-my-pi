@@ -102,6 +102,7 @@ import {
 	applyRpcDeletePluginSetting,
 	applyRpcSetPluginFeatures,
 	applyRpcSetPluginSetting,
+	buildRpcGuiThemes,
 	buildRpcPluginDetail,
 } from "./rpc-plugins";
 import {
@@ -3147,6 +3148,15 @@ export async function runRpcMode(
 					return success(id, "marketplace_action", result);
 				} catch (err: unknown) {
 					return error(id, "marketplace_action", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_gui_themes": {
+				try {
+					const result = await buildRpcGuiThemes(session);
+					return success(id, "get_gui_themes", result);
+				} catch (err: unknown) {
+					return error(id, "get_gui_themes", err instanceof Error ? err.message : String(err));
 				}
 			}
 

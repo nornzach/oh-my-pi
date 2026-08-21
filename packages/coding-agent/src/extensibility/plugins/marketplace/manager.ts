@@ -51,6 +51,15 @@ function assertRuntimePackageName(name: string): string {
 	return name;
 }
 
+/**
+ * The curated first-party catalog, seeded into a missing marketplaces registry
+ * so a fresh install can browse without knowing any source URLs. Git sources
+ * with pinned SHAs only (npm catalog sources are unsupported). A user catalog
+ * with the same name collides through the normal duplicate-name check.
+ */
+export const OFFICIAL_MARKETPLACE_NAME = "official";
+export const OFFICIAL_MARKETPLACE_SOURCE = "nornzach/omp-plugins";
+
 // ── Options ──────────────────────────────────────────────────────────────────
 
 export interface MarketplaceManagerOptions {
@@ -64,10 +73,12 @@ export interface MarketplaceManagerOptions {
 	projectInstalledRegistryPath?: string;
 	marketplacesCacheDir: string;
 	pluginsCacheDir: string;
-	/** Injected for testing; production callers pass clearClaudePluginRootsCache.
-	 *  Receives any additional file paths that should also be invalidated from the fs cache.
-	 */
 	clearPluginRootsCache?: (extraPaths?: readonly string[]) => void;
+	/**
+	 * Seed the official marketplace into a missing marketplaces registry on
+	 * first read. Production factories opt in; tests construct without it.
+	 */
+	seedOfficialMarketplace?: boolean;
 }
 
 // ── Manager ──────────────────────────────────────────────────────────────────
@@ -205,8 +216,38 @@ export class MarketplaceManager {
 	}
 
 	async listMarketplaces(): Promise<MarketplaceRegistryEntry[]> {
+		await this.#seedOfficialMarketplace();
 		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
 		return reg.marketplaces;
+	}
+
+	/**
+	 * Seed the official marketplace into a MISSING registry file. Any existing
+	 * registry wins — even an empty one is user state seeding must not
+	 * overwrite. Registry write only, no network fetch: offline first-runs
+	 * degrade to a "not fetched" card until the first update resolves it.
+	 */
+	async #seedOfficialMarketplace(): Promise<void> {
+		if (!this.#opts.seedOfficialMarketplace) return;
+		try {
+			await fs.access(this.#opts.marketplacesRegistryPath);
+			return;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		const now = new Date().toISOString();
+		const entry: MarketplaceRegistryEntry = {
+			name: OFFICIAL_MARKETPLACE_NAME,
+			sourceType: "github",
+			sourceUri: OFFICIAL_MARKETPLACE_SOURCE,
+			catalogPath: path.resolve(
+				path.join(this.#opts.marketplacesCacheDir, OFFICIAL_MARKETPLACE_NAME, "marketplace.json"),
+			),
+			addedAt: now,
+			updatedAt: now,
+		};
+		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, { version: 1, marketplaces: [entry] });
+		logger.debug("Seeded official marketplace registry", { name: OFFICIAL_MARKETPLACE_NAME });
 	}
 
 	// ── Plugin discovery ──────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ import { loadAllMCPConfigs } from "../../mcp/config";
 import { readMCPConfigFile, removeMCPServer, setMcpServerEnabled } from "../../mcp/config-writer";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
+import { installedPluginActivation, pluginRequiresRestart } from "./rpc-marketplace";
 import { serializeMcpReload } from "./rpc-mcp-extra";
 import type { RpcMcpActionResult, RpcPluginSetEnabledResult } from "./rpc-types";
 
@@ -97,11 +98,22 @@ export async function applyRpcPluginEnabled(
 	if (parsePluginId(id)) {
 		const manager = await createDomainMarketplaceManager(session.sessionManager.getCwd());
 		await manager.setPluginEnabled(id, enabled, scope);
-		return { id, enabled, channel: "marketplace" };
+		const entry = (await manager.listInstalledPlugins()).find(candidate => candidate.id === id)?.entries[0];
+		const activation = entry ? await installedPluginActivation(entry.installPath, id) : "live";
+		return { id, enabled, channel: "marketplace", activation };
 	}
 	const npmManager = new PluginManager();
 	await npmManager.setEnabled(id, enabled);
-	return { id, enabled, channel: "npm" };
+	const installed = (await npmManager.list()).find(plugin => plugin.name === id);
+	return {
+		id,
+		enabled,
+		channel: "npm",
+		activation:
+			installed && pluginRequiresRestart(installed.manifest, installed.enabledFeatures)
+				? "restart-required"
+				: "live",
+	};
 }
 
 // ============================================================================
