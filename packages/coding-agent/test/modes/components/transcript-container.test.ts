@@ -59,6 +59,13 @@ class UnfinalizedText extends Text {
 	}
 }
 
+/** Live dashboard that opts into viewport pinning (hub wait / todo snapshot). */
+class PinnedLiveBlock extends StreamingBlock {
+	isNativeScrollbackLiveRegionPinned(): boolean {
+		return !this.isTranscriptBlockFinalized();
+	}
+}
+
 // A still-live block that can declare a byte-stable rendered prefix. The
 // transcript container may commit only those declared rows before finalization.
 class DeclaredSettledStreamingBlock extends StreamingBlock {
@@ -383,7 +390,15 @@ describe("TranscriptContainer", () => {
 		expect(rendered.at(-1)).toContain("Finalized notice");
 	});
 
-	it("replays conservatively when finalized history before a live source has no mutation version", () => {
+	it("trusts the version-omission contract for finalized history before a live source", () => {
+		// Per FinalizableBlock, omitting getTranscriptBlockVersion declares a block
+		// immutable post-finalize, so resolution treats it as stable across the
+		// epoch — failing here instead replayed the full transcript into pane
+		// history on every real tmux width resize (only AssistantMessageComponent
+		// implements the version). A block that violates the declaration falls to
+		// the committed-prefix audit's bounded repair; blocks that genuinely
+		// mutate post-finalize must report a version (see the versioned rejection
+		// case below).
 		const container = new TranscriptContainer();
 		const history = new CountingFinalizedBlock(["history"]);
 		const live = new WidthEpochStreamingBlock(["stable", "pending"], 1);
@@ -392,10 +407,9 @@ describe("TranscriptContainer", () => {
 		container.render(40);
 		const boundary = container.captureNativeScrollbackWidthEpoch();
 
-		history.set(["history", "late image"]);
 		container.render(17);
 
-		expect(container.resolveNativeScrollbackWidthEpoch(boundary)).toBeUndefined();
+		expect(container.resolveNativeScrollbackWidthEpoch(boundary)).toBeGreaterThan(0);
 	});
 
 	it("rejects a width epoch when versioned finalized history before its live source grows", () => {
@@ -478,6 +492,21 @@ describe("TranscriptContainer", () => {
 		pending.finalize(["pending-final"]);
 		expect(container.render(40)).toEqual(["done-collapsed", "", "pending-final", "", "card"]);
 		expect(container.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+	});
+
+	it("keeps the earliest live seam and pins from a later live dashboard", () => {
+		const container = new TranscriptContainer();
+		container.addChild(new MutableBlock(["history"]));
+		const pending = new StreamingBlock(["bash-pending"]);
+		const poll = new PinnedLiveBlock(["wait-header", "wait-body"]);
+		container.addChild(pending);
+		container.addChild(poll);
+		expect(container.render(40)).toEqual(["history", "", "bash-pending", "", "wait-header", "wait-body"]);
+		// history(0) sep(1) bash(2) sep(3) wait(4..) — live seam at bash,
+		// pin ceiling at the hub-wait body so bash can still commit.
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		expect(container.isNativeScrollbackLiveRegionPinned()).toBe(true);
+		expect(container.getNativeScrollbackLiveRegionPinnedStart()).toBe(4);
 	});
 
 	it("stops the boundary at the first unfinalized block's first content row when no rows are settled", () => {
@@ -997,6 +1026,18 @@ describe("TranscriptContainer seal-on-commit", () => {
 		container.render(W);
 		expect(card.sealCount).toBe(0);
 		expect(container.isBlockUncommitted(card)).toBe(true);
+	});
+
+	it("does not seal when only the container-owned separator has committed", () => {
+		const { container, card } = cardAfterHistory();
+		// live-region start is row 2; the engine's pin ceiling commits [0, 2)
+		// (history + the blank separator). That blank is not a card body row.
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
+		container.setNativeScrollbackCommittedRows(2);
+		container.render(W);
+		expect(card.sealCount).toBe(0);
+		expect(container.isBlockUncommitted(card)).toBe(true);
+		expect(container.getNativeScrollbackLiveRegionStart()).toBe(2);
 	});
 
 	it("never seals across same-value or decreasing republishes above the block", () => {

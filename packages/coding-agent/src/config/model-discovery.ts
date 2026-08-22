@@ -20,6 +20,7 @@ import {
 	fetchLmStudioNativeModelMetadata,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
+	resolveLiteLLMApi,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
@@ -185,7 +186,7 @@ type LlamaCppDiscoveredServerMetadata = {
 	maxTokens?: "contextWindow";
 };
 
-type LlamaCppDiscoveredModelRuntimeMetadata = {
+type DiscoveredModelRuntimeMetadata = {
 	contextWindow?: number;
 	maxTokens?: number;
 	input?: ("text" | "image")[];
@@ -672,7 +673,7 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers">,
 	ctx: DiscoveryContext,
 	customTimeoutMs?: number,
-): Promise<LlamaCppDiscoveredModelRuntimeMetadata | undefined> {
+): Promise<DiscoveredModelRuntimeMetadata | undefined> {
 	const baseUrl = normalizeLlamaCppBaseUrl(model.baseUrl);
 	// Probe the native `/models` endpoint (not the OpenAI-compatible `/v1/models`)
 	// so the runtime `meta`, `status.args`, and `architecture.input_modalities`
@@ -715,6 +716,61 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 			contextWindow,
 			maxTokens: resolveLlamaCppMaxTokens(contextWindow, serverMetadata?.maxTokens),
 			...(input !== undefined ? { input } : {}),
+		};
+	};
+	try {
+		const apiKey = await ctx.getBearerApiKeyResolver(model.provider);
+		return apiKey
+			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			: await attempt(baseHeaders);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Re-probe LM Studio's native `/api/v0/models` for a single selected model so
+ * its context window tracks the runtime lifecycle rather than the snapshot
+ * captured at discovery time.
+ *
+ * A model discovered while unloaded is registered with `max_context_length`
+ * (the architectural ceiling). When LM Studio JIT-loads it on first inference,
+ * the running instance may serve a smaller `loaded_context_length` (user load
+ * settings or context auto-fit). `getLmStudioNativeContextWindow` — invoked
+ * inside `fetchLmStudioNativeModelMetadata` — prefers `loaded_context_length`
+ * once `state === "loaded"`, so refreshing after selection swaps the stale
+ * ceiling for the window the backend actually accepts (issue #9001). A later
+ * unload re-probes back to `max_context_length`. This mirrors the llama.cpp
+ * lazy-load refresh from #3310/#3311.
+ *
+ * `maxTokens` is carried through so the caller can re-cap output at the new
+ * (possibly smaller) window; LM Studio native metadata reports no output cap
+ * of its own.
+ */
+export async function discoverLmStudioModelRuntimeMetadata(
+	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers" | "maxTokens">,
+	ctx: DiscoveryContext,
+	customTimeoutMs?: number,
+): Promise<DiscoveredModelRuntimeMetadata | undefined> {
+	const baseUrl = normalizeOpenAIModelsListBaseUrl(model.baseUrl);
+	const timeoutMs = customTimeoutMs ?? 10_000;
+	const baseHeaders: Record<string, string> = { ...(model.headers ?? {}) };
+	const attempt = async (headers: Record<string, string>) => {
+		const metadata = await withTimeoutSignal(timeoutMs, signal =>
+			fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers, signal }),
+		);
+		const entry = metadata?.get(model.id);
+		if (!entry) {
+			return undefined;
+		}
+		const contextWindow = entry.contextWindow;
+		if (contextWindow === undefined) {
+			return entry.input === undefined ? undefined : { input: entry.input };
+		}
+		return {
+			contextWindow,
+			...(typeof model.maxTokens === "number" ? { maxTokens: model.maxTokens } : {}),
+			...(entry.input !== undefined ? { input: entry.input } : {}),
 		};
 	};
 	try {
@@ -855,6 +911,10 @@ export async function discoverOpenAIModelsList(
 		// headers/baseUrl/cost stay local.
 		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
+		const api =
+			providerConfig.discovery.type === "litellm"
+				? resolveLiteLLMApi(undefined, id, providerConfig.api)
+				: providerConfig.api;
 		const contextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
@@ -873,7 +933,7 @@ export async function discoverOpenAIModelsList(
 			buildModel({
 				id,
 				name: displayName ?? reference?.name ?? id,
-				api: providerConfig.api,
+				api,
 				provider: providerConfig.provider,
 				baseUrl,
 				reasoning: supportsThinking || reference?.reasoning === true,
@@ -891,7 +951,7 @@ export async function discoverOpenAIModelsList(
 				// window so an ID collision with a larger bundled model can
 				// never request more tokens than the local runtime advertises.
 				maxTokens: Math.min(
-					advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api),
+					advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 					contextWindow,
 				),
 				headers,
@@ -934,13 +994,14 @@ export async function discoverLiteLLMModels(
 			return response;
 		};
 		const models = await withTimeoutSignal(timeoutMs, signal =>
-			fetchLiteLLMRichModels({
+			fetchLiteLLMRichModels<Api>({
 				api: providerConfig.api,
 				provider: providerConfig.provider,
 				baseUrl,
 				headers: h,
 				fetch: authAwareFetch,
 				referenceResolver: resolveReference,
+				resolveApi: (entry, id) => resolveLiteLLMApi(entry, id, providerConfig.api),
 				signal,
 			}),
 		);

@@ -6,6 +6,7 @@ import { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
+import { SLOPPY_MARKERS } from "@oh-my-pi/pi-coding-agent/edit/sloppy";
 import { renderDiff } from "@oh-my-pi/pi-coding-agent/modes/components/diff";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -169,6 +170,32 @@ describe("editToolRenderer", () => {
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("packages/coding-agent/src/edit/renderer.ts");
 		expect(rendered).not.toContain("The first line of the patch must be");
+	});
+
+	it("uses sloppy input section headers for the streaming call path", async () => {
+		const uiTheme = await getUiTheme();
+		const component = editToolRenderer.renderCall(
+			{ input: `[src/engine/disk.rs]\n${SLOPPY_MARKERS.open}\nfn parse_disk_ref(` },
+			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "sloppy" } },
+			uiTheme,
+		);
+
+		const rendered = Bun.stripANSI(component.render(160).join("\n"));
+		expect(rendered).toContain("src/engine/disk.rs");
+	});
+
+	it("counts extra sloppy sections in the streaming call header", async () => {
+		const uiTheme = await getUiTheme();
+		const input = `[a.ts]\n${SLOPPY_MARKERS.open}\nfoo\n[b.ts]\n${SLOPPY_MARKERS.open}\nbar`;
+		const component = editToolRenderer.renderCall(
+			{ input },
+			{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "sloppy" } },
+			uiTheme,
+		);
+
+		const rendered = Bun.stripANSI(component.render(160).join("\n"));
+		expect(rendered).toContain("a.ts");
+		expect(rendered).toContain("(+1 more)");
 	});
 
 	it("shows hashline envelope target path while preview diff is not computable yet", async () => {
@@ -500,6 +527,28 @@ describe("editToolRenderer", () => {
 		expect(rendered).toContain("+40│line 39");
 		expect(rendered).not.toContain("+41│line 40");
 		expect(rendered).toContain("960 more lines");
+	});
+
+	it("bounds a completed collapsed diff by rendered rows", async () => {
+		const uiTheme = await getUiTheme();
+		const tail = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".repeat(4);
+		const diff = Array.from({ length: 12 }, (_, index) => {
+			const line = index + 1;
+			return `-${line}|ROW_${line.toString().padStart(2, "0")}=${tail}\n+${line}|ROW_${line.toString().padStart(2, "0")}=changed-${tail}`;
+		}).join("\n");
+		const component = editToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "Updated long-lines.txt" }],
+				details: { diff, op: "update" },
+			},
+			{ expanded: false, isPartial: false, renderContext: { renderDiff } },
+			uiTheme,
+			{ file_path: "long-lines.txt" },
+		);
+
+		const lines = component.render(120).map(line => Bun.stripANSI(line));
+		expect(lines).toHaveLength(43);
+		expect(lines.join("\n")).toContain("more lines");
 	});
 
 	it("renders completed edit gutters without inherited frame padding", async () => {

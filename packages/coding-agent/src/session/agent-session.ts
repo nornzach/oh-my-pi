@@ -59,6 +59,7 @@ import type {
 	Message,
 	Model,
 	OAuthAccountIdentity,
+	ProviderResponseMetadata,
 	ProviderSessionState,
 	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
@@ -78,11 +79,11 @@ import { type Effort, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	$env,
-	APP_NAME,
 	escapeXmlText,
 	formatDuration,
 	getAgentDbPath,
@@ -105,7 +106,12 @@ import type { ResolvedModelRoleValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
-import { onAppendOnlyModeChanged, onExtendedContextChanged, onModelRolesChanged } from "../config/settings";
+import {
+	onAppendOnlyModeChanged,
+	onCodeModeChanged,
+	onExtendedContextChanged,
+	onModelRolesChanged,
+} from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { PythonResult } from "../eval/py/executor";
@@ -186,6 +192,7 @@ import {
 } from "../thinking";
 import { isLowSignalTitleInput } from "../tiny/text";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
+import type { ImageAttachmentEntry } from "../tools";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails, type AskToolInput, recoverAskQuestions } from "../tools/ask";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
@@ -210,6 +217,7 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import type { InspectImageMode } from "../utils/inspect-image-mode";
+import { resumeCommand } from "../utils/resume-command";
 import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { VibeModeState } from "../vibe/state";
@@ -543,6 +551,7 @@ export class AgentSession {
 	#unsubscribeModelRoles?: () => void;
 	#unsubscribeQueueChange?: () => void;
 	#unsubscribeExtendedContext?: () => void;
+	#unsubscribeCodeMode?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
@@ -677,6 +686,13 @@ export class AgentSession {
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
+	/**
+	 * Providers/models (`${provider}/${id}`) whose runtime context window has
+	 * already been re-probed after their first successful inference this session,
+	 * so a lazy-load local model (LM Studio JIT, llama.cpp cold start) is
+	 * refreshed exactly once rather than on every response (#9001).
+	 */
+	#lazyContextRefreshed = new Set<string>();
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
 	#preferWebsockets: boolean | undefined;
@@ -1036,8 +1052,11 @@ export class AgentSession {
 		return listPlanFiles({ localProtocolOptions: this.#localProtocolOptions() });
 	}
 
+	#codeModeState: { namespacesInfo?: unknown };
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
+		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		this.restrictToolNames = config.restrictToolNames === true;
@@ -1117,6 +1136,7 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
 			getActiveToolNames: () => this.getActiveToolNames(),
+			getEnabledToolNames: () => this.getEnabledToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
@@ -1264,11 +1284,15 @@ export class AgentSession {
 			? async (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
 					this.#stats.ingestProviderUsageHeaders(response, model);
+					await this.#maybeRefreshLazyLocalContext(response, model);
 					await configuredOnResponse(response, model);
 				}
 			: (response, model) => {
 					this.rawSseDebugBuffer.recordResponse(response, model);
 					this.#stats.ingestProviderUsageHeaders(response, model);
+					// Returns void (no allocation) unless a one-time lazy-model
+					// refresh is actually due, preserving the sync fast path.
+					return this.#maybeRefreshLazyLocalContext(response, model);
 				};
 		const configuredOnSseEvent = config.onSseEvent;
 		this.#onSseEvent = configuredOnSseEvent
@@ -1363,6 +1387,9 @@ export class AgentSession {
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			model: () => this.model,
+			setCodeModeNamespacesInfo: info => {
+				this.#codeModeState.namespacesInfo = info;
+			},
 			memoryBackendSession: () => this,
 			clearInheritedProviderPromptCacheKey: () => this.#clearInheritedProviderPromptCacheKey(),
 			clearMemoryPromotionSnapshot: () => this.#memory.clearPromotionSnapshot(),
@@ -1525,7 +1552,7 @@ export class AgentSession {
 			if (!sessionId || !this.sessionManager.getSessionFile()) return undefined;
 			return {
 				label: this.#agentId ?? (this.#agentKind === "main" ? "Main" : "Agent"),
-				command: `${APP_NAME} --resume ${sessionId}`,
+				command: resumeCommand(sessionId),
 			};
 		});
 
@@ -1563,6 +1590,8 @@ export class AgentSession {
 				this.#maintenance.resolveCompactionModelCandidates(model, availableModels),
 			resolveRetryFallbackRole: (selector, model, roleHint) =>
 				this.#recovery.resolveRetryFallbackRole(selector, model, roleHint),
+			retryFallbackChainKeys: (selector, model, options) =>
+				this.#recovery.retryFallbackChainKeys(selector, model, options),
 			findRetryFallbackCandidates: (role, selector, model) =>
 				this.#recovery.findRetryFallbackCandidates(role, selector, model),
 			isRetryFallbackSelectorSuppressed: selector => this.#recovery.isRetryFallbackSelectorSuppressed(selector),
@@ -1693,6 +1722,19 @@ export class AgentSession {
 		// restores) premium long-context windows, and the live model object must
 		// follow so compaction thresholds and context display react immediately.
 		this.#unsubscribeExtendedContext = onExtendedContextChanged(() => void this.#reapplyExtendedContextPolicy());
+		this.#unsubscribeCodeMode = onCodeModeChanged(() => {
+			void this.#tools.reconcileCodeMode().catch(error => {
+				logger.warn("Code Mode reconcile after setting change failed", { error: String(error) });
+			});
+		});
+
+		// An advisor enabled in config resolves its role against the model catalog
+		// as it stands at construction. Discovery-backed providers (e.g. GitHub
+		// Copilot) may not be populated yet — background discovery is started
+		// fire-and-forget before the session is built — so a valid configured model
+		// can land as `no_model`. Retry once the initial refresh settles so the
+		// advisor activates without a manual /advisor toggle. See #9010.
+		void this.#retryInactiveAdvisorAfterModelDiscovery();
 	}
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
@@ -2531,6 +2573,13 @@ export class AgentSession {
 	 * run into hidden continuity context for the next turn. Short fragments are
 	 * omitted; `convertToLlm` still strips their incomplete thinking from replay.
 	 *
+	 * Skipped for anthropic-dialect targets: the continuity quote replays the
+	 * model's own reasoning as conversation text, which Anthropic's
+	 * `reasoning_extraction` classifier refuses (verified live against Fable 5 —
+	 * the quoted fragment trips it even inside a full agentic request on
+	 * OAuth/subscription auth). transform-messages already drops the unsigned
+	 * trailing run from replay, so nothing else is lost.
+	 *
 	 * The original thinking stays on the assistant message so live render, reload,
 	 * and display-reset rebuilds keep showing it.
 	 */
@@ -2538,6 +2587,7 @@ export class AgentSession {
 		message: AssistantMessage,
 	): CustomMessage<InterruptedThinkingDetails> | undefined {
 		if (message.stopReason !== "aborted" || !isUserInterruptAbort(message)) return undefined;
+		if (preferredDialect(this.agent.state.model?.id ?? message.model) === "anthropic") return undefined;
 		const demoted = demoteInterruptedThinking(message);
 		if (!demoted || demoted.reasoning.length < INTERRUPTED_THINKING_MIN_CHARS) return undefined;
 		const interruptedAt = Date.now();
@@ -4198,6 +4248,10 @@ export class AgentSession {
 			this.#unsubscribeExtendedContext();
 			this.#unsubscribeExtendedContext = undefined;
 		}
+		if (this.#unsubscribeCodeMode) {
+			this.#unsubscribeCodeMode();
+			this.#unsubscribeCodeMode = undefined;
+		}
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
 		this.#sessionChangeCallbacks.clear();
@@ -4415,6 +4469,49 @@ export class AgentSession {
 	}
 
 	/**
+	 * On the first successful response from a lazy-load local model, re-probe its
+	 * runtime context window and fold the result into the live session model.
+	 *
+	 * Discovery snapshots a not-yet-loaded LM Studio model with its architectural
+	 * `max_context_length`; the runtime `loaded_context_length` only exists once
+	 * the model JIT-loads on the first inference (llama.cpp has the same cold-start
+	 * gap for `meta.n_ctx`). A 2xx here means the load completed, so the probe now
+	 * returns the window the backend actually serves. Compaction and the context
+	 * bar read `agent.state.model` every turn, so `agent.setModel` propagates it
+	 * immediately without a provider-session reset (#9001).
+	 *
+	 * Returns `void` synchronously when nothing is due — the common case — so the
+	 * no-callback `#onResponse` fast path stays allocation-free.
+	 */
+	#maybeRefreshLazyLocalContext(response: ProviderResponseMetadata, model: Model | undefined): void | Promise<void> {
+		if (!model || response.status < 200 || response.status >= 300) return;
+		const key = `${model.provider}/${model.id}`;
+		if (this.#lazyContextRefreshed.has(key)) return;
+		if (!this.#modelRegistry.hasLazyRuntimeMetadata(model.provider)) return;
+		this.#lazyContextRefreshed.add(key);
+		return this.#refreshLazyLocalContext(model);
+	}
+
+	async #refreshLazyLocalContext(model: Model): Promise<void> {
+		try {
+			const refreshed = await this.#modelRegistry.refreshSelectedModelMetadata(model);
+			const current = this.model;
+			// Skip if the user switched models mid-stream, or the runtime window
+			// matches what the session already holds.
+			if (!current || !modelsAreEqual(current, refreshed) || refreshed.contextWindow === current.contextWindow) {
+				return;
+			}
+			this.agent.setModel(refreshed);
+		} catch (error) {
+			logger.debug("Lazy local model context refresh failed", {
+				provider: model.provider,
+				model: model.id,
+				error,
+			});
+		}
+	}
+
+	/**
 	 * Model this session's produced work is attributed to. Holds the last model
 	 * that actually served while a fallback is armed but unproven, so observers
 	 * never credit a run to a candidate that produced nothing.
@@ -4612,6 +4709,16 @@ export class AgentSession {
 		return this.#tools.getToolByName(name);
 	}
 
+	/** Looks up an enabled eval-bridge tool with the session's permission gate applied. */
+	getToolForEvalBridge(name: string): AgentTool | undefined {
+		return this.#tools.getToolForEvalBridge(name);
+	}
+
+	/** Names currently authorized through the eval bridge. */
+	getEvalBridgeToolNames(): string[] {
+		return this.#tools.getEvalBridgeToolNames();
+	}
+
 	/** Whether a registry entry came from a built-in factory. */
 	hasBuiltInTool(name: string): boolean {
 		return this.#tools.hasBuiltInTool(name);
@@ -4697,6 +4804,29 @@ export class AgentSession {
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
 	refreshSkills(): Promise<void> {
 		return this.#tools.refreshSkills();
+	}
+
+	/**
+	 * Applies Code Mode at session startup: when the initial model activates
+	 * it (`codeMode` `on`, or `auto` matching a `code_mode_only` catalog flag),
+	 * the initial tool surface is routed through the Code Mode-aware path so
+	 * the restricted direct surface and namespaces snapshot exist before the
+	 * first provider turn instead of waiting for an unrelated reconciliation.
+	 *
+	 * Inactive sessions keep their initial surface untouched: re-applying an
+	 * unchanged set would seed the prompt-rebuild signature cache and suppress
+	 * the first late tool registration's rebuild (non-MCP `xd://` mounts are
+	 * deliberately not part of that signature).
+	 */
+	initializeCodeMode(): Promise<void> {
+		const model = this.model;
+		if (!model || !this.#tools.codeModeChangesBetween(undefined, model)) return Promise.resolve();
+		return this.#tools.reconcileCodeMode();
+	}
+
+	/** Current Code Mode `tool_namespaces_info` snapshot, or `undefined` when inactive. */
+	get codeModeNamespacesInfo(): unknown {
+		return this.#codeModeState.namespacesInfo;
 	}
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
@@ -4824,9 +4954,9 @@ export class AgentSession {
 		return this.#maintenance.compact(customInstructions, options);
 	}
 
-	/** Cancel active manual, automatic, and handoff maintenance. */
-	abortCompaction(): void {
-		this.#maintenance.abortCompaction();
+	/** Cancel active manual, automatic, and handoff maintenance, preserving an optional source reason. */
+	abortCompaction(reason?: unknown): void {
+		void this.#maintenance.abortCompaction(reason);
 	}
 
 	/** Trigger idle compaction through the automatic maintenance flow. */
@@ -4868,7 +4998,7 @@ export class AgentSession {
 	}
 
 	/** Latest image attachments addressable by tools as `Image #N` or `attachment://N`. */
-	getImageAttachments(): { label: string; uri: string; image: ImageContent }[] {
+	getImageAttachments(): ImageAttachmentEntry[] {
 		return this.#providerBoundary.getImageAttachments();
 	}
 
@@ -4957,6 +5087,11 @@ export class AgentSession {
 	/** Scoped models for cycling (from --models flag) */
 	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
 		return this.#models.scopedModels;
+	}
+
+	/** Replace the Ctrl+P/`/models` cycle scope (post-discovery rebuild; see {@link ModelControls.setScopedModels}). */
+	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void {
+		this.#models.setScopedModels(scopedModels);
 	}
 
 	/** Prompt templates */
@@ -5388,14 +5523,14 @@ export class AgentSession {
 			});
 		}
 		if (this.#magicKeywordEnabled("orchestrate") && containsOrchestrate(text)) {
-			const activeToolNames = this.getActiveToolNames();
+			const enabledToolNames = this.getEnabledToolNames();
 			// The contract is entirely about `task` subagent dispatch; without the
 			// task tool the notice would demand an unavailable capability.
-			if (activeToolNames.includes("task")) {
+			if (enabledToolNames.includes("task")) {
 				keywordNotices.push({
 					role: "custom",
 					customType: "orchestrate-notice",
-					content: renderOrchestrateNotice({ tools: activeToolNames }),
+					content: renderOrchestrateNotice({ tools: enabledToolNames }),
 					display: false,
 					attribution: "user",
 					timestamp,
@@ -5403,8 +5538,8 @@ export class AgentSession {
 			}
 		}
 		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
-			const activeToolNames = this.getActiveToolNames();
-			if (activeToolNames.includes("task") && activeToolNames.includes("eval")) {
+			const enabledToolNames = this.getEnabledToolNames();
+			if (enabledToolNames.includes("task") && enabledToolNames.includes("eval")) {
 				keywordNotices.push({
 					role: "custom",
 					customType: "workflow-notice",
@@ -5438,6 +5573,12 @@ export class AgentSession {
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		// A manual `/compact` runs with the agent subscription disconnected until its
+		// cleanup finally re-drains the preserved queues. Starting a turn before then
+		// would neither persist nor forward its events and could race the in-flight
+		// history rewrite. `abort` still overtakes compaction; ordinary prompts wait
+		// here. No-op when no manual compaction is active.
+		await this.#maintenance.manualCompactionCleanup;
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
@@ -5937,6 +6078,8 @@ export class AgentSession {
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
+			isProjectTrusted: () => true,
+
 			model: this.model ?? undefined,
 			models: createExtensionModelQuery(this.#modelRegistry, this.settings, () => this.model ?? undefined),
 			isIdle: () => !this.isStreaming,
@@ -6950,8 +7093,10 @@ export class AgentSession {
 	 * Generate an automatic session title tied to this session's lifecycle.
 	 * Input and replan callers share the signal so disposal cancels provider and
 	 * local-worker requests instead of leaving background inference alive.
+	 * `customSystemPrompt` swaps the title prompt for special-purpose titling
+	 * (e.g. plan-save filename topics) without touching the session override.
 	 */
-	generateTitle(firstMessage: string): Promise<string | null> {
+	generateTitle(firstMessage: string, customSystemPrompt?: string): Promise<string | null> {
 		return generateSessionTitle(
 			firstMessage,
 			this.#modelRegistry,
@@ -6959,7 +7104,7 @@ export class AgentSession {
 			this.sessionId,
 			this.model,
 			provider => this.agent.metadataForProvider(provider),
-			this.#titleSystemPrompt,
+			customSystemPrompt ?? this.#titleSystemPrompt,
 			this.#titleGenerationAbortController.signal,
 		);
 	}
@@ -7037,6 +7182,7 @@ export class AgentSession {
 			// Abort the handoff first so generic compaction cancellation cannot replace
 			// the harness reason with an unreasoned "Handoff cancelled".
 			this.#handoff.abortHandoff(new Error(options?.reason ?? "Handoff aborted by session"));
+			let manualCompactionCleanup: Promise<void> | undefined;
 			if (options?.preserveCompaction) {
 				// Manual `/compact` installed its own #compactionAbortController before
 				// this internal abort and must keep it alive (that marker is what makes
@@ -7046,7 +7192,7 @@ export class AgentSession {
 				// appendCompaction/replaceMessages, double-rewriting session history.
 				this.#maintenance.abortAutomaticCompaction();
 			} else {
-				this.abortCompaction();
+				manualCompactionCleanup = this.#maintenance.abortCompaction(options?.reason);
 			}
 			this.abortBash();
 			this.abortEval();
@@ -7054,6 +7200,10 @@ export class AgentSession {
 			this.agent.abort(options?.reason);
 			await postPromptDrain;
 			await this.agent.waitForIdle();
+			// `/compact` disconnects the agent subscription until its finally block.
+			// Do not let abort-and-replace callers start a new prompt before that cleanup
+			// finishes, or the replacement turn's events are neither forwarded nor persisted.
+			await manualCompactionCleanup;
 			await this.#drainAutolearnCapture();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
@@ -7674,6 +7824,7 @@ export class AgentSession {
 	async #setModelWithProviderSessionReset(model: Model): Promise<void> {
 		const currentModel = this.model;
 		const isChanging = !currentModel || !modelsAreEqual(currentModel, model);
+		const codeModeChanged = this.#tools.codeModeChangesBetween(currentModel, model);
 		if (currentModel) {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
 			if (isChanging) {
@@ -7700,6 +7851,14 @@ export class AgentSession {
 
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
+
+		if (codeModeChanged || this.#tools.codeModeDirectWireMetadataChanged()) {
+			try {
+				await this.#tools.reconcileCodeMode();
+			} catch (error) {
+				logger.warn("Code Mode reconcile after model change failed", { error: String(error) });
+			}
+		}
 
 		// inspect_image auto mode keys off model image capability. Reconcile
 		// centrally here so retry-fallback model changes (turn-recovery.ts),
@@ -9731,6 +9890,19 @@ export class AgentSession {
 	 */
 	setAdvisorEnabled(enabled: boolean): boolean {
 		return this.#advisors.setAdvisorEnabled(enabled);
+	}
+
+	/**
+	 * Reactivate an advisor that resolved to `no_model` at construction because a
+	 * discovery-backed provider had not populated the model registry yet. Awaits
+	 * the initial background refresh, then rebuilds the advisor and emits
+	 * `model_changed` so the status line reflects the now-active advisor. See #9010.
+	 */
+	async #retryInactiveAdvisorAfterModelDiscovery(): Promise<void> {
+		if (this.#isDisposed || !this.#advisors.hasInactiveNoModelAdvisor()) return;
+		await this.#modelRegistry.awaitBackgroundRefresh();
+		if (this.#isDisposed) return;
+		if (this.#advisors.retryAfterModelDiscovery()) this.#emit({ type: "model_changed" });
 	}
 
 	/**

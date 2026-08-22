@@ -37,8 +37,8 @@ let session: AgentSession;
 
 beforeEach(async () => {
 	tempDir = TempDir.createSync("@pi-rpc-session-actions-");
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+	const model = getBundledModel("anthropic", "claude-opus-4-6");
+	if (!model) throw new Error("Expected claude-opus-4-6 model to exist");
 
 	authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");

@@ -161,7 +161,7 @@ export type OpenAIReasoningDisableMode =
 	| "qwen-enable-thinking-false"
 	| "qwen-template-false";
 
-export type OpenAIStreamMarkupHealingPattern = "kimi" | "dsml" | "thinking";
+export type OpenAIStreamMarkupHealingPattern = "kimi" | "dsml" | "qwen" | "thinking";
 
 /**
  * Compatibility settings for openai-completions API.
@@ -881,6 +881,12 @@ export type ModelTokenizer =
 export interface Model<TApi extends Api = Api> {
 	id: string;
 	/**
+	 * Whether provider-bound private-use glyphs require reversible ASCII tokenization.
+	 * Materialized by `buildModel`; request handlers read this capability instead of
+	 * inferring it from the transport API.
+	 */
+	requiresGlyphTokenization?: boolean;
+	/**
 	 * Model id to send on the wire when it differs from `id`. Used by catalog
 	 * variants that present one upstream model under several local entries —
 	 * e.g. GitHub Copilot long-context variants (`claude-opus-4.7-1m` requests
@@ -965,6 +971,8 @@ export interface Model<TApi extends Api = Api> {
 	preferWebsockets?: boolean;
 	/** Codex Responses Lite transport: send the lite marker and carry instructions/tools as input items (mirrors codex-rs `use_responses_lite`). */
 	useResponsesLite?: boolean;
+	/** Codex Code Mode restriction: model expects tools routed through a programmatic exec surface (mirrors codex-rs `tool_mode`). */
+	toolMode?: "code_mode_only";
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */
@@ -1005,7 +1013,7 @@ export interface Model<TApi extends Api = Api> {
  * sparse override shape and nothing is resolved yet.
  */
 export interface ModelSpec<TApi extends Api = Api>
-	extends Omit<Model<TApi>, "compat" | "compatConfig" | "supportsComputerUseConfig"> {
+	extends Omit<Model<TApi>, "compat" | "compatConfig" | "requiresGlyphTokenization" | "supportsComputerUseConfig"> {
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
 	compat?: CompatConfigOf<TApi>;
 }

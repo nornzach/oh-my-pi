@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
@@ -59,6 +60,7 @@ import {
 	buildAsyncResultBlock,
 	buildFileMentionBlock,
 	buildIrcMessageCard,
+	buildLaunchCompletionBlock,
 	normalizeToolArgs,
 	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
@@ -72,6 +74,17 @@ interface RenderInitialMessagesOptions {
 
 const TRANSCRIPT_RENDER_CHUNK_MESSAGES = 32;
 const TRANSCRIPT_RENDER_CHUNK_MS = 8;
+/**
+ * Upper bound on full-transcript replay restarts inside
+ * {@link UiHelpers.renderInitialMessages}. Each restart discards the staged
+ * tree and replays every message from scratch, so on a large resumed session
+ * (issue #7811: ~6k entries) a single pass takes longer than the interval
+ * between entries persisted by background sources — the restart condition
+ * becomes permanently true and an unbounded loop livelocks at 100% CPU.
+ * Entries that land after the final accepted pass are
+ * durable in the session file and reach the display on the next rebuild.
+ */
+const TRANSCRIPT_REPLAY_MAX_ATTEMPTS = 5;
 
 function waitForImmediate(): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
@@ -187,13 +200,7 @@ export class UiHelpers {
 						break;
 					}
 					if (message.customType === LAUNCH_COMPLETION_MESSAGE_TYPE) {
-						const messageComponent = new CustomMessageComponent(
-							message as CustomMessage<unknown>,
-							this.ctx.viewSession.extensionRunner?.getMessageRenderer(message.customType),
-						);
-						messageComponent.setExpanded(this.ctx.toolOutputExpanded);
-						const component = new ToolActivityContainer(messageComponent);
-						this.ctx.chatContainer.addChild(component);
+						this.ctx.chatContainer.addChild(buildLaunchCompletionBlock(message));
 						break;
 					}
 					if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE) {
@@ -728,6 +735,84 @@ export class UiHelpers {
 		this.ctx.ui.requestRender();
 	}
 
+	/**
+	 * Fast-path history rewind (esc-esc branch, /tree rewind to an ancestor):
+	 * drop the rendered components at/after `message` in place instead of the
+	 * destructive clear-scrollback replay. Rows already committed to native
+	 * scrollback are immutable, so the drop is expressible only while every
+	 * affected block is still wholly inside the visible window; returns false
+	 * when the caller must fall back to
+	 * `renderInitialMessages({ clearTerminalHistory: true })`.
+	 *
+	 * Callers must have already rewound the session so that `message` and
+	 * everything after it are no longer part of the view session's transcript.
+	 */
+	truncateTranscriptFromMessage(message: AgentMessage): boolean {
+		if (!this.ctx.initialChatRendered || this.ctx.focusedAgentId || this.ctx.viewSession.isStreaming) return false;
+		// In-flight blocks route future events into their components; a rewind
+		// with any of them live takes the full-replay path instead.
+		if (
+			this.ctx.pendingTools.size > 0 ||
+			this.ctx.pendingBashComponents.length > 0 ||
+			this.ctx.pendingPythonComponents.length > 0
+		) {
+			return false;
+		}
+		const chat = this.ctx.chatContainer;
+		const cut = this.ctx.transcriptMessageComponents.get(message);
+		if (!cut) return false;
+		const index = chat.children.indexOf(cut);
+		if (index < 0) return false;
+		// Every dropped block must still be uncommitted: removing rows already on
+		// the tape is an interior deletion of committed history the render engine
+		// cannot express (see TranscriptContainer.isBlockUncommitted).
+		for (let i = index; i < chat.children.length; i++) {
+			if (!chat.isBlockUncommitted(chat.children[i]!)) return false;
+		}
+		// Ground truth for the surviving prefix. The cut message still present
+		// means the session was not actually rewound past it — bail before
+		// mutating anything.
+		const context = this.ctx.viewSession.buildTranscriptSessionContext({
+			collapseCompactedHistory: settings.get("display.collapseCompacted"),
+		});
+		for (const remaining of context.messages) {
+			if (remaining === message) return false;
+		}
+		const dropped = chat.children.slice(index);
+		for (let i = dropped.length - 1; i >= 0; i--) {
+			const child = dropped[i]!;
+			chat.removeChild(child);
+			child.dispose?.();
+		}
+		// Prune the settled-component cache to the surviving messages — dropped
+		// entries stay strongly reachable through the session tree and would
+		// otherwise pin their components' layout caches (same rationale as
+		// rebuildChatFromMessages).
+		const retained = new WeakMap<AgentMessage, Component>();
+		for (const remaining of context.messages) {
+			const component = this.ctx.transcriptMessageComponents.get(remaining);
+			if (component) retained.set(remaining, component);
+		}
+		this.ctx.transcriptMessageComponents = retained;
+		// Reseed the cache-invalidation baseline from the surviving transcript
+		// (mirrors the replay path's billed-usage rule).
+		let baseline: Usage | undefined;
+		for (let i = context.messages.length - 1; i >= 0; i--) {
+			const candidate = context.messages[i]!;
+			if (candidate.role !== "assistant") continue;
+			const usage = candidate.usage;
+			if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
+				baseline = usage;
+				break;
+			}
+		}
+		this.ctx.lastAssistantUsage = baseline;
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
+		this.ctx.ui.requestRender();
+		return true;
+	}
+
 	async renderInitialMessages(options: RenderInitialMessagesOptions = {}): Promise<void> {
 		// Build against a detached container. Incremental construction still yields
 		// to terminal input, while paints keep using the complete visible transcript
@@ -769,6 +854,7 @@ export class UiHelpers {
 			populateHistory: false,
 		};
 		let committed = false;
+		let replayAttempts = 0;
 		this.ctx.initialChatRendered = false;
 		try {
 			while (true) {
@@ -782,7 +868,18 @@ export class UiHelpers {
 				if (this.ctx.viewSession.sessionManager.getEntries().length === replayEntryCount) {
 					break;
 				}
-
+				replayAttempts++;
+				if (replayAttempts >= TRANSCRIPT_REPLAY_MAX_ATTEMPTS) {
+					// A source keeps persisting entries faster than a full replay pass
+					// completes. Accept the transcript just replayed instead of
+					// restarting forever (see TRANSCRIPT_REPLAY_MAX_ATTEMPTS).
+					logger.warn("renderInitialMessages: transcript replay did not converge; accepting current replay", {
+						attempts: replayAttempts,
+						replayEntryCount,
+						currentEntryCount: this.ctx.viewSession.sessionManager.getEntries().length,
+					});
+					break;
+				}
 				// An extension persisted a display message while the transcript replay
 				// yielded. The display callback stayed gated by initialChatRendered;
 				// discard the stale partial tree and replay the current session once
