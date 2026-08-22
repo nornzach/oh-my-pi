@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added RPC marketplace metadata, effective plugin activation verdicts, and declarative `gui.theme` discovery for GUI clients.
+
 ## [17.4.0] - 2026-08-20
 
 ### Added

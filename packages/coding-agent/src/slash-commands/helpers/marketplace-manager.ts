@@ -21,6 +21,5 @@ export async function createMarketplaceManager(runtime: SlashCommandRuntime): Pr
 		marketplacesCacheDir: getMarketplacesCacheDir(),
 		pluginsCacheDir: getPluginsCacheDir(),
 		clearPluginRootsCache: clearPluginRootsAndCaches,
-		seedOfficialMarketplace: true,
 	});
 }

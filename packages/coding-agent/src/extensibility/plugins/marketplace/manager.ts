@@ -51,15 +51,6 @@ function assertRuntimePackageName(name: string): string {
 	return name;
 }
 
-/**
- * The curated first-party catalog, seeded into a missing marketplaces registry
- * so a fresh install can browse without knowing any source URLs. Git sources
- * with pinned SHAs only (npm catalog sources are unsupported). A user catalog
- * with the same name collides through the normal duplicate-name check.
- */
-export const OFFICIAL_MARKETPLACE_NAME = "official";
-export const OFFICIAL_MARKETPLACE_SOURCE = "nornzach/omp-plugins";
-
 // ── Options ──────────────────────────────────────────────────────────────────
 
 export interface MarketplaceManagerOptions {
@@ -74,11 +65,6 @@ export interface MarketplaceManagerOptions {
 	marketplacesCacheDir: string;
 	pluginsCacheDir: string;
 	clearPluginRootsCache?: (extraPaths?: readonly string[]) => void;
-	/**
-	 * Seed the official marketplace into a missing marketplaces registry on
-	 * first read. Production factories opt in; tests construct without it.
-	 */
-	seedOfficialMarketplace?: boolean;
 }
 
 // ── Manager ──────────────────────────────────────────────────────────────────
@@ -216,38 +202,8 @@ export class MarketplaceManager {
 	}
 
 	async listMarketplaces(): Promise<MarketplaceRegistryEntry[]> {
-		await this.#seedOfficialMarketplace();
 		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
 		return reg.marketplaces;
-	}
-
-	/**
-	 * Seed the official marketplace into a MISSING registry file. Any existing
-	 * registry wins — even an empty one is user state seeding must not
-	 * overwrite. Registry write only, no network fetch: offline first-runs
-	 * degrade to a "not fetched" card until the first update resolves it.
-	 */
-	async #seedOfficialMarketplace(): Promise<void> {
-		if (!this.#opts.seedOfficialMarketplace) return;
-		try {
-			await fs.access(this.#opts.marketplacesRegistryPath);
-			return;
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-		const now = new Date().toISOString();
-		const entry: MarketplaceRegistryEntry = {
-			name: OFFICIAL_MARKETPLACE_NAME,
-			sourceType: "github",
-			sourceUri: OFFICIAL_MARKETPLACE_SOURCE,
-			catalogPath: path.resolve(
-				path.join(this.#opts.marketplacesCacheDir, OFFICIAL_MARKETPLACE_NAME, "marketplace.json"),
-			),
-			addedAt: now,
-			updatedAt: now,
-		};
-		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, { version: 1, marketplaces: [entry] });
-		logger.debug("Seeded official marketplace registry", { name: OFFICIAL_MARKETPLACE_NAME });
 	}
 
 	// ── Plugin discovery ──────────────────────────────────────────────────────
@@ -339,10 +295,14 @@ export class MarketplaceManager {
 			tmpDir: os.tmpdir(),
 		});
 
-		// 5. Determine version: catalog entry > plugin manifest > git SHA > fallback
+		// 5. Resolve identity before caching: two qualified catalog IDs cannot
+		// safely share one runtime node_modules package link.
 		let version!: string;
 		let cachePath!: string;
+		let packageName!: string;
 		try {
+			packageName = await this.#resolvePluginPackageName(sourcePath, name);
+			await this.#assertNoPackageNameCollision(pluginId, packageName);
 			version = await this.#resolvePluginVersion(pluginEntry, sourcePath);
 			cachePath = await cachePlugin(sourcePath, this.#opts.pluginsCacheDir, marketplace, name, version);
 			await this.#writeEmbeddedLspConfig(pluginEntry, cachePath);
@@ -354,7 +314,6 @@ export class MarketplaceManager {
 			}
 		}
 
-		const packageName = await this.#resolvePluginPackageName(cachePath, name);
 		const previousPackageNames = await this.#resolveInstalledPackageNames(existing ?? [], name);
 
 		// Only now clean up old entries — new cache succeeded, so it is safe to remove old ones.
@@ -863,6 +822,17 @@ export class MarketplaceManager {
 			packageNames.add(await this.#resolvePluginPackageName(entry.installPath, fallbackName));
 		}
 		return packageNames;
+	}
+
+	async #assertNoPackageNameCollision(pluginId: string, packageName: string): Promise<void> {
+		for (const summary of await this.listInstalledPlugins()) {
+			if (summary.id === pluginId) continue;
+			const fallbackName = parsePluginId(summary.id)?.name ?? summary.id;
+			const installedNames = await this.#resolveInstalledPackageNames(summary.entries, fallbackName);
+			if (installedNames.has(packageName)) {
+				throw new Error(`Plugin package "${packageName}" is already installed as "${summary.id}"`);
+			}
+		}
 	}
 
 	async #registerRuntimePlugin(

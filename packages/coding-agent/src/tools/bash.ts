@@ -344,6 +344,8 @@ export interface BashToolInput {
 
 export interface BashToolDetails {
 	meta?: OutputMeta;
+	/** Artifact containing the full raw output when the inline body was capped. */
+	artifactId?: string;
 	timeoutSeconds?: number;
 	requestedTimeoutSeconds?: number;
 	timeoutDisabled?: boolean;
@@ -728,9 +730,13 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		// sink spilled, its artifact already holds the full raw stream — reuse
 		// that id instead of saving a second (already-truncated) copy, so the
 		// `[raw output: artifact://N]` footer and the truncation notice agree.
+		let inlineArtifactId = result.artifactId;
 		const inlineCap = {
 			maxBytes: resolveInlineByteCapBudget(this.session.settings),
-			saveArtifact: (full: string) => result.artifactId ?? saveBashOriginalArtifact(this.session, full),
+			saveArtifact: async (full: string) => {
+				inlineArtifactId ??= await saveBashOriginalArtifact(this.session, full);
+				return inlineArtifactId;
+			},
 		};
 
 		if (isTimeout) {
@@ -743,6 +749,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 				outputLines.push("", `[${message}]`);
 			}
 			const timeoutOutputText = await enforceInlineByteCap(outputLines.join("\n"), inlineCap);
+			if (inlineArtifactId) details.artifactId = inlineArtifactId;
 			return toolResult(details)
 				.text(timeoutOutputText)
 				.truncationFromSummary(result, { direction: "tail" })
@@ -755,6 +762,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 		// No-op for already-bounded output; see `inlineCap` above.
 		const cappedOutputText = await enforceInlineByteCap(outputText, inlineCap);
+		if (inlineArtifactId) details.artifactId = inlineArtifactId;
 
 		const resultBuilder = toolResult(details)
 			.text(cappedOutputText)

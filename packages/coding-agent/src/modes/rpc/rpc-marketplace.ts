@@ -9,8 +9,7 @@
  * Every mutation's caller (rpc-mode.ts) ends in `reloadPluginState()` so the
  * GUI receives a fresh `available_commands_update`.
  */
-import * as path from "node:path";
-import { PluginManager } from "../../extensibility/plugins/manager";
+import { getEnabledPlugins, type ScopedInstalledPlugin } from "../../extensibility/plugins/loader";
 import { classifySource } from "../../extensibility/plugins/marketplace";
 import type { PluginManifest } from "../../extensibility/plugins/types";
 import type { AgentSession } from "../../session/agent-session";
@@ -45,7 +44,7 @@ export function pluginRequiresRestart(manifest: PluginManifest, enabledFeatures:
 		const base = manifest[key];
 		if (Array.isArray(base) ? base.length > 0 : Boolean(base)) return true;
 		for (const [name, feature] of Object.entries(manifest.features ?? {})) {
-			const on = enabledFeatures === null ? feature.default !== false : enabledFeatures.includes(name);
+			const on = enabledFeatures === null ? feature.default === true : enabledFeatures.includes(name);
 			const entries = feature[key];
 			if (on && entries !== undefined && entries.length > 0) return true;
 		}
@@ -53,35 +52,49 @@ export function pluginRequiresRestart(manifest: PluginManifest, enabledFeatures:
 	return false;
 }
 
+/** Snapshot the plugins the runtime would actually load for this cwd. */
+export async function capturePluginActivationState(cwd: string): Promise<ScopedInstalledPlugin[]> {
+	return await getEnabledPlugins(cwd);
+}
+
+function sameFeatures(left: string[] | null, right: string[] | null): boolean {
+	if (left === null || right === null) return left === right;
+	if (left.length !== right.length) return false;
+	const rightSet = new Set(right);
+	return left.every(feature => rightSet.has(feature));
+}
+
 /**
- * Post-mutation activation verdict for one installed plugin: reads its cached
- * package.json manifest plus the persisted feature selection (manifest
- * defaults when unreadable). Best-effort — an unreadable state resolves
- * "live" so a broken read never turns a successful mutation into a failure.
+ * Classify a completed mutation from the effective runtime state on each side.
+ * This covers executable additions and removals, feature changes, upgrades,
+ * and project/user shadow switches without guessing from one registry entry.
  */
-export async function installedPluginActivation(
-	installPath: string,
-	fallbackName: string,
-): Promise<RpcPluginActivation> {
-	try {
-		const pkg = (await Bun.file(path.join(installPath, "package.json")).json()) as {
-			name?: string;
-			omp?: PluginManifest;
-			pi?: PluginManifest;
-		};
-		const manifest = pkg.omp ?? pkg.pi;
-		if (!manifest) return "live";
-		const packageName = pkg.name?.trim() || fallbackName;
-		let enabledFeatures: string[] | null = null;
-		try {
-			enabledFeatures = await new PluginManager().getEnabledFeatures(packageName);
-		} catch {
-			// Fall back to manifest feature defaults.
+export function classifyPluginActivation(
+	before: readonly ScopedInstalledPlugin[],
+	after: readonly ScopedInstalledPlugin[],
+): RpcPluginActivation {
+	const beforeByName = new Map(before.map(plugin => [plugin.name, plugin]));
+	const afterByName = new Map(after.map(plugin => [plugin.name, plugin]));
+	for (const name of new Set([...beforeByName.keys(), ...afterByName.keys()])) {
+		const previous = beforeByName.get(name);
+		const next = afterByName.get(name);
+		if (
+			previous &&
+			next &&
+			previous.path === next.path &&
+			previous.version === next.version &&
+			sameFeatures(previous.enabledFeatures, next.enabledFeatures)
+		) {
+			continue;
 		}
-		return pluginRequiresRestart(manifest, enabledFeatures) ? "restart-required" : "live";
-	} catch {
-		return "live";
+		if (
+			(previous && pluginRequiresRestart(previous.manifest, previous.enabledFeatures)) ||
+			(next && pluginRequiresRestart(next.manifest, next.enabledFeatures))
+		) {
+			return "restart-required";
+		}
 	}
+	return "live";
 }
 
 /**
@@ -102,6 +115,7 @@ export async function applyRpcMarketplaceAction(
 		}
 
 		const manager = await createDomainMarketplaceManager(session.sessionManager.getCwd());
+		const cwd = session.sessionManager.getCwd();
 
 		switch (command.action) {
 			case "add": {
@@ -126,22 +140,22 @@ export async function applyRpcMarketplaceAction(
 			case "install": {
 				if (!command.plugin?.trim()) return { ok: false, error: "Missing `plugin` for install." };
 				if (!command.marketplace?.trim()) return { ok: false, error: "Missing `marketplace` for install." };
-				const entry = await manager.installPlugin(command.plugin, command.marketplace);
-				return { ok: true, activation: await installedPluginActivation(entry.installPath, command.plugin) };
+				const before = await capturePluginActivationState(cwd);
+				await manager.installPlugin(command.plugin, command.marketplace);
+				const after = await capturePluginActivationState(cwd);
+				return { ok: true, activation: classifyPluginActivation(before, after) };
 			}
 			case "uninstall": {
-				// Live on disk immediately; an already-loaded extension instance
-				// unloads on the next restart — reported live so the mutation never
-				// demands a restart of its own.
+				const before = await capturePluginActivationState(cwd);
 				await manager.uninstallPlugin(resolvePluginId(command.plugin, command.marketplace));
-				return { ok: true, activation: "live" };
+				const after = await capturePluginActivationState(cwd);
+				return { ok: true, activation: classifyPluginActivation(before, after) };
 			}
 			case "upgrade": {
-				const entry = await manager.upgradePlugin(resolvePluginId(command.plugin, command.marketplace));
-				return {
-					ok: true,
-					activation: await installedPluginActivation(entry.installPath, command.plugin ?? ""),
-				};
+				const before = await capturePluginActivationState(cwd);
+				await manager.upgradePlugin(resolvePluginId(command.plugin, command.marketplace));
+				const after = await capturePluginActivationState(cwd);
+				return { ok: true, activation: classifyPluginActivation(before, after) };
 			}
 			case "list_available": {
 				// Catalogs are cache-backed (populated by add/update), so the

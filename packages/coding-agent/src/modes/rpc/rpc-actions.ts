@@ -14,6 +14,7 @@
  *   reconnect and `session.refreshMCPTools`).
  */
 import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { clearPluginRootsAndCaches } from "../../discovery/helpers";
 import { PluginManager } from "../../extensibility/plugins";
 import { parsePluginId } from "../../extensibility/plugins/marketplace";
 import { MCPManager } from "../../mcp";
@@ -21,7 +22,7 @@ import { loadAllMCPConfigs } from "../../mcp/config";
 import { readMCPConfigFile, removeMCPServer, setMcpServerEnabled } from "../../mcp/config-writer";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
-import { installedPluginActivation, pluginRequiresRestart } from "./rpc-marketplace";
+import { capturePluginActivationState, classifyPluginActivation } from "./rpc-marketplace";
 import { serializeMcpReload } from "./rpc-mcp-extra";
 import type { RpcMcpActionResult, RpcPluginSetEnabledResult } from "./rpc-types";
 
@@ -95,25 +96,20 @@ export async function applyRpcPluginEnabled(
 	scope?: "user" | "project",
 ): Promise<RpcPluginSetEnabledResult> {
 	if (!id.trim()) throw new Error("Plugin id cannot be empty");
+	const cwd = session.sessionManager.getCwd();
+	const before = await capturePluginActivationState(cwd);
+	let channel: "npm" | "marketplace";
 	if (parsePluginId(id)) {
-		const manager = await createDomainMarketplaceManager(session.sessionManager.getCwd());
+		const manager = await createDomainMarketplaceManager(cwd);
 		await manager.setPluginEnabled(id, enabled, scope);
-		const entry = (await manager.listInstalledPlugins()).find(candidate => candidate.id === id)?.entries[0];
-		const activation = entry ? await installedPluginActivation(entry.installPath, id) : "live";
-		return { id, enabled, channel: "marketplace", activation };
+		channel = "marketplace";
+	} else {
+		await new PluginManager(cwd).setEnabled(id, enabled);
+		clearPluginRootsAndCaches();
+		channel = "npm";
 	}
-	const npmManager = new PluginManager();
-	await npmManager.setEnabled(id, enabled);
-	const installed = (await npmManager.list()).find(plugin => plugin.name === id);
-	return {
-		id,
-		enabled,
-		channel: "npm",
-		activation:
-			installed && pluginRequiresRestart(installed.manifest, installed.enabledFeatures)
-				? "restart-required"
-				: "live",
-	};
+	const after = await capturePluginActivationState(cwd);
+	return { id, enabled, channel, activation: classifyPluginActivation(before, after) };
 }
 
 // ============================================================================

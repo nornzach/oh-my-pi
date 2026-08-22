@@ -172,7 +172,33 @@ export function parseMarketplaceCatalog(content: string, filePath: string): Mark
 					assertField(false, `plugins[${i}].source.source (unknown variant: "${variant}")`, filePath);
 				}
 			}
-			validPlugins.push(entry);
+			const normalized = { ...p };
+			for (const key of ["description", "version", "homepage", "repository", "license", "category"] as const) {
+				if (key in normalized && typeof normalized[key] !== "string") delete normalized[key];
+			}
+			for (const key of ["keywords", "tags"] as const) {
+				if (
+					key in normalized &&
+					(!Array.isArray(normalized[key]) || !normalized[key].every(item => typeof item === "string"))
+				) {
+					delete normalized[key];
+				}
+			}
+			if ("author" in normalized) {
+				const author = normalized.author;
+				if (
+					!author ||
+					typeof author !== "object" ||
+					Array.isArray(author) ||
+					typeof (author as Record<string, unknown>).name !== "string"
+				) {
+					delete normalized.author;
+				} else {
+					const { name, email } = author as Record<string, unknown>;
+					normalized.author = { name, ...(typeof email === "string" ? { email } : {}) };
+				}
+			}
+			validPlugins.push(normalized);
 		} catch (err) {
 			// Warn and skip invalid plugin entries instead of failing the entire catalog.
 			// This lets the rest of the marketplace load even if one entry has a bad name/source.

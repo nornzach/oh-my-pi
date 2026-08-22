@@ -17,69 +17,40 @@
  */
 import * as path from "node:path";
 import { pathIsWithin } from "@oh-my-pi/pi-utils";
+import { clearPluginRootsAndCaches } from "../../discovery/helpers";
+import { getEnabledPlugins } from "../../extensibility/plugins/loader";
 import { PluginManager, validateSetting } from "../../extensibility/plugins/manager";
 import { parsePluginId } from "../../extensibility/plugins/marketplace";
 import type { InstalledPlugin, PluginManifest } from "../../extensibility/plugins/types";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
-import { pluginRequiresRestart } from "./rpc-marketplace";
+import { capturePluginActivationState, classifyPluginActivation } from "./rpc-marketplace";
 import type { RpcGuiThemeInfo, RpcGuiThemesResult, RpcPluginDetail, RpcPluginMutationResult } from "./rpc-types";
 /**
- * Collect declarative GUI theme tokens from enabled plugins (both install
- * channels, mirroring buildRpcPluginsResult): each manifest may point
- * `gui.theme` at a JSON map of token values. Raw tokens cross the wire —
- * key/value validation is the GUI's job (it owns the token registry).
- * Unreadable or malformed assets skip their plugin; a broken theme must
- * never fail the listing.
+ * Collect declarative GUI theme tokens from the plugins the runtime would
+ * actually load for this cwd. Raw tokens cross the wire; the GUI owns the
+ * token allowlist and value validation. Unreadable, malformed, and escaping
+ * assets skip only their plugin.
  */
 export async function buildRpcGuiThemes(session: AgentSession): Promise<RpcGuiThemesResult> {
-	const cwd = session.sessionManager.getCwd();
 	const themes: RpcGuiThemeInfo[] = [];
-	const seen = new Set<string>();
-	const collect = async (
-		id: string,
-		pluginPath: string,
-		manifest: PluginManifest,
-		enabled: boolean,
-	): Promise<void> => {
-		if (!enabled || seen.has(id)) return;
-		seen.add(id);
-		const themePath = manifest.gui?.theme;
-		if (!themePath) return;
-		const resolved = path.resolve(pluginPath, themePath);
-		if (!pathIsWithin(pluginPath, resolved)) return;
+	for (const plugin of await getEnabledPlugins(session.sessionManager.getCwd())) {
+		const themePath = plugin.manifest.gui?.theme;
+		if (typeof themePath !== "string" || themePath.length === 0) continue;
+		const resolved = path.resolve(plugin.path, themePath);
+		if (!pathIsWithin(plugin.path, resolved)) continue;
 		try {
 			const parsed = (await Bun.file(resolved).json()) as Record<string, unknown>;
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
 			themes.push({
-				id,
+				id: plugin.name,
 				tokens: Object.fromEntries(
 					Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 				),
 			});
 		} catch {
-			// Unreadable or malformed theme asset — skip the plugin.
+			// A plugin theme is optional; its failure must not break inventory.
 		}
-	};
-
-	const npmManager = new PluginManager(cwd);
-	for (const plugin of await npmManager.list()) {
-		await collect(plugin.name, plugin.path, plugin.manifest, plugin.enabled);
-	}
-	const marketplaceManager = await createDomainMarketplaceManager(cwd);
-	for (const summary of await marketplaceManager.listInstalledPlugins()) {
-		const entry = summary.entries[0];
-		if (!entry) continue;
-		try {
-			const pkg = (await Bun.file(path.join(entry.installPath, "package.json")).json()) as {
-				name?: string;
-				omp?: PluginManifest;
-				pi?: PluginManifest;
-			};
-			const manifest = pkg.omp ?? pkg.pi;
-			if (!manifest) continue;
-			await collect(summary.id, entry.installPath, manifest, entry.enabled !== false);
-		} catch {}
 	}
 	return { themes };
 }
@@ -116,6 +87,10 @@ async function findRpcPlugin(
 	const manifest = pkg.omp ?? pkg.pi;
 	if (!manifest) return undefined;
 	const packageName = pkg.name?.trim() || name;
+	const effective = (await getEnabledPlugins(cwd)).find(
+		plugin => plugin.path === entry.installPath || plugin.name === packageName,
+	);
+	if (effective) return effective;
 	return {
 		name: packageName,
 		version: pkg.version ?? entry.version,
@@ -158,12 +133,12 @@ export async function buildRpcPluginDetail(session: AgentSession, pluginId: stri
 	if (!plugin) {
 		throw new Error(`Plugin "${pluginId}" not found.`);
 	}
-	const enabledFeatures = await manager.getEnabledFeatures(plugin.name);
+	const enabledFeatures = plugin.enabledFeatures;
 	const enabledSet = enabledFeatures === null ? null : new Set(enabledFeatures);
 	const features = Object.entries(plugin.manifest.features ?? {}).map(([id, feature]) => ({
 		id,
 		...(feature.description !== undefined ? { description: feature.description } : {}),
-		enabled: enabledSet ? enabledSet.has(id) : feature.default !== false,
+		enabled: enabledSet ? enabledSet.has(id) : feature.default === true,
 	}));
 	const configuredValues = await manager.getPluginSettings(plugin.name);
 	const values = Object.fromEntries(
@@ -188,17 +163,18 @@ export async function applyRpcSetPluginFeatures(
 	features: string[],
 ): Promise<RpcPluginMutationResult> {
 	try {
-		const manager = new PluginManager(session.sessionManager.getCwd());
-		const plugin = await findRpcPlugin(manager, pluginId, session.sessionManager.getCwd());
+		const cwd = session.sessionManager.getCwd();
+		const manager = new PluginManager(cwd);
+		const plugin = await findRpcPlugin(manager, pluginId, cwd);
 		if (!plugin) return { ok: false, error: `Plugin "${pluginId}" not found.` };
+		const before = await capturePluginActivationState(cwd);
 		await manager.setEnabledFeatures(plugin.name, features, {
 			version: plugin.version,
 			manifest: plugin.manifest,
 		});
-		return {
-			ok: true,
-			activation: pluginRequiresRestart(plugin.manifest, features) ? "restart-required" : "live",
-		};
+		clearPluginRootsAndCaches();
+		const after = await capturePluginActivationState(cwd);
+		return { ok: true, activation: classifyPluginActivation(before, after) };
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}

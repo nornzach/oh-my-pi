@@ -421,6 +421,11 @@ describe("applyRpcMarketplaceAction", () => {
 			ok: true,
 			activation: "restart-required",
 		});
+		// Removing a loaded executable feature also needs a restart to unload it.
+		expect(await applyRpcSetPluginFeatures(session, "feature-plugin@test-marketplace", [])).toEqual({
+			ok: true,
+			activation: "restart-required",
+		});
 		// Disabling an executable plugin still needs a restart (to unload).
 		expect(await applyRpcPluginEnabled(session, "exe-plugin@test-marketplace", false)).toEqual({
 			id: "exe-plugin@test-marketplace",
@@ -428,6 +433,19 @@ describe("applyRpcMarketplaceAction", () => {
 			channel: "marketplace",
 			activation: "restart-required",
 		});
+		expect(await applyRpcPluginEnabled(session, "exe-plugin@test-marketplace", true)).toEqual({
+			id: "exe-plugin@test-marketplace",
+			enabled: true,
+			channel: "marketplace",
+			activation: "restart-required",
+		});
+		expect(
+			await applyRpcMarketplaceAction(session, {
+				action: "uninstall",
+				plugin: "exe-plugin",
+				marketplace: "test-marketplace",
+			}),
+		).toEqual({ ok: true, activation: "restart-required" });
 	});
 });
 
@@ -691,5 +709,25 @@ describe("buildRpcGuiThemes", () => {
 		writeGuiThemeFixture(false);
 		const result = await buildRpcGuiThemes(stubSession());
 		expect(result.themes).toEqual([]);
+	});
+
+	it("skips malformed theme paths without failing the listing", async () => {
+		writeGuiThemeFixture(true);
+		const packagePath = path.join(tmpRoot, "plugins", "node_modules", "theme-plugin", "package.json");
+		fs.writeFileSync(
+			packagePath,
+			JSON.stringify({ name: "theme-plugin", version: "1.0.0", omp: { gui: { theme: 42 } } }),
+		);
+		expect(await buildRpcGuiThemes(stubSession())).toEqual({ themes: [] });
+	});
+
+	it("honors project-level plugin disables", async () => {
+		writeGuiThemeFixture(true);
+		fs.mkdirSync(path.join(tmpRoot, ".omp"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpRoot, ".omp", "plugin-overrides.json"),
+			JSON.stringify({ disabled: ["theme-plugin"] }),
+		);
+		expect(await buildRpcGuiThemes(stubSession())).toEqual({ themes: [] });
 	});
 });

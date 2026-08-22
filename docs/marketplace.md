@@ -276,14 +276,13 @@ A marketplace plugin is a directory with a `package.json` whose `omp` (or Claude
 }
 ```
 
-- `extensions` / `tools` / `hooks` are executable entry points. They load when a session is created, so installs, enables, disables, and feature changes that touch them report **restart-required** in the GUI; the sidecar restarts (resuming the session) to activate them.
-- `commands` and skills hot-reload through the reload pipeline — no restart needed.
-- Feature entries load only while the feature is enabled (`default: true` features load unless the user narrows the selection).
+- `extensions` / `tools` / `hooks` are executable entry points. The RPC layer compares the effective runtime plugin set before and after install, upgrade, uninstall, enable/disable, and feature mutations. Adding or removing any executable entry reports **restart-required**; commands and skills remain live.
+- Feature entries load only when explicitly selected or declared with `default: true`.
 - `settings` values are validated against this schema by the plugin settings UI; `secret: true` fields are write-only.
 
 ### GUI theme tokens (`gui.theme`)
 
-Point `gui.theme` at a JSON file mapping **transcript-scoped token names** to CSS color values. The GUI validates every entry: unknown keys and non-color values are dropped individually, chrome tokens (accent, sidebar, titlebar, buttons) can never be overridden, and agent-provided themes win conflicts. Values must be hex (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`), functional (`rgb()`, `hsl()`, `oklch()`, `oklab()`, `lab()`, `lch()`, `color()`, `color-mix()`), or `var(--omp-…)` references.
+Point `gui.theme` at a JSON file mapping **transcript-scoped token names** to CSS color values. The GUI drops unknown keys and values rejected by the browser's CSS color parser; chrome tokens (accent, sidebar, titlebar, buttons) can never be overridden, and agent-provided themes win conflicts. Values may use hex, functional CSS colors, or `var(--omp-…)` references.
 
 ```json
 { "mdLink": "#3b82f6", "thinkingLow": "oklch(0.7 0.05 250)", "toolSuccessBg": "#12251a" }
@@ -297,23 +296,4 @@ Recognized keys include `userMessageBg`, `customMessageBg`, `customMessageLabel`
 - Git sources should pin an exact `sha` so upgrades are reproducible and auditable.
 - A plugin whose catalog name collides with an installed one fails the normal duplicate-name check.
 
-### Official marketplace catalog template
-
-```json
-{
-  "name": "official",
-  "owner": { "name": "omp maintainers" },
-  "plugins": [
-    {
-      "name": "example",
-      "source": { "source": "github", "repo": "nornzach/omp-plugins", "sha": "<full-commit-sha>", "path": "plugins/example" },
-      "description": "One-line description",
-      "version": "1.0.0",
-      "author": { "name": "Author" },
-      "license": "MIT",
-      "repository": "https://github.com/nornzach/omp-plugins"
-    }
-  ]
-}
-```
 
