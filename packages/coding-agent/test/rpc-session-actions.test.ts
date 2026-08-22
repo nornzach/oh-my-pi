@@ -7,6 +7,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp";
+import { RpcPlanApprovalController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan";
 import {
 	applyRpcFresh,
 	applyRpcGetForceTool,
@@ -142,6 +143,61 @@ describe("applyRpcShakeContext", () => {
 		await expect(applyRpcShakeContext(session, "images")).resolves.toEqual({
 			removed: "No images found in this session.",
 		});
+	});
+
+	it("reports the thinking summary for an empty session", async () => {
+		await expect(applyRpcShakeContext(session, "thinking")).resolves.toEqual({
+			removed: "No thinking blocks found in this session.",
+		});
+	});
+});
+
+describe("RpcPlanApprovalController", () => {
+	it("saves an approved plan and starts a fresh session without dispatching it", async () => {
+		const planPath = path.join(tempDir.path(), "plan.md");
+		const savePath = path.join(tempDir.path(), "saved-plan.md");
+		await Bun.write(planPath, "# Saved plan\n");
+		session.setPlanModeState({ enabled: true, planFilePath: planPath });
+		const controller = new RpcPlanApprovalController({ session, output: () => {}, onError: () => {} });
+		controller.syncArmed();
+		const proposalHandler = session.peekPlanProposalHandler();
+		if (!proposalHandler) throw new Error("expected plan proposal handler");
+		await proposalHandler("Saved plan");
+		const previousSessionId = session.sessionId;
+
+		await expect(controller.resolve({ approved: true, option: "save", savePath })).resolves.toEqual({
+			approved: true,
+			dispatched: false,
+			reason: "saved",
+			savedPath: savePath,
+			freshSessionStarted: true,
+		});
+		expect(await Bun.file(savePath).text()).toBe("# Saved plan\n");
+		expect(session.sessionId).not.toBe(previousSessionId);
+		expect(session.getPlanModeState()).toBeUndefined();
+	});
+
+	it("reports a saved plan when an extension cancels the fresh session", async () => {
+		const planPath = path.join(tempDir.path(), "plan.md");
+		const savePath = path.join(tempDir.path(), "saved-plan.md");
+		await Bun.write(planPath, "# Saved plan\n");
+		session.setPlanModeState({ enabled: true, planFilePath: planPath });
+		const controller = new RpcPlanApprovalController({ session, output: () => {}, onError: () => {} });
+		controller.syncArmed();
+		const proposalHandler = session.peekPlanProposalHandler();
+		if (!proposalHandler) throw new Error("expected plan proposal handler");
+		await proposalHandler("Saved plan");
+		vi.spyOn(session, "newSession").mockResolvedValue(false);
+
+		await expect(controller.resolve({ approved: true, option: "save", savePath })).resolves.toEqual({
+			approved: true,
+			dispatched: false,
+			reason: "saved; new session cancelled",
+			savedPath: savePath,
+			freshSessionStarted: false,
+		});
+		expect(await Bun.file(savePath).text()).toBe("# Saved plan\n");
+		expect(session.getPlanModeState()).toBeUndefined();
 	});
 });
 

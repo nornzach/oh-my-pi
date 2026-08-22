@@ -1134,12 +1134,24 @@ export const SETTINGS_SCHEMA = {
 	"images.urls.options": {
 		type: "record",
 		default: {} as Partial<Record<BlobDestinationId, Record<string, unknown>>>,
+		ui: {
+			tab: "model",
+			group: "Vision",
+			label: "Image URL Backend Options",
+			description: "Per-backend JSON options for image publication destinations",
+		},
 	},
 
 	"images.urls.credentials": {
 		type: "record",
 		default: {} as Partial<Record<BlobDestinationId, Record<string, string>>>,
 		credential: true,
+		ui: {
+			tab: "model",
+			group: "Vision",
+			label: "Image URL Backend Credentials",
+			description: "Per-backend credentials used to publish images; values are masked in clients",
+		},
 	},
 
 	"images.urls.command": {

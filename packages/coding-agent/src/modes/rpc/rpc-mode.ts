@@ -37,6 +37,7 @@ import type { DroppedPrompt } from "../../session/agent-session-types";
 import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { SessionManager } from "../../session/session-manager";
+import { setSessionPinned } from "../../session/session-pins";
 import { executeAcpBuiltinSlashCommand, isTuiOnlyBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { sttClient } from "../../stt/asr-client";
@@ -81,7 +82,12 @@ import {
 	type RpcMcpOAuthUi,
 	RpcMcpReauthBusyError,
 } from "./rpc-mcp-extra";
-import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import {
+	attachRpcMessageEntryIds,
+	pageRpcMessages,
+	RPC_MESSAGES_PAGE_BUSY_ERROR,
+	RpcMessagesPageError,
+} from "./rpc-messages";
 import { RpcGoalModeController, RpcLoopModeController, RpcVibeModeController } from "./rpc-modes";
 import { runRpcOmfg } from "./rpc-omfg";
 import {
@@ -1239,7 +1245,14 @@ export async function runRpcMode(
 
 	// Output all agent events as JSON
 	session.subscribe(event => {
-		output(event);
+		output(
+			event.type === "agent_end"
+				? {
+						...event,
+						messages: attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch()),
+					}
+				: event,
+		);
 	});
 	// Plan proposals and mode lifecycle ride a second subscription: plan
 	// proposals emit `plan_proposal` and silently stop the proposal turn while
@@ -2007,6 +2020,13 @@ export async function runRpcMode(
 				return success(id, "get_session_stats", stats);
 			}
 
+			case "set_session_pinned": {
+				const sessionId = command.sessionId.trim();
+				if (!sessionId) return error(id, "set_session_pinned", "Session id cannot be empty");
+				const pinned = await setSessionPinned(sessionId, command.pinned);
+				return success(id, "set_session_pinned", { pinned });
+			}
+
 			case "export_html": {
 				const path = await session.exportToHtml(command.outputPath);
 				return success(id, "export_html", { path });
@@ -2460,13 +2480,15 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "get_messages": {
-				return success(id, "get_messages", { messages: session.messages });
+				return success(id, "get_messages", {
+					messages: attachRpcMessageEntryIds(session.messages, session.sessionManager.getBranch()),
+				});
 			}
 
 			case "get_messages_page": {
 				if (session.isStreaming || session.isCompacting)
 					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
-				const messages = session.messages;
+				const messages = attachRpcMessageEntryIds(session.messages, session.sessionManager.getBranch());
 				try {
 					return success(
 						id,

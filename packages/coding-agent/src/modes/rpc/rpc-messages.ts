@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import type { SessionEntry } from "../../session/session-entries";
 
 const DEFAULT_RPC_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RPC_MESSAGE_PAGE_LIMIT = 256;
@@ -43,6 +44,37 @@ interface RpcMessageCursorPayload extends RpcMessageSnapshot {
 export interface RpcMessagesPageOptions {
 	cursor?: string;
 	limit?: number;
+}
+
+/** Attach persisted tree node ids to conversation messages on the RPC wire. */
+export function attachRpcMessageEntryIds(
+	messages: readonly AgentMessage[],
+	branch: readonly SessionEntry[],
+): AgentMessage[] {
+	const directIds = new Map<AgentMessage, string>();
+	const idsByDelivery = new Map<string, string[]>();
+	for (const entry of branch) {
+		if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) continue;
+		directIds.set(entry.message, entry.id);
+		const key = `${entry.message.role}\u0000${String(entry.message.timestamp)}`;
+		const ids = idsByDelivery.get(key);
+		if (ids) ids.push(entry.id);
+		else idsByDelivery.set(key, [entry.id]);
+	}
+
+	const used = new Set<string>();
+	return messages.map(message => {
+		if (message.role !== "user" && message.role !== "assistant") return message;
+		let entryId = directIds.get(message);
+		if (!entryId) {
+			const ids = idsByDelivery.get(`${message.role}\u0000${String(message.timestamp)}`);
+			while (ids?.length && used.has(ids[0])) ids.shift();
+			entryId = ids?.shift();
+		}
+		if (!entryId) return message;
+		used.add(entryId);
+		return { ...message, entryId };
+	});
 }
 
 function encodeCursor(snapshot: RpcMessageSnapshot, offset: number): string {

@@ -117,6 +117,7 @@ export type RpcCommand =
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
+	| { id?: string; type: "set_session_pinned"; sessionId: string; pinned: boolean }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	| { id?: string; type: "branch"; entryId: string }
@@ -151,7 +152,14 @@ export type RpcCommand =
 	// Plan mode
 	| { id?: string; type: "set_plan_mode"; enabled: boolean }
 	| { id?: string; type: "get_plan_mode" }
-	| { id?: string; type: "plan_approval"; approved: boolean; option?: RpcPlanApprovalOption; feedback?: string }
+	| {
+			id?: string;
+			type: "plan_approval";
+			approved: boolean;
+			option?: RpcPlanApprovalOption;
+			feedback?: string;
+			savePath?: string;
+	  }
 
 	// Session modes (vibe / goal / loop)
 	| { id?: string; type: "get_vibe_mode" }
@@ -213,7 +221,7 @@ export type RpcCommand =
 	// force); fresh is refused with code "busy" while streaming.
 	| { id?: string; type: "set_prewalk"; enabled: boolean }
 	| { id?: string; type: "fresh" }
-	| { id?: string; type: "shake_context"; mode: "elide" | "images" }
+	| { id?: string; type: "shake_context"; mode: "elide" | "images" | "thinking" }
 	| { id?: string; type: "reload_plugins" }
 	| { id?: string; type: "set_force_tool"; tool?: string; clear?: boolean }
 	| { id?: string; type: "get_force_tool" }
@@ -783,10 +791,11 @@ export interface RpcPlanModeState {
  * Execution option for an approved plan. Mirrors the TUI plan-review choices:
  * `"execute"` starts a fresh session (context cleared), `"compact"` distills
  * the planning transcript first, `"keep_context"` executes on the intact
- * transcript. The TUI's fourth choice, "Refine plan", maps to
+ * transcript, and `"save"` writes the plan to a host-selected path without
+ * starting execution. The TUI's refine choice maps to
  * `plan_approval { approved: false, feedback }` instead of an option here.
  */
-export type RpcPlanApprovalOption = "execute" | "compact" | "keep_context";
+export type RpcPlanApprovalOption = "execute" | "compact" | "keep_context" | "save";
 
 export interface RpcPlanApprovalResult {
 	approved: boolean;
@@ -794,6 +803,10 @@ export interface RpcPlanApprovalResult {
 	dispatched: boolean;
 	/** Present when nothing was dispatched (plain reject, compaction failure). */
 	reason?: string;
+	/** Host-selected destination after a successful save-only approval. */
+	savedPath?: string;
+	/** Whether save-only approval also completed the requested fresh-session transition. */
+	freshSessionStarted?: boolean;
 }
 
 /**
@@ -806,6 +819,7 @@ export interface RpcPlanProposalFrame {
 	type: "plan_proposal";
 	planFilePath: string;
 	title: string;
+	suggestedFileName: string;
 	planContent: string;
 	options: string[];
 }
@@ -1756,6 +1770,7 @@ export type RpcResponse =
 
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
+	| { id?: string; type: "response"; command: "set_session_pinned"; success: true; data: { pinned: boolean } }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }

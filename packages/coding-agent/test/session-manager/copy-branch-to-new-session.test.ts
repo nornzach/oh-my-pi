@@ -63,6 +63,22 @@ describe("copyBranchToNewSession", () => {
 		expect(manager.getEntries()).toHaveLength(2);
 	});
 
+	it("copies artifact recovery files into the branched session", async () => {
+		const manager = SessionManager.create(tempDir, sessionDir);
+		const id = manager.appendMessage(userMsg("recover artifact://0"));
+		await manager.flush();
+		const sourceFile = manager.getSessionFile();
+		expect(sourceFile).toBeDefined();
+		const sourceArtifacts = sourceFile!.slice(0, -".jsonl".length);
+		fs.mkdirSync(sourceArtifacts, { recursive: true });
+		fs.writeFileSync(path.join(sourceArtifacts, "0"), "artifact payload");
+
+		const result = await manager.copyBranchToNewSession(id);
+		expect(result).toBeDefined();
+		const branchArtifact = path.join(result!.sessionPath.slice(0, -".jsonl".length), "0");
+		expect(fs.readFileSync(branchArtifact, "utf8")).toBe("artifact payload");
+	});
+
 	it("throws for an unknown entry id", async () => {
 		const manager = SessionManager.create(tempDir, sessionDir);
 		manager.appendMessage(userMsg("first"));

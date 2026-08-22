@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added RPC support for saving approved plans with suggested filenames, without execution, and removing thinking blocks through context shake.
+- Added persisted session-tree entry ids to RPC transcript messages so clients can create independent sessions from user or assistant turns.
 - Added RPC marketplace metadata, effective plugin activation verdicts, and declarative `gui.theme` discovery for GUI clients.
 - Plan review can save a plan to a chosen path and start a new session.
 - Added the `/pin` slash command to pin and unpin sessions so they stay at the top of the `--resume` picker UI.
@@ -167,6 +169,12 @@
 - `/retry` and `/handoff` now work over ACP, so editor clients (Zed) list them and can run them instead of sending the text to the model.
 - Added `qwenTemplateReasoningEffort` to the `models.yml` `compat` schema, so the auto-enabled Qwen 3.8+ template effort dialect (`chat_template_kwargs.reasoning_effort`) can be switched off per provider/model for strict local servers that reject unknown `chat_template_kwargs`.
 - Extensions can provide a normalized `usage` provider through `pi.registerProvider()`. Its reports now flow through AuthStorage caching, history, and usage displays, and the override is removed when the extension provider is unregistered.
+
+### Fixed
+
+- Fixed RPC-created conversation branches losing their session artifact recovery files.
+- Fixed save-only plan approvals reporting a fresh session when an extension cancelled or failed the transition.
+- Fixed concurrent GUI and CLI session pin updates overwriting each other.
 
 ## [17.4.0] - 2026-08-20
 

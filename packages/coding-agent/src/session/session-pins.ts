@@ -1,8 +1,24 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import type { SessionInfo } from "./session-listing";
 
 const PINS_FILENAME = "session-pins.json";
+
+async function updateSessionPins(
+	agentDir: string,
+	update: (pinned: Set<string>) => { state: boolean; changed: boolean },
+): Promise<boolean> {
+	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+	const pinsPath = path.join(agentDir, PINS_FILENAME);
+	return withFileLock(pinsPath, async () => {
+		const pinned = await loadPinnedSessionIds(agentDir);
+		const result = update(pinned);
+		if (result.changed) await Bun.write(pinsPath, JSON.stringify([...pinned], null, "\t"));
+		return result.state;
+	});
+}
 
 /**
  * Read the global set of pinned session ids (`~/.omp/session-pins.json`). Pins
@@ -24,10 +40,24 @@ export async function loadPinnedSessionIds(agentDir: string = getAgentDir()): Pr
 
 /** Toggle one session's pin and persist the set; returns the new pinned state. */
 export async function toggleSessionPin(sessionId: string, agentDir: string = getAgentDir()): Promise<boolean> {
-	const pinned = await loadPinnedSessionIds(agentDir);
-	if (!pinned.delete(sessionId)) pinned.add(sessionId);
-	await Bun.write(path.join(agentDir, PINS_FILENAME), JSON.stringify([...pinned], null, "\t"));
-	return pinned.has(sessionId);
+	return updateSessionPins(agentDir, pinned => {
+		if (!pinned.delete(sessionId)) pinned.add(sessionId);
+		return { state: pinned.has(sessionId), changed: true };
+	});
+}
+
+/** Persist an explicit pin state, avoiding toggle races across GUI and CLI clients. */
+export async function setSessionPinned(
+	sessionId: string,
+	isPinned: boolean,
+	agentDir: string = getAgentDir(),
+): Promise<boolean> {
+	return updateSessionPins(agentDir, pinned => {
+		const changed = isPinned ? !pinned.has(sessionId) : pinned.has(sessionId);
+		if (isPinned) pinned.add(sessionId);
+		else pinned.delete(sessionId);
+		return { state: isPinned, changed };
+	});
 }
 
 /**

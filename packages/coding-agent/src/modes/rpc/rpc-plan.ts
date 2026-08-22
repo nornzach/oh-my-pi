@@ -25,6 +25,7 @@ import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../../internal-urls";
 import { humanizePlanTitle } from "../../plan-mode/approved-plan";
 import { readPlanFile } from "../../plan-mode/plan-files";
+import { planSaveFileName } from "../../plan-mode/plan-save";
 import planModeApprovedPrompt from "../../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
@@ -34,7 +35,7 @@ import { type PlanProposalHandler, PROPOSE_DEVICE_NAME, writeDeviceDispatch } fr
 import type { RpcPlanApprovalOption, RpcPlanApprovalResult, RpcPlanProposalFrame } from "./rpc-types";
 
 /** Options advertised on the `plan_proposal` frame (TUI review parity). */
-const PLAN_PROPOSAL_OPTIONS = ["execute", "compact", "keep_context", "refine"];
+const PLAN_PROPOSAL_OPTIONS = ["execute", "compact", "keep_context", "save", "refine"];
 
 export interface RpcPendingPlanProposal {
 	planFilePath: string;
@@ -140,6 +141,7 @@ export class RpcPlanApprovalController {
 			type: "plan_proposal",
 			planFilePath: pending.planFilePath,
 			title: pending.title,
+			suggestedFileName: planSaveFileName(pending.title),
 			planContent,
 			options: [...PLAN_PROPOSAL_OPTIONS],
 		});
@@ -200,15 +202,16 @@ export class RpcPlanApprovalController {
 		approved: boolean;
 		option?: RpcPlanApprovalOption;
 		feedback?: string;
+		savePath?: string;
 	}): Promise<RpcPlanApprovalResult> {
 		const pending = this.#pending;
 		if (!pending) {
 			throw new Error("No plan is awaiting approval");
 		}
-		this.#pending = undefined;
 		const session = this.#deps.session;
 
 		if (!command.approved) {
+			this.#pending = undefined;
 			const feedback = command.feedback?.trim();
 			if (feedback) {
 				this.#dispatchTurn(feedback, { synthetic: false });
@@ -226,8 +229,38 @@ export class RpcPlanApprovalController {
 		if (!planContent) {
 			throw new Error(`Plan file not found at ${planFilePath}`);
 		}
+		if (option === "save") {
+			const savePath = command.savePath?.trim();
+			if (!savePath || !path.isAbsolute(savePath)) {
+				throw new Error("Saving a plan requires an absolute savePath");
+			}
+			await fs.writeFile(savePath, planContent);
+			this.#pending = undefined;
+			session.setPlanModeState(undefined);
+			this.#disarm();
+			try {
+				session.sessionManager.appendModeChange("none");
+				const freshSessionStarted = await session.newSession();
+				return {
+					approved: true,
+					dispatched: false,
+					reason: freshSessionStarted ? "saved" : "saved; new session cancelled",
+					savedPath: savePath,
+					freshSessionStarted,
+				};
+			} catch (error) {
+				return {
+					approved: true,
+					dispatched: false,
+					reason: `saved; new session failed: ${error instanceof Error ? error.message : String(error)}`,
+					savedPath: savePath,
+					freshSessionStarted: false,
+				};
+			}
+		}
 
 		// Exit plan mode (session-level subset of TUI #exitPlanMode — see deltas).
+		this.#pending = undefined;
 		session.setPlanModeState(undefined);
 		this.#disarm();
 		session.sessionManager.appendModeChange("none");

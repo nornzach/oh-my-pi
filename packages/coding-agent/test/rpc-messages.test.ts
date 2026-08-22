@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { encodeRpcFrame, MAX_RPC_FRAME_BYTES } from "../src/modes/rpc/rpc-frame";
-import { pageRpcMessages, type RpcMessageSnapshot } from "../src/modes/rpc/rpc-messages";
+import { attachRpcMessageEntryIds, pageRpcMessages, type RpcMessageSnapshot } from "../src/modes/rpc/rpc-messages";
+import type { SessionEntry } from "../src/session/session-entries";
 
 function message(index: number, bytes = 32 * 1024): AgentMessage {
 	return { role: "user", content: `${index}:${"x".repeat(bytes)}`, timestamp: index };
@@ -14,6 +15,33 @@ const snapshot: RpcMessageSnapshot = {
 };
 
 describe("RPC message pagination", () => {
+	it("exposes persisted tree ids for user and assistant branch points", () => {
+		const user = message(1, 8);
+		const assistant = {
+			role: "assistant",
+			content: [{ type: "text", text: "answer" }],
+			provider: "openai",
+			model: "gpt-test",
+			timestamp: 2,
+			stopReason: "stop",
+		} as AgentMessage;
+		const branch = [
+			{ type: "message", id: "user-entry", parentId: null, timestamp: "2026-01-01", message: user },
+			{
+				type: "message",
+				id: "assistant-entry",
+				parentId: "user-entry",
+				timestamp: "2026-01-01",
+				message: assistant,
+			},
+		] as SessionEntry[];
+
+		expect(attachRpcMessageEntryIds(structuredClone([user, assistant]), branch)).toMatchObject([
+			{ role: "user", entryId: "user-entry" },
+			{ role: "assistant", entryId: "assistant-entry" },
+		]);
+	});
+
 	it("reconstructs a large history from v1-safe pages without loss or overlap", () => {
 		const messages = Array.from({ length: snapshot.messageCount }, (_, index) => message(index));
 		const reconstructed: AgentMessage[] = [];

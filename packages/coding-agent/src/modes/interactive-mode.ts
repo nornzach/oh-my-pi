@@ -93,6 +93,7 @@ import {
 } from "../mcp/startup-events";
 import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
+import { planSaveFileName } from "../plan-mode/plan-save";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -345,25 +346,9 @@ const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 const PLAN_SAVE_AND_QUIT_OPTION = "Save and quit";
 const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 
-const PLAN_SAVE_STEM_MAX_LENGTH = 32;
 const PLAN_FILENAME_SYSTEM_PROMPT = prompt.render(planFilenamePrompt);
-/** Suggested save filename for an approved plan: `<TOPIC>_PLAN.md` from the
- *  tiny-model topic (e.g. `PYO3_METHODS_PLAN.md`), trimmed to a word boundary
- *  when a verbose fallback title sneaks through. */
-export function planSaveFileName(title: string): string {
-	let stem = title
-		.normalize("NFC")
-		.replace(/[^\p{L}\p{N}]+/gu, "_")
-		.replace(/_+/g, "_")
-		.replace(/^_+|_+$/g, "")
-		.toUpperCase();
-	if (stem.length > PLAN_SAVE_STEM_MAX_LENGTH) {
-		const cut = stem.lastIndexOf("_", PLAN_SAVE_STEM_MAX_LENGTH);
-		stem = cut > 0 ? stem.slice(0, cut) : stem.slice(0, PLAN_SAVE_STEM_MAX_LENGTH);
-	}
-	if (!stem || stem === "PLAN") return "PLAN.md";
-	return `${stem.endsWith("_PLAN") ? stem : `${stem}_PLAN`}.md`;
-}
+
+export { planSaveFileName } from "../plan-mode/plan-save";
 
 function planSaveTitleExcerpt(planContent: string): string {
 	return planContent

@@ -2666,9 +2666,9 @@ export class SessionManager {
 		manager.#index.rebuild(manager.#entries);
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
-		return manager.#sessionFile !== undefined
-			? { sessionPath: manager.#sessionFile, sessionId: manager.#sessionId }
-			: undefined;
+		if (manager.#sessionFile === undefined) return undefined;
+		await copySessionArtifacts(this.#sessionFile, manager.#sessionFile);
+		return { sessionPath: manager.#sessionFile, sessionId: manager.#sessionId };
 	}
 
 	/** Resolve the canonical default session directory for a cwd. */

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import {
 	loadPinnedSessionIds,
+	setSessionPinned,
 	sortPinnedFirst,
 	toggleSessionPin,
 } from "@oh-my-pi/pi-coding-agent/session/session-pins";
@@ -57,6 +58,21 @@ describe("session-pins", () => {
 		expect(loaded.has(id1)).toBe(false);
 		expect(loaded.has(id2)).toBe(true);
 		expect(loaded.size).toBe(1);
+	});
+
+	it("sets an explicit pin state idempotently for remote clients", async () => {
+		const id = "session-gui-333";
+		await expect(setSessionPinned(id, true, tempDir)).resolves.toBe(true);
+		await expect(setSessionPinned(id, true, tempDir)).resolves.toBe(true);
+		expect(await loadPinnedSessionIds(tempDir)).toEqual(new Set([id]));
+
+		await expect(setSessionPinned(id, false, tempDir)).resolves.toBe(false);
+		expect(await loadPinnedSessionIds(tempDir)).toEqual(new Set());
+	});
+
+	it("preserves concurrent pin updates from independent clients", async () => {
+		await Promise.all([setSessionPinned("session-a", true, tempDir), setSessionPinned("session-b", true, tempDir)]);
+		expect(await loadPinnedSessionIds(tempDir)).toEqual(new Set(["session-a", "session-b"]));
 	});
 
 	it("sorts pinned sessions first while preserving relative recency order", () => {
