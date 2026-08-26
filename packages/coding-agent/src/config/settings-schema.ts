@@ -1408,7 +1408,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "appearance",
 			group: "Display",
 			label: "Cache Miss Marker",
-			description: "Show a divider above an assistant turn whose request lost (missed) the prompt cache",
+			description: "Show a divider after an assistant turn whose request lost (missed) the prompt cache",
 		},
 	},
 
@@ -1896,7 +1896,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Retry & Fallback",
 			label: "Max Retry Delay",
 			description:
-				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
+				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets.",
 		},
 	},
 	"retry.modelFallback": {
@@ -5466,13 +5466,14 @@ export const SETTINGS_SCHEMA = {
 	},
 	"providers.tts": {
 		type: "enum",
-		values: ["auto", "local", "xai"] as const,
+		values: ["auto", "local", "xai", "deepinfra"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
 			group: "Services",
 			label: "Text-to-Speech Provider",
-			description: "Backend for the tts tool: local on-device neural TTS (Kokoro-82M) or xAI Grok Voice",
+			description:
+				"Backend for the tts tool: local on-device neural TTS (Kokoro-82M), xAI Grok Voice, or DeepInfra speech",
 			options: [
 				{
 					value: "auto",
@@ -5484,6 +5485,11 @@ export const SETTINGS_SCHEMA = {
 					value: "xai",
 					label: "xAI Grok Voice",
 					description: "Requires xAI Grok OAuth or XAI_API_KEY; MP3 or WAV",
+				},
+				{
+					value: "deepinfra",
+					label: "DeepInfra Speech",
+					description: "Requires DEEPINFRA_API_KEY; MP3 or WAV",
 				},
 			],
 		},
@@ -5985,13 +5991,13 @@ export const SETTINGS_SCHEMA = {
 
 	"commit.mapReduceEnabled": { type: "boolean", default: true },
 
-	"commit.mapReduceMinFiles": { type: "number", default: 4 },
+	"commit.mapReduceThreshold": { type: "number", default: 5000 },
 
-	"commit.mapReduceMaxFileTokens": { type: "number", default: 50000 },
+	"commit.mapBatchTokenBudget": { type: "number", default: 16000 },
 
-	"commit.mapReduceTimeoutMs": { type: "number", default: 120000 },
+	"commit.cacheEnabled": { type: "boolean", default: true },
 
-	"commit.mapReduceMaxConcurrency": { type: "number", default: 5 },
+	"commit.cacheTtlDays": { type: "number", default: 14 },
 
 	"commit.changelogMaxDiffChars": { type: "number", default: 120000 },
 
@@ -6267,12 +6273,19 @@ export interface SkillsSettings {
 	disabledExtensions?: string[];
 }
 
+/** Conventional commit generation and changelog limits. */
 export interface CommitSettings {
+	/** Enable per-file map-reduce analysis above the token threshold. */
 	mapReduceEnabled: boolean;
-	mapReduceMinFiles: number;
-	mapReduceMaxFileTokens: number;
-	mapReduceTimeoutMs: number;
-	mapReduceMaxConcurrency: number;
+	/** Included diff tokens that trigger map-reduce. */
+	mapReduceThreshold: number;
+	/** Maximum prompt tokens assigned to one map batch. */
+	mapBatchTokenBudget: number;
+	/** Cache successfully parsed inference responses. */
+	cacheEnabled: boolean;
+	/** Days before cached inference responses expire; zero disables expiry. */
+	cacheTtlDays: number;
+	/** Maximum diff characters supplied to one changelog request. */
 	changelogMaxDiffChars: number;
 }
 

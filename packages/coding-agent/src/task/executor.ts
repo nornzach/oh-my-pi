@@ -40,10 +40,11 @@ import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pendi
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
 import { AgentLifecycleManager, type AgentReviver } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-session";
-import type { ArtifactManager } from "../session/artifacts";
+import { type ArtifactManager, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
@@ -278,19 +279,39 @@ function installSubagentRetryFallbackChain(args: {
 	return role;
 }
 
-function renderIrcPeerRoster(selfId: string): string {
-	const peers = AgentRegistry.global()
-		.list()
-		.filter(ref => ref.id !== selfId && ref.status !== "aborted" && ref.kind !== "advisor");
-	if (peers.length === 0) return "- (no other agents)";
-	const lines = peers.map(
-		peer =>
-			`- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})${peer.activity ? `: ${peer.activity}` : ""}`,
-	);
-	if (peers.some(peer => peer.status === "idle" || peer.status === "parked")) {
-		lines.push("Idle/parked peers are not gone: messaging them wakes (or revives) them.");
+function formatIrcPeerRoster(registry: AgentRegistry, selfId: string): string {
+	const live = registry.listVisibleTo(selfId);
+	let parkedCount = 0;
+	for (const ref of registry.list()) {
+		if (ref.id !== selfId && ref.kind !== "advisor" && ref.status === "parked") parkedCount++;
+	}
+	const lines: string[] = [];
+	if (live.length === 0) {
+		lines.push(parkedCount > 0 ? "- (no live agents)" : "- (no other agents)");
+	} else {
+		for (const peer of live) {
+			lines.push(
+				`- \`${peer.id}\` — ${peer.displayName} (${peer.kind}, ${peer.status})${peer.activity ? `: ${peer.activity}` : ""}`,
+			);
+		}
+	}
+	if (live.some(peer => peer.status === "idle")) {
+		lines.push("Idle peers are not gone: messaging them wakes them.");
+	}
+	if (parkedCount > 0) {
+		lines.push(
+			`${parkedCount} parked peer(s) omitted. Query with \`hub\` op:"list" status:"parked"; send to a known id, \`history://<id>\`, or \`agent://<id>\` still works.`,
+		);
 	}
 	return lines.join("\n");
+}
+
+export async function renderIrcPeerRoster(
+	selfId: string,
+	registry: AgentRegistry = AgentRegistry.global(),
+): Promise<string> {
+	await ensurePersistedRoster(registry, registry.get(selfId)?.sessionFile ?? registry.get(MAIN_AGENT_ID)?.sessionFile);
+	return formatIrcPeerRoster(registry, selfId);
 }
 
 function withAbortTimeout<T>(
@@ -2145,6 +2166,13 @@ interface FinalizeRunArgs {
 	parentToolCallId?: string;
 	parentSubagentId?: string;
 	detached?: boolean;
+	/**
+	 * This finalize is a revival/wake or explicit follow-up turn, not the initial
+	 * run. Such turns only (re)write `<id>.md` when they produce a real `yield`
+	 * result, so a conversational hub wake (which never yields) cannot clobber the
+	 * completed run's artifact with a missing-yield warning body (issue #9518).
+	 */
+	followUpTurn?: boolean;
 	sessionFile?: string;
 	startTime: number;
 }
@@ -2206,20 +2234,31 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		maxLines: MAX_OUTPUT_LINES,
 	});
 
-	// Write output artifact (input and jsonl already written in real-time)
-	// Compute output metadata for agent:// URL integration
+	// Write output artifact (input and jsonl already written in real-time).
+	// Compute output metadata for agent:// URL integration.
+	//
+	// A revival/follow-up turn only (re)writes <id>.md when it produced a real
+	// yield result. A subagent revived to answer a hub message never yields, so
+	// writing here would overwrite the completed run's authoritative artifact with
+	// a missing-yield warning body (issue #9518). The initial run is unaffected
+	// (followUpTurn is unset), preserving the documented missing-yield artifact.
 	let outputMeta: { lineCount: number; charCount: number } | undefined;
 	let outputPath: string | undefined;
-	if (args.artifactsDir) {
-		outputPath = path.join(args.artifactsDir, `${id}.md`);
+	if (args.artifactsDir && (!args.followUpTurn || hasYield)) {
+		const candidatePath = path.join(args.artifactsDir, `${id}.md`);
 		try {
-			await Bun.write(outputPath, rawOutput);
+			await writeArtifact(candidatePath, rawOutput);
+			outputPath = candidatePath;
 			outputMeta = {
 				lineCount: rawOutput.split("\n").length,
 				charCount: rawOutput.length,
 			};
-		} catch {
-			// Non-fatal
+		} catch (error) {
+			logger.warn("Failed to persist subagent output artifact", {
+				agentId: id,
+				path: candidatePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 
@@ -2422,6 +2461,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					parentToolCallId: options.parentToolCallId,
 					parentSubagentId: options.parentSubagentId,
 					detached: true,
+					followUpTurn: true,
 					sessionFile,
 					startTime: turnStartTime,
 				});
@@ -2460,6 +2500,15 @@ export async function finalizeSubagentLifecycle(args: {
 	const ownsRef = Boolean(ref && ref.session === args.session);
 	const cleanupDeadlineAt = args.cleanupDeadlineAt ?? Date.now() + 5000;
 	const disposeSession = async (): Promise<void> => {
+		// On a graceful finish (e.g. a `yield`) the advisor's review of the final
+		// turn was enqueued at turn end but may still be draining. Give it a
+		// chance to land in the transcript before the runtime is torn down —
+		// mirroring print mode's headless drain — bounded by the shared cleanup
+		// deadline. Hard aborts skip this to keep kill teardown fast.
+		if (!args.aborted) {
+			args.session.prepareForHeadlessAdvisorDrain();
+			await args.session.waitForAdvisorCatchup(Math.max(0, cleanupDeadlineAt - Date.now()));
+		}
 		const disposal = args.session.dispose();
 		const remainingMs = Math.max(0, cleanupDeadlineAt - Date.now());
 		try {
@@ -2570,7 +2619,11 @@ export interface FollowUpTurnOptions {
 	eventBus?: EventBus;
 	parentToolCallId?: string;
 	parentSubagentId?: string;
-	/** When set, the turn's raw output is (re)written to `<artifactsDir>/<id>.md` so `agent://<id>` tracks the latest turn. */
+	/**
+	 * When set, a turn that produces a `yield` result (re)writes `<artifactsDir>/<id>.md`
+	 * so `agent://<id>` tracks the latest completion. A yield-less turn (e.g. a hub
+	 * wake answering a message) leaves the existing artifact intact (issue #9518).
+	 */
 	artifactsDir?: string;
 	/** Wall-clock cap in ms for this turn; 0 disables. */
 	maxRuntimeMs?: number;
@@ -2663,6 +2716,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		parentToolCallId: options.parentToolCallId,
 		parentSubagentId: options.parentSubagentId,
 		detached: true,
+		followUpTurn: true,
 		sessionFile,
 		startTime,
 	});
@@ -3126,7 +3180,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,
 						outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
-						ircPeers: ircEnabled ? renderIrcPeerRoster(id) : "",
+						ircPeers: ircEnabled ? formatIrcPeerRoster(AgentRegistry.global(), id) : "",
 						ircSelfId: ircEnabled ? id : "",
 					});
 					return defaultPrompt.length === 0
@@ -3164,6 +3218,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			}
 			sessionOpenedAt = performance.now();
+			if (ircEnabled) {
+				await ensurePersistedRoster(
+					AgentRegistry.global(),
+					sessionFile ??
+						AgentRegistry.global().get(id)?.sessionFile ??
+						AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
+				);
+			}
 
 			const sessionPromise = createAgentSession(buildSubagentSessionOptions(sessionManager, null));
 			let session: AgentSession;
@@ -3193,6 +3255,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					});
 					if (options.parentArtifactManager) {
 						reopened.adoptArtifactManager(options.parentArtifactManager);
+					}
+					if (ircEnabled) {
+						await ensurePersistedRoster(
+							AgentRegistry.global(),
+							sessionFile ??
+								AgentRegistry.global().get(id)?.sessionFile ??
+								AgentRegistry.global().get(MAIN_AGENT_ID)?.sessionFile,
+						);
 					}
 					const { session: revived } = await createAgentSession(
 						buildSubagentSessionOptions(reopened, expectedAgentRef),
@@ -3371,8 +3441,16 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			let deferredSessionShutdown: Promise<void> | undefined;
 			const deferCleanup = (completion: Promise<void>): void => {
 				lateCleanups.push(completion);
+				// The run's terminal outcome (a successful `yield`, or a genuine
+				// abort) is already settled; `aborted` reflects the authoritative
+				// run status after the abort-signal reconciliation below. Late
+				// cleanup (advisor drain, session disposal, owner-job reaping)
+				// draining past the deadline is orthogonal — it MUST NOT downgrade
+				// a non-aborted run to `aborted`, which discarded valid `agent()`
+				// results (issue #9670). The deferred work still completes
+				// asynchronously via `lateCleanups`/`onCleanupDeferred`.
+				if (!aborted) return;
 				exitCode = 1;
-				aborted = true;
 				abortReasonText = `cleanup exceeded ${cleanupGraceMs} ms`;
 				error ??= `Task aborted. Cleanup did not finish within ${cleanupGraceMs} ms. ${cleanupChangeStatus}`;
 			};
