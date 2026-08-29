@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- RPC transcripts and settled agent events now include persisted entry IDs so clients can reconcile streamed and committed messages exactly once.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added

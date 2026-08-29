@@ -84,6 +84,7 @@ import {
 } from "./rpc-mcp-extra";
 import {
 	attachRpcMessageEntryIds,
+	attachRpcTranscriptEntryIds,
 	pageRpcMessages,
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RpcMessagesPageError,
@@ -1249,7 +1250,9 @@ export async function runRpcMode(
 			event.type === "agent_end"
 				? {
 						...event,
-						messages: attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch()),
+						messages: attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch(), message =>
+							session.getPersistedMessageEntryId(message),
+						),
 					}
 				: event,
 		);
@@ -2099,7 +2102,9 @@ export async function runRpcMode(
 				// Full display history (all messages on the active branch), NOT the
 				// LLM context window that get_messages returns.
 				const transcript = session.buildTranscriptSessionContext();
-				return success(id, "get_transcript", { messages: transcript.messages });
+				return success(id, "get_transcript", {
+					messages: attachRpcTranscriptEntryIds(transcript.messages, transcript.messageEntryIds ?? []),
+				});
 			}
 
 			// =================================================================

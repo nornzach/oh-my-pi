@@ -179,6 +179,7 @@ import rewindReportTemplate from "../prompts/system/rewind-report.md" with { typ
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
 import {
+	deobfuscateAgentMessages,
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
@@ -460,7 +461,7 @@ type SetSessionNameWithTrigger = (
 ) => Promise<boolean>;
 
 const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
-type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
+type PersistedAgentMessage = AgentMessage & { [kPersistedSessionEntryId]?: string };
 
 interface UserQueueLayout {
 	/** Non-user messages surrounding the visible user-entry slots. */
@@ -1266,7 +1267,7 @@ export class AgentSession {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
-			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
+			persistedAssistantEntryId: message => (message as PersistedAgentMessage)[kPersistedSessionEntryId],
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
@@ -2449,17 +2450,16 @@ export class AgentSession {
 		}
 	};
 
-	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
+	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot {
 		const key = sessionMessagePersistenceKey(message);
-		if (!key) return undefined;
 		const previous = this.#messageEndPersistenceTail;
 		const { promise, resolve } = Promise.withResolvers<void>();
 		const clear = () => {
-			if (this.#pendingMessageEndPersistence.get(key) === promise) {
+			if (key && this.#pendingMessageEndPersistence.get(key) === promise) {
 				this.#pendingMessageEndPersistence.delete(key);
 			}
 		};
-		this.#pendingMessageEndPersistence.set(key, promise);
+		if (key) this.#pendingMessageEndPersistence.set(key, promise);
 		this.#messageEndPersistenceTail = promise.catch(() => {});
 		return {
 			promise,
@@ -2569,9 +2569,7 @@ export class AgentSession {
 		const cache = this.#persistedMessageKeys;
 		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
 		const entryId = this.sessionManager.appendMessage(message);
-		if (message.role === "assistant") {
-			(message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
-		}
+		(message as PersistedAgentMessage)[kPersistedSessionEntryId] = entryId;
 		const key = sessionMessagePersistenceKey(message);
 		if (wasFresh && cache && key) {
 			cache.keys.add(key);
@@ -2646,7 +2644,7 @@ export class AgentSession {
 			// Prewalk's plan nudge is a one-run steering instruction. Persisting it would
 			// resurrect the consumed prompt on resume, fork, or any context rebuild.
 			if (!isPrewalkPlanNudge(message)) {
-				this.sessionManager.appendCustomMessageEntry(
+				const entryId = this.sessionManager.appendCustomMessageEntry(
 					message.customType,
 					message.content,
 					message.display,
@@ -2657,6 +2655,7 @@ export class AgentSession {
 					// provider preparation / hook time from the prompt→yield anchor.
 					message.timestamp,
 				);
+				(message as PersistedAgentMessage)[kPersistedSessionEntryId] = entryId;
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.markInjectedFromDetails(message.details);
@@ -3104,11 +3103,16 @@ export class AgentSession {
 			// maintenance can emit agent_end, so preserve the state at settle entry.
 			const ttsrAbortPendingAtAgentEnd = this.#ttsr.abortPending;
 			const emitAgentEndNotification = async (options?: { willContinue?: boolean }) => {
+				await this.#messageEndPersistenceTail;
 				this.#emitRunState("idle");
 				// Public agent_end is held out of the eager display pass and emitted
 				// here after maintenance routing, tagged isTerminal so subscribers can
 				// tell final settles from scheduled continuations.
-				await this.#emitSessionEvent({ ...event, isTerminal: !options?.willContinue });
+				await this.#emitSessionEvent({
+					...event,
+					messages: this.#obfuscator ? deobfuscateAgentMessages(this.#obfuscator, event.messages) : event.messages,
+					isTerminal: !options?.willContinue,
+				});
 				void this.#emitAgentEndNotification([...activeMessages], options).catch(err => {
 					logger.error("Agent end extension notification failed", { err });
 				});
@@ -5253,6 +5257,11 @@ export class AgentSession {
 
 	buildDisplaySessionContext(): SessionContext {
 		return this.#providerBoundary.buildDisplaySessionContext();
+	}
+
+	/** Persisted identity assigned when this exact message committed to the active branch. */
+	getPersistedMessageEntryId(message: AgentMessage): string | undefined {
+		return (message as PersistedAgentMessage)[kPersistedSessionEntryId];
 	}
 
 	/**

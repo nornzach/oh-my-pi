@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { encodeRpcFrame, MAX_RPC_FRAME_BYTES } from "../src/modes/rpc/rpc-frame";
-import { attachRpcMessageEntryIds, pageRpcMessages, type RpcMessageSnapshot } from "../src/modes/rpc/rpc-messages";
+import {
+	attachRpcMessageEntryIds,
+	attachRpcTranscriptEntryIds,
+	pageRpcMessages,
+	type RpcMessageSnapshot,
+} from "../src/modes/rpc/rpc-messages";
 import type { SessionEntry } from "../src/session/session-entries";
 
 function message(index: number, bytes = 32 * 1024): AgentMessage {
@@ -36,9 +41,31 @@ describe("RPC message pagination", () => {
 			},
 		] as SessionEntry[];
 
-		expect(attachRpcMessageEntryIds(structuredClone([user, assistant]), branch)).toMatchObject([
+		expect(attachRpcMessageEntryIds([user, assistant], branch)).toMatchObject([
 			{ role: "user", entryId: "user-entry" },
 			{ role: "assistant", entryId: "assistant-entry" },
+		]);
+	});
+
+	it("exposes persisted ids for tool results and exact transcript projections", () => {
+		const toolResult = {
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [{ type: "text", text: "done" }],
+			isError: false,
+			timestamp: 3,
+		} as AgentMessage;
+		const branch = [
+			{ type: "message", id: "tool-entry", parentId: null, timestamp: "2026-01-01", message: toolResult },
+		] as SessionEntry[];
+
+		expect(attachRpcMessageEntryIds([toolResult], branch)).toMatchObject([{ entryId: "tool-entry" }]);
+		expect(attachRpcMessageEntryIds([toolResult], [], () => "settled-entry")).toMatchObject([
+			{ entryId: "settled-entry" },
+		]);
+		expect(attachRpcTranscriptEntryIds(structuredClone([toolResult]), ["tool-entry"])).toMatchObject([
+			{ entryId: "tool-entry" },
 		]);
 	});
 

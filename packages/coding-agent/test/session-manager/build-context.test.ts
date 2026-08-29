@@ -523,6 +523,7 @@ describe("buildSessionContext", () => {
 			expect(transcript.messages[1]?.role).toBe("assistant");
 			expect(transcript.messages[2]?.role).toBe("compactionSummary");
 			expect(transcript.messages[3]?.role).toBe("user");
+			expect(transcript.messageEntryIds).toEqual(["3", "4", "5", "6"]);
 		});
 
 		it("agent context: summary stays at top", () => {

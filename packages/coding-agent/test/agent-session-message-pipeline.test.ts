@@ -153,6 +153,64 @@ describe("AgentSession message pipeline", () => {
 		session.clearQueue();
 	});
 
+	it("persists custom message_end rows before publishing agent_end", async () => {
+		const sessionManager = SessionManager.inMemory();
+		const messageEndEntered = Promise.withResolvers<void>();
+		const releaseMessageEnd = Promise.withResolvers<void>();
+		const extensionRunner = {
+			hasHandlers: (eventType: string) => eventType === "message_end",
+			emit: async (event: { type: string }) => {
+				if (event.type !== "message_end") return;
+				messageEndEntered.resolve();
+				await releaseMessageEnd.promise;
+			},
+		};
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+			extensionRunner: extensionRunner as never,
+		});
+		sessions.push(session);
+		const custom: AgentMessage = {
+			role: "custom",
+			customType: "async-result",
+			content: "job finished",
+			display: true,
+			timestamp: Date.now(),
+		};
+		const agentEndSeen = Promise.withResolvers<AgentSessionEvent>();
+		let publishedAgentEnd = false;
+		let persistedIdAtAgentEnd: string | undefined;
+		session.subscribe(event => {
+			if (event.type === "agent_end") {
+				publishedAgentEnd = true;
+				persistedIdAtAgentEnd = event.messages[0]
+					? session.getPersistedMessageEntryId(event.messages[0])
+					: undefined;
+				agentEndSeen.resolve(event);
+			}
+		});
+
+		session.agent.emitExternalEvent({ type: "message_end", message: custom });
+		await messageEndEntered.promise;
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [custom] });
+		await Bun.sleep(0);
+		const publishedBeforePersistence = publishedAgentEnd;
+
+		releaseMessageEnd.resolve();
+		const event = await agentEndSeen.promise;
+		expect(publishedBeforePersistence).toBe(false);
+		expect(event.type).toBe("agent_end");
+		expect(persistedIdAtAgentEnd).toBeDefined();
+		expect(
+			sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "async-result"),
+		).toHaveLength(1);
+	});
+
 	it("resolves image attachments from submitted messages, not tool-result images", () => {
 		const userImage: ImageContent = { type: "image", data: "user-image", mimeType: "image/png" };
 		const toolImage: ImageContent = { type: "image", data: "tool-image", mimeType: "image/png" };

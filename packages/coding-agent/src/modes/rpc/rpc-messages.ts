@@ -46,35 +46,31 @@ export interface RpcMessagesPageOptions {
 	limit?: number;
 }
 
-/** Attach persisted tree node ids to conversation messages on the RPC wire. */
+/** Attach persisted tree node ids to committed conversation messages on the RPC wire. */
 export function attachRpcMessageEntryIds(
 	messages: readonly AgentMessage[],
 	branch: readonly SessionEntry[],
+	entryIdForMessage?: (message: AgentMessage) => string | undefined,
 ): AgentMessage[] {
 	const directIds = new Map<AgentMessage, string>();
-	const idsByDelivery = new Map<string, string[]>();
 	for (const entry of branch) {
-		if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) continue;
-		directIds.set(entry.message, entry.id);
-		const key = `${entry.message.role}\u0000${String(entry.message.timestamp)}`;
-		const ids = idsByDelivery.get(key);
-		if (ids) ids.push(entry.id);
-		else idsByDelivery.set(key, [entry.id]);
+		if (entry.type === "message") directIds.set(entry.message, entry.id);
 	}
 
-	const used = new Set<string>();
 	return messages.map(message => {
-		if (message.role !== "user" && message.role !== "assistant") return message;
-		let entryId = directIds.get(message);
-		if (!entryId) {
-			const ids = idsByDelivery.get(`${message.role}\u0000${String(message.timestamp)}`);
-			while (ids?.length && used.has(ids[0])) ids.shift();
-			entryId = ids?.shift();
-		}
+		const entryId = entryIdForMessage?.(message) ?? directIds.get(message);
 		if (!entryId) return message;
-		used.add(entryId);
 		return { ...message, entryId };
 	});
+}
+
+/** Attach ids from the exact transcript projection; no content or timestamp matching. */
+export function attachRpcTranscriptEntryIds(
+	messages: readonly AgentMessage[],
+	entryIds: readonly string[],
+): AgentMessage[] {
+	if (messages.length !== entryIds.length) throw new Error("RPC transcript entry ids do not match messages");
+	return messages.map((message, index) => ({ ...message, entryId: entryIds[index] }));
 }
 
 function encodeCursor(snapshot: RpcMessageSnapshot, offset: number): string {
