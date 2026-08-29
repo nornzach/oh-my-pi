@@ -5,6 +5,12 @@
 ### Fixed
 
 - Included cache-write tokens in the cache hit-rate denominator so the metric reflects all prompt tokens.
+## [18.0.9] - 2026-08-28
+
+### Fixed
+
+- Fixed inconsistent model colors between the Model Preference chart and Model Statistics table.
+
 ## [18.0.4] - 2026-08-24
 
 ### Fixed

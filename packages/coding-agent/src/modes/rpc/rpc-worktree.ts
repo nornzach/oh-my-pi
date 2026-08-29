@@ -15,13 +15,14 @@
  *   close dialog is the confirm channel). The bound branch is never deleted —
  *   merged-state detection is out of scope; `git branch -d` is one command.
  *
- * Mutations run under git.withRepoLock (gh.ts precedent) and are registered
+ * Mutations run under the shared repository lock and are registered
  * as background RPC commands (worktree add can be slow on large repos).
  */
 import * as fs from "node:fs/promises";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreeDir, hashPath } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
-import * as git from "../../utils/git";
+import { withRepoLock } from "../../utils/repo-lock";
 import type { RpcGitStatus, RpcWorktreeCreateResult } from "./rpc-types";
 
 /** Typed RPC errors: `code` lands in the response envelope's `code` field. */
@@ -46,22 +47,22 @@ const MAX_SUFFIX = 100;
 /** Live git state for the footer segment (TUI gitSegment parity: branch + staged/unstaged/untracked). */
 export async function buildRpcGitStatus(session: AgentSession): Promise<RpcGitStatus> {
 	const cwd = session.sessionManager.getCwd();
-	const repoRoot = git.repo.primaryRootSync(cwd) ?? (await git.repo.root(cwd));
-	if (!repoRoot) return { isRepo: false, branch: null, staged: 0, unstaged: 0, untracked: 0 };
-	const [branch, status] = await Promise.all([git.branch.current(cwd), git.status.summary(cwd)]);
+	const repository = vcs.git(cwd);
+	if (!repository) return { isRepo: false, branch: null, staged: 0, unstaged: 0, untracked: 0 };
+	const [branch, status] = await Promise.all([repository.currentBranch(), repository.statusSummary()]);
 	return {
 		isRepo: true,
-		branch,
-		staged: status?.staged ?? 0,
-		unstaged: status?.unstaged ?? 0,
-		untracked: status?.untracked ?? 0,
+		branch: branch ?? null,
+		staged: status.staged,
+		unstaged: status.unstaged,
+		untracked: status.untracked,
 	};
 }
 
 /**
  * Create a worktree + branch for a GUI tab. `baseCwd` defaults to the session
  * cwd; `baseRef` is "HEAD" (current checkout) or "default" (repository default
- * branch, resolved via git.branch.default, falling back to HEAD when unknown).
+ * branch, resolved from the native VCS adapter, falling back to HEAD when unknown).
  */
 export async function createRpcWorktree(
 	session: AgentSession,
@@ -75,13 +76,13 @@ export async function createRpcWorktree(
 		);
 	}
 	const baseCwd = input.baseCwd ?? session.sessionManager.getCwd();
-	const repoRoot = await git.repo.root(baseCwd);
-	if (!repoRoot) throw new RpcWorktreeError("not_a_repo", `Not a git repository: ${baseCwd}`);
-	const primaryRoot = git.repo.primaryRootSync(baseCwd) ?? repoRoot;
+	const repository = vcs.git(baseCwd);
+	if (!repository) throw new RpcWorktreeError("not_a_repo", `Not a git repository: ${baseCwd}`);
+	const primaryRoot = repository.primaryRoot();
 
-	const startPoint = input.baseRef === "default" ? ((await git.branch.default(primaryRoot)) ?? "HEAD") : "HEAD";
+	const startPoint = input.baseRef === "default" ? ((await repository.defaultBranch()) ?? "HEAD") : "HEAD";
 
-	return git.withRepoLock(primaryRoot, async () => {
+	return withRepoLock(primaryRoot, async () => {
 		for (let suffix = 1; suffix <= MAX_SUFFIX; suffix++) {
 			const candidateName = suffix === 1 ? name : `${name}-${suffix}`;
 			const branch = `omp/gui/${candidateName}`;
@@ -92,15 +93,15 @@ export async function createRpcWorktree(
 				(await fs.stat(path).then(
 					() => true,
 					() => false,
-				)) || (await git.branch.list(primaryRoot)).includes(branch);
+				)) || (await repository.listBranches(false)).includes(branch);
 			if (taken) continue;
 			try {
-				await git.branch.create(primaryRoot, branch, startPoint);
-				await git.worktree.add(primaryRoot, path, branch);
+				await repository.createBranch(branch, startPoint, false);
+				await repository.worktreeAdd(path, branch, false);
 			} catch (error) {
 				// Roll back a branch whose worktree add failed so the next suffix
 				// (or a retry) does not trip over the half-created ref.
-				await git.branch.tryDelete(primaryRoot, branch);
+				await repository.deleteBranch(branch, true).catch(() => false);
 				throw new RpcWorktreeError(
 					"worktree_create_failed",
 					`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
@@ -122,12 +123,13 @@ export async function removeRpcWorktree(
 	input: { path: string; force?: boolean },
 ): Promise<{ removed: true }> {
 	const worktreePath = input.path;
-	const primaryRoot = git.repo.primaryRootSync(worktreePath);
-	if (!primaryRoot) throw new RpcWorktreeError("not_a_worktree", `Not inside a git worktree: ${worktreePath}`);
+	const worktreeRepository = vcs.git(worktreePath);
+	if (!worktreeRepository) throw new RpcWorktreeError("not_a_worktree", `Not inside a git worktree: ${worktreePath}`);
+	const primaryRoot = worktreeRepository.primaryRoot();
 
 	if (!input.force) {
-		const status = await git.status.summary(worktreePath);
-		if (status && (status.staged > 0 || status.unstaged > 0 || status.untracked > 0)) {
+		const status = await worktreeRepository.statusSummary();
+		if (status.staged > 0 || status.unstaged > 0 || status.untracked > 0) {
 			throw new RpcWorktreeError(
 				"worktree_dirty",
 				`Worktree has uncommitted changes: ${status.staged} staged, ${status.unstaged} unstaged, ${status.untracked} untracked.`,
@@ -135,10 +137,11 @@ export async function removeRpcWorktree(
 		}
 	}
 
-	return git.withRepoLock(primaryRoot, async () => {
-		const removed = await git.worktree.tryRemove(primaryRoot, worktreePath, { force: true });
+	return withRepoLock(primaryRoot, async () => {
+		const repository = vcs.requireGit(primaryRoot);
+		const removed = await repository.worktreeRemove(worktreePath, true);
 		if (!removed) throw new RpcWorktreeError("worktree_remove_failed", `git worktree remove failed: ${worktreePath}`);
-		await git.worktree.prune(primaryRoot);
+		await repository.worktreePrune();
 		return { removed: true };
 	});
 }

@@ -99,7 +99,7 @@ export async function applyRpcReloadPlugins(
 	clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 	resetCapabilities();
 	await session.refreshSkills();
-	session.setSlashCommands(await loadSlashCommands({ cwd }));
+	session.setSlashCommands(await loadSlashCommands({ cwd, extensionRoots: session.effectiveExtensionRoots }));
 
 	// TUI MCPCommandController.reloadServers parity: full rediscovery with the
 	// same settings-derived filters as startup, serialized with every other

@@ -1,3 +1,4 @@
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $which, compareVersions, getSSHConfigPath, prompt, VERSION } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { type SSHHost, sshCapability } from "../../capability/ssh";
@@ -23,7 +24,6 @@ import {
 	invalidateHostMetadata,
 	type SSHConnectionTarget,
 } from "../../ssh/connection-manager";
-import * as git from "../../utils/git";
 import type {
 	RpcOmpUpdateResult,
 	RpcSecurityDashboardResult,
@@ -113,12 +113,14 @@ function projectOperation(operation: SecurityOperationSnapshot): RpcSecurityOper
 export async function buildRpcSecurityDashboard(session: AgentSession): Promise<RpcSecurityDashboardResult> {
 	const cwd = session.sessionManager.getCwd();
 	const store = await SecurityStore.openForCwd(cwd);
-	const [summaries, operations, branch, shortSha] = await Promise.all([
+	const repository = vcs.git(cwd);
+	const [summaries, operations, branch, sha] = await Promise.all([
 		store.listScans(),
 		securityCoordinator(session).listOperations(),
-		git.branch.current(cwd),
-		git.head.short(cwd),
+		repository?.currentBranch() ?? null,
+		repository?.headSha() ?? null,
 	]);
+	const shortSha = sha?.slice(0, 7) ?? null;
 	const bundles = await Promise.all(summaries.map(summary => store.getBundle(summary.id)));
 	const scans = bundles.filter((bundle): bundle is SecurityScanBundle => bundle !== null).map(projectScan);
 	const latestBundle = bundles.find((bundle): bundle is SecurityScanBundle => bundle !== null);

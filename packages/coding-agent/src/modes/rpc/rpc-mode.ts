@@ -894,7 +894,7 @@ export function requestRpcDialog<T>(
 export async function runRpcMode(
 	session: AgentSession,
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
-	eventBus?: EventBus,
+	subagentEventBus?: EventBus,
 	input: ReadableStream<Uint8Array> = claimRpcInput(),
 ): Promise<never> {
 	// Signal to RPC clients that the server is ready to accept commands
@@ -981,7 +981,7 @@ export async function runRpcMode(
 	};
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
-	const subagentRegistry = eventBus ? new RpcSubagentRegistry(eventBus, output) : undefined;
+	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	const planApprovalController = new RpcPlanApprovalController({
 		session,
 		output,
@@ -1217,7 +1217,7 @@ export async function runRpcMode(
 	const liveController = new RpcLiveController(session, output);
 	const collabController = new RpcCollabController({
 		session,
-		eventBus,
+		eventBus: subagentEventBus,
 		output,
 		notify: (message, type) => rpcUiContext.notify(message, type),
 		select: (title, options, dialogOptions) => rpcUiContext.select(title, options, dialogOptions),

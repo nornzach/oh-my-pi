@@ -11,10 +11,11 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-pr";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh-pr-checkout";
-import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
+import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// All GitHub access funnels through git.github.* — spying there covers every
+// All GitHub access funnels through the shared github runner — spying there covers every
 // command without a live gh or network. The session stub only needs getCwd
 // (draft additionally needs settings/modelRegistry, mocked at their modules).
 function stubSession(cwd = "/repo"): AgentSession {
@@ -25,15 +26,29 @@ function stubSession(cwd = "/repo"): AgentSession {
 	} as unknown as AgentSession;
 }
 
-function mockGithubRepo(): void {
-	vi.spyOn(git.github, "available").mockReturnValue(true);
-	vi.spyOn(git.repo, "root").mockResolvedValue("/repo");
-	vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+function mockGithubRepo() {
+	const repository = {
+		info: vi.fn(() => ({ repoRoot: "/repo" })),
+		currentBranch: vi.fn(async () => "main" as string | null),
+		revListRange: vi.fn(async () => [] as string[]),
+		commitDetails: vi.fn(async (revision: string) => ({
+			sha: revision,
+			parents: [],
+			author: { name: "Test", email: "test@example.com" },
+			message: revision,
+		})),
+		changedFiles: vi.fn(async () => [] as string[]),
+		numstat: vi.fn(async () => [] as Array<{ path: string; added?: number; removed?: number }>),
+	};
+	vi.spyOn(github, "available").mockReturnValue(true);
+	vi.spyOn(vcs, "git").mockReturnValue(repository as never);
+	vi.spyOn(github, "json").mockImplementation(async (_cwd, args) => {
 		if (args[0] === "repo" && args[1] === "view") {
 			return { nameWithOwner: "acme/widgets", defaultBranchRef: { name: "main" } };
 		}
 		throw new Error(`unexpected gh call: ${args.join(" ")}`);
 	});
+	return repository;
 }
 
 afterEach(() => {
@@ -42,11 +57,11 @@ afterEach(() => {
 
 describe("rpc-pr", () => {
 	it("pr_repo reports availability states", async () => {
-		vi.spyOn(git.github, "available").mockReturnValue(false);
+		vi.spyOn(github, "available").mockReturnValue(false);
 		expect(await buildRpcPrRepo(stubSession())).toEqual({ available: false, reason: "gh_missing" });
 
-		vi.spyOn(git.github, "available").mockReturnValue(true);
-		vi.spyOn(git.repo, "root").mockResolvedValue(null);
+		vi.spyOn(github, "available").mockReturnValue(true);
+		vi.spyOn(vcs, "git").mockReturnValue(null);
 		expect(await buildRpcPrRepo(stubSession("/nowhere"))).toEqual({ available: false, reason: "not_a_repo" });
 
 		mockGithubRepo();
@@ -59,7 +74,7 @@ describe("rpc-pr", () => {
 
 	it("pr_list maps rows with rollup CI counts", async () => {
 		mockGithubRepo();
-		vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+		vi.spyOn(github, "json").mockImplementation(async (_cwd, args) => {
 			if (args[0] === "repo") return { nameWithOwner: "acme/widgets", defaultBranchRef: { name: "main" } };
 			if (args[0] === "pr" && args[1] === "list") {
 				return [
@@ -97,7 +112,7 @@ describe("rpc-pr", () => {
 
 	it("pr_get maps detail with files and checks", async () => {
 		mockGithubRepo();
-		vi.spyOn(git.github, "json").mockImplementation(async (_cwd, args) => {
+		vi.spyOn(github, "json").mockImplementation(async (_cwd, args) => {
 			if (args[0] === "repo") return { nameWithOwner: "acme/widgets", defaultBranchRef: { name: "main" } };
 			if (args[0] === "pr" && args[1] === "view") {
 				return {
@@ -144,7 +159,7 @@ describe("rpc-pr", () => {
 			"+here",
 			"",
 		].join("\n");
-		vi.spyOn(git.github, "text").mockResolvedValue(unified);
+		vi.spyOn(github, "text").mockResolvedValue(unified);
 		const { diff } = await buildRpcPrFileDiff(stubSession(), { number: 3, path: "src/b.ts" });
 		expect(diff).toContain("diff --git a/src/b.ts b/src/b.ts");
 		expect(diff).not.toContain("src/a.ts");
@@ -155,7 +170,7 @@ describe("rpc-pr", () => {
 
 	it("pr_create passes body via file and parses the PR URL", async () => {
 		mockGithubRepo();
-		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue("https://github.com/acme/widgets/pull/99\n");
+		const textSpy = vi.spyOn(github, "text").mockResolvedValue("https://github.com/acme/widgets/pull/99\n");
 		const result = await createRpcPr(stubSession(), {
 			title: "My PR",
 			body: "## Summary\nstuff",
@@ -170,14 +185,17 @@ describe("rpc-pr", () => {
 	});
 
 	it("pr_draft feeds commits+files to the model and parses the tool call", async () => {
-		mockGithubRepo();
-		vi.spyOn(git.branch, "current").mockResolvedValue("feat/widget");
-		vi.spyOn(git.log, "subjectsInRange").mockResolvedValue(["feat: add widget", "fix: widget crash"]);
-		vi.spyOn(git, "diff").mockImplementation(async (_cwd, options) => {
-			if (options?.nameOnly) return "src/widget.ts\nsrc/widget.test.ts\n";
-			if (options?.stat) return " src/widget.ts | 10 +++++++++-\n 2 files changed";
-			return "";
-		});
+		const repository = mockGithubRepo();
+		repository.currentBranch.mockResolvedValue("feat/widget");
+		repository.revListRange.mockResolvedValue(["sha-1", "sha-2"]);
+		repository.commitDetails.mockImplementation(async revision => ({
+			sha: revision,
+			parents: [],
+			author: { name: "Test", email: "test@example.com" },
+			message: revision === "sha-1" ? "feat: add widget" : "fix: widget crash",
+		}));
+		repository.changedFiles.mockResolvedValue(["src/widget.ts", "src/widget.test.ts"]);
+		repository.numstat.mockResolvedValue([{ path: "src/widget.ts", added: 10, removed: 1 }]);
 		vi.spyOn(modelSelection, "resolvePrimaryModel").mockResolvedValue({
 			model: {},
 			apiKey: async () => "key",

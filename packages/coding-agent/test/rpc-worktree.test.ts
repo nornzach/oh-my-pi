@@ -8,7 +8,7 @@ import {
 	removeRpcWorktree,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-worktree";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { branch } from "@oh-my-pi/pi-coding-agent/utils/git";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $ } from "bun";
 
 // The RPC functions only touch session.sessionManager.getCwd() — a stub is
@@ -95,7 +95,7 @@ describe("rpc-worktree", () => {
 
 	it("creates from the repository default branch when baseRef is default", async () => {
 		await createRpcWorktree(stubSession(repo), { name: "from-default", baseRef: "default" });
-		expect(await branch.list(repo)).toContain("omp/gui/from-default");
+		expect(await vcs.requireGit(repo).listBranches(false)).toContain("omp/gui/from-default");
 	});
 
 	it("rejects invalid names and non-repo cwds with typed codes", async () => {

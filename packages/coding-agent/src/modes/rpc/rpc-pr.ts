@@ -1,7 +1,7 @@
 /**
  * Pull-request RPC commands backing the GUI's PR Center (plan/21).
  *
- * Everything shells out to the `gh` CLI through git.github.* — no octokit,
+ * Everything shells out to the `gh` CLI through the shared github runner — no octokit,
  * no new auth path (failures map to gh_missing / not_a_repo /
  * no_github_remote typed codes). Heavy lifting reuses the github TOOL's
  * exported, cache-aware readers: getOrFetchPr (view + files) and
@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { resolvePrimaryModel } from "../../commit/model-selection";
 import { extractToolCall } from "../../commit/utils";
@@ -27,7 +28,7 @@ import type { AgentSession } from "../../session/agent-session";
 import { toReasoningEffort } from "../../thinking";
 import { checkoutPullRequest } from "../../tools/gh-pr-checkout";
 import { parsePrUnifiedDiff } from "../../tools/gh-pr-diff";
-import * as git from "../../utils/git";
+import { github } from "../../utils/github";
 import prDraftSystemPrompt from "./prompts/pr-draft-system.md" with { type: "text" };
 import prDraftUserPrompt from "./prompts/pr-draft-user.md" with { type: "text" };
 import type { RpcPrCreateResult, RpcPrDetail, RpcPrDraftResult, RpcPrListItem, RpcPrRepo } from "./rpc-types";
@@ -81,15 +82,16 @@ const PR_LIST_FIELDS =
 	"number,title,url,isDraft,author,headRefName,baseRefName,additions,deletions,updatedAt,reviewDecision,statusCheckRollup";
 
 /** Resolve gh + the GitHub repo for the session cwd, or throw the typed reason. */
-async function requireGithubRepo(cwd: string): Promise<{ repo: string; defaultBranch: string | null }> {
-	if (!git.github.available()) {
+async function requireGithubRepo(cwd: string) {
+	if (!github.available()) {
 		throw new RpcPrError("gh_missing", "GitHub CLI (gh) is not installed — see https://cli.github.com");
 	}
-	const repoRoot = await git.repo.root(cwd);
-	if (!repoRoot) throw new RpcPrError("not_a_repo", `Not a git repository: ${cwd}`);
+	const repository = vcs.git(cwd);
+	if (!repository) throw new RpcPrError("not_a_repo", `Not a git repository: ${cwd}`);
+	const repoRoot = repository.info().repoRoot;
 	let view: GhRepoView;
 	try {
-		view = await git.github.json<GhRepoView>(
+		view = await github.json<GhRepoView>(
 			repoRoot,
 			["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
 			undefined,
@@ -104,13 +106,13 @@ async function requireGithubRepo(cwd: string): Promise<{ repo: string; defaultBr
 		);
 	}
 	if (!view.nameWithOwner) throw new RpcPrError("no_github_remote", `No GitHub remote for ${repoRoot}`);
-	return { repo: view.nameWithOwner, defaultBranch: view.defaultBranchRef?.name ?? null };
+	return { repo: view.nameWithOwner, defaultBranch: view.defaultBranchRef?.name ?? null, repository };
 }
 
 export async function buildRpcPrRepo(session: AgentSession): Promise<RpcPrRepo> {
 	const cwd = session.sessionManager.getCwd();
-	if (!git.github.available()) return { available: false, reason: "gh_missing" };
-	if (!(await git.repo.root(cwd))) return { available: false, reason: "not_a_repo" };
+	if (!github.available()) return { available: false, reason: "gh_missing" };
+	if (!vcs.git(cwd)) return { available: false, reason: "not_a_repo" };
 	try {
 		const { repo, defaultBranch } = await requireGithubRepo(cwd);
 		return { available: true, repo, defaultBranch };
@@ -127,7 +129,7 @@ export async function buildRpcPrList(
 ): Promise<RpcPrListItem[]> {
 	const cwd = session.sessionManager.getCwd();
 	const { repo } = await requireGithubRepo(cwd);
-	const rows = await git.github.json<GhPrListRow[]>(
+	const rows = await github.json<GhPrListRow[]>(
 		cwd,
 		[
 			"pr",
@@ -175,7 +177,7 @@ export async function buildRpcPrDetail(session: AgentSession, input: { number: n
 	const { repo } = await requireGithubRepo(cwd);
 	let row: GhPrDetailRow;
 	try {
-		row = await git.github.json<GhPrDetailRow>(
+		row = await github.json<GhPrDetailRow>(
 			cwd,
 			["pr", "view", String(input.number), "--repo", repo, "--json", PR_DETAIL_FIELDS],
 			undefined,
@@ -223,7 +225,7 @@ export async function buildRpcPrFileDiff(
 	const { repo } = await requireGithubRepo(cwd);
 	let text: string;
 	try {
-		text = await git.github.text(
+		text = await github.text(
 			cwd,
 			["pr", "diff", String(input.number), "--repo", repo, "--color", "never"],
 			undefined,
@@ -249,16 +251,22 @@ export async function buildRpcPrDraft(
 	input: { base?: string; head?: string },
 ): Promise<RpcPrDraftResult> {
 	const cwd = session.sessionManager.getCwd();
-	const { defaultBranch } = await requireGithubRepo(cwd);
+	const { defaultBranch, repository } = await requireGithubRepo(cwd);
 	const base = input.base ?? defaultBranch ?? "HEAD~1";
-	const head = input.head ?? (await git.branch.current(cwd)) ?? "HEAD";
+	const head = input.head ?? (await repository.currentBranch()) ?? "HEAD";
 
-	const [commits, nameOnlyText, diffStat] = await Promise.all([
-		git.log.subjectsInRange(cwd, base, head, 50),
-		git.diff(cwd, { base, head, nameOnly: true }),
-		git.diff(cwd, { base, head, stat: true }),
+	const [revisions, files, stats] = await Promise.all([
+		repository.revListRange(base, head),
+		repository.changedFiles({ base, head }),
+		repository.numstat({ base, head }),
 	]);
-	const files = nameOnlyText.split("\n").filter(Boolean);
+	const commits = await Promise.all(
+		revisions
+			.slice(-50)
+			.reverse()
+			.map(async revision => (await repository.commitDetails(revision)).message.split("\n", 1)[0] ?? ""),
+	);
+	const diffStat = stats.map(row => `${row.added ?? "-"}\t${row.removed ?? "-"}\t${row.path}`).join("\n");
 	if (commits.length === 0 && files.length === 0) {
 		throw new RpcPrError("pr_draft_failed", `No changes between ${base} and ${head}`);
 	}
@@ -302,7 +310,7 @@ export async function createRpcPr(
 		if (input.base) args.push("--base", input.base);
 		if (input.head) args.push("--head", input.head);
 		if (input.draft) args.push("--draft");
-		const output = await git.github.text(cwd, args, undefined, { repoProvided: true });
+		const output = await github.text(cwd, args, undefined, { repoProvided: true });
 		const url = output.match(/https:\/\/\S+\/pull\/\d+/)?.[0];
 		const number = url ? Number(url.split("/").pop()) : Number.NaN;
 		if (!url || !Number.isFinite(number)) {
