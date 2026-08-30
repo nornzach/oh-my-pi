@@ -20,7 +20,7 @@ const snapshot: RpcMessageSnapshot = {
 };
 
 describe("RPC message pagination", () => {
-	it("exposes persisted tree ids for user and assistant branch points", () => {
+	it("exposes persisted tree ids for cloned and display-rewritten messages", () => {
 		const user = message(1, 8);
 		const assistant = {
 			role: "assistant",
@@ -40,8 +40,12 @@ describe("RPC message pagination", () => {
 				message: assistant,
 			},
 		] as SessionEntry[];
+		const displayAssistant = {
+			...assistant,
+			content: [{ type: "text", text: "deobfuscated answer" }],
+		} as AgentMessage;
 
-		expect(attachRpcMessageEntryIds([user, assistant], branch)).toMatchObject([
+		expect(attachRpcMessageEntryIds([structuredClone(user), displayAssistant], branch)).toMatchObject([
 			{ role: "user", entryId: "user-entry" },
 			{ role: "assistant", entryId: "assistant-entry" },
 		]);

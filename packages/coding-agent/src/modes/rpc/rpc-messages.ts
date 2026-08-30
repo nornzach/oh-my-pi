@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { SessionEntry } from "../../session/session-entries";
+import { sameMessageContent, sessionMessagePersistenceKey } from "../../session/turn-persistence";
 
 const DEFAULT_RPC_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RPC_MESSAGE_PAGE_LIMIT = 256;
@@ -53,12 +54,23 @@ export function attachRpcMessageEntryIds(
 	entryIdForMessage?: (message: AgentMessage) => string | undefined,
 ): AgentMessage[] {
 	const directIds = new Map<AgentMessage, string>();
+	const entriesByKey = new Map<string, { id: string; message: AgentMessage }[]>();
 	for (const entry of branch) {
-		if (entry.type === "message") directIds.set(entry.message, entry.id);
+		if (entry.type !== "message") continue;
+		directIds.set(entry.message, entry.id);
+		const key = sessionMessagePersistenceKey(entry.message);
+		if (!key) continue;
+		const keyed = entriesByKey.get(key);
+		if (keyed) keyed.push(entry);
+		else entriesByKey.set(key, [entry]);
 	}
 
 	return messages.map(message => {
-		const entryId = entryIdForMessage?.(message) ?? directIds.get(message);
+		const key = sessionMessagePersistenceKey(message);
+		const keyed = key ? entriesByKey.get(key) : undefined;
+		const keyedEntry =
+			keyed?.length === 1 ? keyed[0] : keyed?.find(entry => sameMessageContent(entry.message, message));
+		const entryId = entryIdForMessage?.(message) ?? directIds.get(message) ?? keyedEntry?.id;
 		if (!entryId) return message;
 		return { ...message, entryId };
 	});

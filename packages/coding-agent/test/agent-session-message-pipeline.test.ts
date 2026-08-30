@@ -18,8 +18,10 @@ import {
 	type SimpleStreamOptions,
 	type TextContent,
 } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
@@ -32,6 +34,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { attachRpcMessageEntryIds } from "../src/modes/rpc/rpc-messages";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 function createAgent(): Agent {
@@ -209,6 +212,38 @@ describe("AgentSession message pipeline", () => {
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "async-result"),
 		).toHaveLength(1);
+	});
+
+	it("publishes persisted ids for a real prompt's settled messages", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["answer"] }) });
+		const session = new AgentSession({
+			agent: new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+		});
+		sessions.push(session);
+		const settled = Promise.withResolvers<Extract<AgentSessionEvent, { type: "agent_end" }>>();
+		session.subscribe(event => {
+			if (event.type === "agent_end") settled.resolve(event);
+		});
+
+		await session.prompt("test");
+		const event = await settled.promise;
+		const wireMessages = attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch(), message =>
+			session.getPersistedMessageEntryId(message),
+		);
+
+		expect(event.messages.length).toBeGreaterThan(0);
+		expect(wireMessages).toEqual(
+			event.messages.map(message => expect.objectContaining({ ...message, entryId: expect.any(String) })),
+		);
 	});
 
 	it("resolves image attachments from submitted messages, not tool-result images", () => {
