@@ -69,6 +69,7 @@ import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
 import { AUTO_THINKING, concreteThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
 import type { AskToolDetails, AskToolInput } from "../../tools/ask";
 import { shortenPath } from "../../tools/render-utils";
+import { applyHyperlinkSetting } from "../../tui/hyperlink";
 import { copyToClipboard } from "../../utils/clipboard";
 import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "../components/advisor-config";
@@ -608,6 +609,12 @@ export class SelectorController {
 				break;
 			case "tui.tight":
 				setTuiTight(value as boolean);
+				this.ctx.ui.invalidate();
+				this.ctx.ui.requestRender();
+				break;
+			case "tui.hyperlinks":
+				applyHyperlinkSetting();
+				this.ctx.statusLine.invalidate();
 				this.ctx.ui.invalidate();
 				this.ctx.ui.requestRender();
 				break;

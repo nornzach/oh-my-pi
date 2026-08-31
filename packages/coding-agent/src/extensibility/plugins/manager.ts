@@ -868,8 +868,9 @@ export class PluginManager {
 		// Marketplace packages deliberately do not appear in list(): their
 		// enable state lives in the marketplace registry, but feature selection
 		// still belongs in the shared runtime config consumed by the loader.
-		const plugins = await this.list();
-		const plugin = plugins.find(candidate => candidate.name === name);
+		const plugin = fallback
+			? undefined
+			: await this.getPlugin(name, { path: path.join(getPluginsNodeModules(), name) });
 		const manifest = plugin?.manifest ?? fallback?.manifest;
 		if (!config.plugins[name] && !fallback) {
 			throw new Error(`Plugin ${name} not found in runtime config`);
