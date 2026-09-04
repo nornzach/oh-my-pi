@@ -11,10 +11,21 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $ } from "bun";
 
-// The RPC functions only touch session.sessionManager.getCwd() — a stub is
-// the right-sized seam (a full AgentSession pulls provider/auth machinery).
-function stubSession(cwd: string): AgentSession {
-	return { sessionManager: { getCwd: () => cwd } } as unknown as AgentSession;
+// The RPC functions only touch cwd and the two shared worktree settings — a
+// stub is the right-sized seam (a full AgentSession pulls provider/auth machinery).
+function stubSession(
+	cwd: string,
+	worktree: { clone: boolean; backend: "auto" | "rcopy" } = {
+		clone: false,
+		backend: "auto",
+	},
+): AgentSession {
+	return {
+		sessionManager: { getCwd: () => cwd },
+		settings: {
+			get: (key: string) => (key === "worktree.clone" ? worktree.clone : worktree.backend),
+		},
+	} as unknown as AgentSession;
 }
 
 async function gitInit(repo: string): Promise<void> {
@@ -41,12 +52,23 @@ describe("rpc-worktree", () => {
 	afterEach(() => {
 		if (savedEnv === undefined) delete process.env.OMP_WORKTREE_DIR;
 		else process.env.OMP_WORKTREE_DIR = savedEnv;
-		fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+		fs.rmSync(tempRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 50,
+		});
 	});
 
 	it("reports branch and porcelain counts for the session cwd", async () => {
 		const clean = await buildRpcGitStatus(stubSession(repo));
-		expect(clean).toEqual({ isRepo: true, branch: "main", staged: 0, unstaged: 0, untracked: 0 });
+		expect(clean).toEqual({
+			isRepo: true,
+			branch: "main",
+			staged: 0,
+			unstaged: 0,
+			untracked: 0,
+		});
 
 		fs.writeFileSync(path.join(repo, "new.txt"), "untracked");
 		fs.writeFileSync(path.join(repo, "README.md"), "modified");
@@ -76,7 +98,9 @@ describe("rpc-worktree", () => {
 	});
 
 	it("creates a worktree on a new omp/gui branch under the managed dir", async () => {
-		const result = await createRpcWorktree(stubSession(repo), { name: "My Feature" });
+		const result = await createRpcWorktree(stubSession(repo), {
+			name: "My Feature",
+		});
 		expect(result.branch).toBe("omp/gui/my-feature");
 		expect(result.baseCwd).toBe(repo);
 		expect(path.dirname(result.path)).toBe(worktreesDir);
@@ -88,14 +112,31 @@ describe("rpc-worktree", () => {
 		expect(branch).toBe("omp/gui/my-feature");
 
 		// Name collision suffixes BOTH path and branch.
-		const second = await createRpcWorktree(stubSession(repo), { name: "my-feature" });
+		const second = await createRpcWorktree(stubSession(repo), {
+			name: "my-feature",
+		});
 		expect(second.branch).toBe("omp/gui/my-feature-2");
 		expect(second.path).not.toBe(result.path);
 	});
 
 	it("creates from the repository default branch when baseRef is default", async () => {
-		await createRpcWorktree(stubSession(repo), { name: "from-default", baseRef: "default" });
+		await createRpcWorktree(stubSession(repo), {
+			name: "from-default",
+			baseRef: "default",
+		});
 		expect(await vcs.requireGit(repo).listBranches(false)).toContain("omp/gui/from-default");
+	});
+
+	it("copies ignored workspace files when worktree cloning is enabled", async () => {
+		fs.writeFileSync(path.join(repo, ".gitignore"), ".cache/\n");
+		await $`git add .gitignore && git -c user.email=t@t -c user.name=t commit -m ignore-cache`.cwd(repo).quiet();
+		fs.mkdirSync(path.join(repo, ".cache"));
+		fs.writeFileSync(path.join(repo, ".cache", "state.json"), "cached");
+
+		const result = await createRpcWorktree(stubSession(repo, { clone: true, backend: "rcopy" }), {
+			name: "with-cache",
+		});
+		expect(fs.readFileSync(path.join(result.path, ".cache", "state.json"), "utf8")).toBe("cached");
 	});
 
 	it("rejects invalid names and non-repo cwds with typed codes", async () => {
@@ -108,7 +149,9 @@ describe("rpc-worktree", () => {
 	});
 
 	it("removes a clean worktree, refuses a dirty one, force overrides", async () => {
-		const { path: wtPath } = await createRpcWorktree(stubSession(repo), { name: "cleanup" });
+		const { path: wtPath } = await createRpcWorktree(stubSession(repo), {
+			name: "cleanup",
+		});
 		await expect(removeRpcWorktree(stubSession(repo), { path: wtPath })).resolves.toEqual({ removed: true });
 		expect(fs.existsSync(wtPath)).toBe(false);
 

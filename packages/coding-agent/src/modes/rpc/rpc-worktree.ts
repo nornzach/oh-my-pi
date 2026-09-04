@@ -20,8 +20,9 @@
  */
 import * as fs from "node:fs/promises";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getWorktreeDir, hashPath } from "@oh-my-pi/pi-utils";
+import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
+import { parseIsolationBackend } from "../../task/worktree";
 import { withRepoLock } from "../../utils/repo-lock";
 import type { RpcGitStatus, RpcWorktreeCreateResult } from "./rpc-types";
 
@@ -97,7 +98,14 @@ export async function createRpcWorktree(
 			if (taken) continue;
 			try {
 				await repository.createBranch(branch, startPoint, false);
-				await repository.worktreeAdd(path, branch, { detach: false, clone: false });
+				const worktree = await repository.worktreeAdd(path, branch, {
+					detach: false,
+					clone: session.settings.get("worktree.clone"),
+					backend: parseIsolationBackend(session.settings.get("isolation.backend")),
+				});
+				if (worktree.cloneError) {
+					logger.warn("GUI worktree clone fell back to plain checkout", { path, error: worktree.cloneError });
+				}
 			} catch (error) {
 				// Roll back a branch whose worktree add failed so the next suffix
 				// (or a retry) does not trip over the half-created ref.
