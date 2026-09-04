@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ToolCall } from "@oh-my-pi/pi-ai";
+import { extractMarkdownLinks } from "@oh-my-pi/pi-tui";
 
 /** A fenced code block extracted from assistant markdown. */
 export interface CodeBlock {
@@ -22,40 +23,28 @@ export type MessageBlock = ({ kind: "code" } & CodeBlock) | ({ kind: "quote" } &
 export interface LastCommand {
 	kind: "bash" | "eval";
 	code: string;
-	/** Highlight language: "bash" for bash, or the resolved eval language ("python"/"javascript"/"ruby"/"julia"). */
+	/** Highlight language: "bash" for bash, or the resolved eval language ("python"/"javascript"). */
 	language: string;
 }
 
-/**
- * A node in the `/copy` picker tree. Leaves carry `content` (placed on the
- * clipboard) plus `copyMessage` (the status shown afterwards); groups carry
- * `children` to drill into.
- */
+/** A node in the RPC copy picker tree. */
 export interface CopyTarget {
-	/** Stable id (e.g. "msg:1", "msg:1:code:0", "msg:1:quote:0", "msg:1:all", "cmd:1"). */
 	id: string;
 	label: string;
-	/** Dim annotation: line/block counts, language, or tool name. */
 	hint?: string;
-	/** Full text rendered in the preview pane. */
 	preview: string;
-	/** Highlight language for code/command previews (undefined = plain/markdown). */
 	language?: string;
-	/** Leaf: text copied to the clipboard. */
 	content?: string;
-	/** Leaf: status message shown after copying. */
 	copyMessage?: string;
-	/** Group: nested targets to drill into. */
 	children?: CopyTarget[];
 }
 
-/** Minimal session surface needed to assemble copy targets (eases testing). */
+/** Minimal session surface needed to assemble copy targets. */
 export interface CopySource {
 	readonly messages: readonly AgentMessage[];
 	getLastVisibleHandoffText(): string | undefined;
 }
 
-/** Cap on how many recent assistant messages the picker lists. */
 const MAX_MESSAGES = 50;
 
 const OPEN_FENCE_RE = /^```([^\n]*)$/;
@@ -137,6 +126,45 @@ export function extractQuoteBlocks(text: string): QuoteBlock[] {
 		.map(b => ({ text: b.text }));
 }
 
+/** A hyperlink found in assistant markdown: inline `[text](href)`, `<autolink>`, bare URL, or reference link. */
+export interface LinkTarget {
+	/** Visible link text; equals `href` for autolinks and bare URLs. */
+	text: string;
+	/** Absolute http(s) URL as marked resolved it. */
+	href: string;
+}
+
+/**
+ * Hyperlinks the renderer would draw for `text`, in document order and
+ * deduplicated by href. Tokenization is the renderer's own
+ * ({@link extractMarkdownLinks}), so fenced code, code spans, escapes,
+ * reference definitions and GFM autolink rules agree with the screen. Only
+ * http(s) targets qualify: the result feeds both the clipboard and the system
+ * opener, and a `mailto:`/`file:` destination is not something to hand to
+ * either from a transcript.
+ */
+export function extractLinks(text: string): LinkTarget[] {
+	const seen = new Set<string>();
+	const links: LinkTarget[] = [];
+	for (const link of extractMarkdownLinks(text)) {
+		if (!/^https?:\/\//i.test(link.href) || seen.has(link.href)) continue;
+		seen.add(link.href);
+		links.push({ text: link.text, href: link.href });
+	}
+	return links;
+}
+
+/** Walk the transcript backwards for the most recent link in an assistant message. */
+export function extractLastLink(messages: readonly AgentMessage[]): LinkTarget | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const text = assistantText(messages[i]);
+		if (!text) continue;
+		const links = extractLinks(text);
+		if (links.length > 0) return links[links.length - 1];
+	}
+	return undefined;
+}
+
 function extractEvalCode(args: unknown): { code: string; language: string } | undefined {
 	if (!args || typeof args !== "object") return undefined;
 	const argsObj = args as { cells?: unknown; code?: unknown };
@@ -157,7 +185,7 @@ function extractEvalCode(args: unknown): { code: string; language: string } | un
 		codeBlocks.push(code);
 		if (!languageResolved) {
 			const lang = (cell as { language?: unknown }).language;
-			language = lang === "js" ? "javascript" : lang === "rb" ? "ruby" : lang === "jl" ? "julia" : "python";
+			language = lang === "js" ? "javascript" : "python";
 			languageResolved = true;
 		}
 	}
@@ -165,7 +193,8 @@ function extractEvalCode(args: unknown): { code: string; language: string } | un
 	return codeBlocks.length > 0 ? { code: codeBlocks.join("\n\n"), language } : undefined;
 }
 
-function commandFromToolCall(tc: ToolCall): LastCommand | undefined {
+/** Runnable command carried by a `bash`/`eval` tool call, if any. */
+export function commandFromToolCall(tc: ToolCall): LastCommand | undefined {
 	if (tc.name === "bash" && typeof tc.arguments.command === "string") {
 		return { kind: "bash", code: tc.arguments.command, language: "bash" };
 	}
@@ -210,7 +239,6 @@ function blockHint(block: CodeBlock): string {
 	return block.lang ? `${block.lang} · ${lines}` : lines;
 }
 
-/** First non-empty line, whitespace-collapsed, used as a message label. */
 function firstLine(text: string): string {
 	for (const line of text.split("\n")) {
 		const trimmed = line.trim();
@@ -219,7 +247,6 @@ function firstLine(text: string): string {
 	return text.trim().replace(/\s+/g, " ");
 }
 
-/** "<n> lines · <c> code · <q> quote" — omitting block kinds that are absent. */
 function blockSummaryHint(text: string, codeCount: number, quoteCount: number): string {
 	const parts = [pluralLines(text)];
 	if (codeCount > 0) parts.push(`${codeCount} code`);
@@ -227,53 +254,47 @@ function blockSummaryHint(text: string, codeCount: number, quoteCount: number): 
 	return parts.join(" · ");
 }
 
-/** Build the target node for one assistant message: a leaf when it has no
- * drillable blocks, otherwise a group exposing the full message plus each
- * fenced code block and `>`-quoted block (de-prefixed) as a child target. */
 function messageTarget(text: string, rank: number): CopyTarget {
 	const id = `msg:${rank}`;
 	const label = firstLine(text);
 	const blocks = extractBlocks(text);
 	const messageCopy = rank === 1 ? "Copied last message to clipboard" : "Copied message to clipboard";
-
 	if (blocks.length === 0) {
 		return { id, label, hint: pluralLines(text), preview: text, content: text, copyMessage: messageCopy };
 	}
 
-	// The message node itself copies the full message; each block is a child
-	// copy target you can drill into, kept in document order.
 	const children: CopyTarget[] = [];
 	const codeBlocks: CodeBlock[] = [];
 	const quoteBlocks: QuoteBlock[] = [];
 	for (const block of blocks) {
 		if (block.kind === "code") {
-			const j = codeBlocks.length;
+			const index = codeBlocks.length;
 			codeBlocks.push(block);
 			children.push({
-				id: `${id}:code:${j}`,
-				label: `Block ${j + 1}`,
+				id: `${id}:code:${index}`,
+				label: `Block ${index + 1}`,
 				hint: blockHint(block),
 				preview: block.code,
 				language: block.lang || undefined,
 				content: block.code,
-				copyMessage: `Copied code block ${j + 1} to clipboard`,
+				copyMessage: `Copied code block ${index + 1} to clipboard`,
 			});
 		} else {
-			const j = quoteBlocks.length;
+			const index = quoteBlocks.length;
 			quoteBlocks.push(block);
 			children.push({
-				id: `${id}:quote:${j}`,
-				label: `Quote ${j + 1}`,
+				id: `${id}:quote:${index}`,
+				label: `Quote ${index + 1}`,
 				hint: pluralLines(block.text),
 				preview: block.text,
 				content: block.text,
-				copyMessage: `Copied quote block ${j + 1} to clipboard`,
+				copyMessage: `Copied quote block ${index + 1} to clipboard`,
 			});
 		}
 	}
 
 	if (codeBlocks.length > 1) {
-		const combined = codeBlocks.map(b => b.code).join("\n\n");
+		const combined = codeBlocks.map(block => block.code).join("\n\n");
 		children.push({
 			id: `${id}:all`,
 			label: `All ${codeBlocks.length} blocks`,
@@ -284,7 +305,7 @@ function messageTarget(text: string, rank: number): CopyTarget {
 		});
 	}
 	if (quoteBlocks.length > 1) {
-		const combined = quoteBlocks.map(b => b.text).join("\n\n");
+		const combined = quoteBlocks.map(block => block.text).join("\n\n");
 		children.push({
 			id: `${id}:all-quotes`,
 			label: `All ${quoteBlocks.length} quotes`,
@@ -295,19 +316,21 @@ function messageTarget(text: string, rank: number): CopyTarget {
 		});
 	}
 
-	const hint = blockSummaryHint(text, codeBlocks.length, quoteBlocks.length);
-	return { id, label, hint, preview: text, content: text, copyMessage: messageCopy, children };
-}
-
-function commandTitle(command: LastCommand): string {
-	return command.kind === "bash" ? "Bash command" : "Eval code";
+	return {
+		id,
+		label,
+		hint: blockSummaryHint(text, codeBlocks.length, quoteBlocks.length),
+		preview: text,
+		content: text,
+		copyMessage: messageCopy,
+		children,
+	};
 }
 
 function commandTarget(command: LastCommand, rank: number): CopyTarget {
-	const title = commandTitle(command);
 	return {
 		id: `cmd:${rank}`,
-		label: firstLine(command.code) || title,
+		label: firstLine(command.code) || (command.kind === "bash" ? "Bash command" : "Eval code"),
 		hint: `${command.kind} · ${pluralLines(command.code)}`,
 		preview: command.code,
 		language: command.language,
@@ -316,18 +339,12 @@ function commandTarget(command: LastCommand, rank: number): CopyTarget {
 	};
 }
 
-/**
- * Assemble the unified `/copy` target tree: recent assistant messages
- * (most recent first, each drillable into its code blocks), runnable command
- * targets interleaved after the assistant message that issued them, and a
- * fresh-handoff fallback when no assistant message exists yet.
- */
+/** Assemble recent assistant messages and their runnable commands for RPC clients. */
 export function buildCopyTargets(source: CopySource): CopyTarget[] {
 	const targets: CopyTarget[] = [];
 	const pendingCommands: LastCommand[] = [];
 	let messageRank = 0;
 	let commandRank = 0;
-
 	const appendCommands = (commands: readonly LastCommand[]) => {
 		for (const command of commands) {
 			commandRank += 1;
@@ -336,22 +353,20 @@ export function buildCopyTargets(source: CopySource): CopyTarget[] {
 	};
 
 	for (let i = source.messages.length - 1; i >= 0 && messageRank < MAX_MESSAGES; i--) {
-		const msg = source.messages[i];
-		if (msg.role !== "assistant") continue;
-
-		const toolCalls = msg.content.filter((c): c is ToolCall => c.type === "toolCall");
+		const message = source.messages[i];
+		if (message.role !== "assistant") continue;
 		const commands: LastCommand[] = [];
-		for (let j = toolCalls.length - 1; j >= 0; j--) {
-			const command = commandFromToolCall(toolCalls[j]!);
+		for (let j = message.content.length - 1; j >= 0; j--) {
+			const content = message.content[j];
+			if (content.type !== "toolCall") continue;
+			const command = commandFromToolCall(content);
 			if (command) commands.push(command);
 		}
-
-		const text = assistantText(msg);
+		const text = assistantText(message);
 		if (!text) {
 			pendingCommands.push(...commands);
 			continue;
 		}
-
 		messageRank += 1;
 		targets.push(messageTarget(text, messageRank));
 		appendCommands(pendingCommands);

@@ -97,7 +97,7 @@ export async function createRpcWorktree(
 			if (taken) continue;
 			try {
 				await repository.createBranch(branch, startPoint, false);
-				await repository.worktreeAdd(path, branch, false);
+				await repository.worktreeAdd(path, branch, { detach: false, clone: false });
 			} catch (error) {
 				// Roll back a branch whose worktree add failed so the next suffix
 				// (or a retry) does not trip over the half-created ref.

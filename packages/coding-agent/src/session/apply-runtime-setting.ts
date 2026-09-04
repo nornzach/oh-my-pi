@@ -41,7 +41,6 @@ export interface RuntimeSettingTarget {
 	setInterruptMode(mode: "immediate" | "wait"): void;
 	refreshBaseSystemPrompt(): Promise<void>;
 	applyMemoryBackend(): Promise<void>;
-	applyInspectImageModeChange(): Promise<unknown>;
 }
 
 /** Sampling params cached as Agent fields; -1/negative means provider default (undefined). */
@@ -109,9 +108,6 @@ export async function applyRuntimeSetting(
 			return true;
 		case "memory.backend":
 			await session.applyMemoryBackend();
-			return true;
-		case "inspect_image.mode":
-			await session.applyInspectImageModeChange();
 			return true;
 		case "providers.webSearchOrder":
 			if (Array.isArray(value)) setSearchProviderOrder(value.filter(isSearchProviderId));

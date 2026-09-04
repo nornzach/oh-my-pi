@@ -168,16 +168,14 @@ export async function setRpcSecurityDisposition(
 ): Promise<RpcSecurityFindingInfo> {
 	const normalizedRationale = rationale?.trim();
 	if (status !== "open" && !normalizedRationale) throw new Error(`${status} requires a rationale`);
-	const finding = await (await SecurityStore.openForCwd(session.sessionManager.getCwd())).updateDisposition(
-		scanId,
-		findingId,
-		{
-			status,
-			...(normalizedRationale ? { rationale: normalizedRationale } : {}),
-			updatedAt: new Date().toISOString(),
-			actor: "operator",
-		},
-	);
+	const finding = await (
+		await SecurityStore.openForCwd(session.sessionManager.getCwd())
+	).updateDisposition(scanId, findingId, {
+		status,
+		...(normalizedRationale ? { rationale: normalizedRationale } : {}),
+		updatedAt: new Date().toISOString(),
+		actor: "operator",
+	});
 	return projectFinding(finding);
 }
 
@@ -186,10 +184,9 @@ export async function buildRpcSecurityValidationPrompt(
 	scanId: string,
 	findingId: string,
 ): Promise<string> {
-	const finding = await (await SecurityStore.openForCwd(session.sessionManager.getCwd())).getFinding(
-		scanId,
-		findingId,
-	);
+	const finding = await (
+		await SecurityStore.openForCwd(session.sessionManager.getCwd())
+	).getFinding(scanId, findingId);
 	if (!finding) throw new Error(`Unknown security finding: ${findingId}`);
 	return prompt
 		.render(securityValidationPrompt, {

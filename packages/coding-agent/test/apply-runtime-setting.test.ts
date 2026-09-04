@@ -31,7 +31,6 @@ function makeTarget() {
 		setInterruptMode: record("setInterruptMode"),
 		refreshBaseSystemPrompt: async () => record("refreshBaseSystemPrompt")(),
 		applyMemoryBackend: async () => record("applyMemoryBackend")(),
-		applyInspectImageModeChange: async () => record("applyInspectImageModeChange")(),
 	};
 	return { target, calls };
 }
@@ -91,12 +90,10 @@ describe("applyRuntimeSetting", () => {
 		expect(calls.get("refreshBaseSystemPrompt")?.length).toBe(3);
 	});
 
-	test("memory backend and vision mode run their reconcilers", async () => {
+	test("memory backend runs its reconciler", async () => {
 		const { target, calls } = makeTarget();
 		await applyRuntimeSetting(target, "memory.backend", "mnemopi");
-		await applyRuntimeSetting(target, "inspect_image.mode", "file");
 		expect(calls.get("applyMemoryBackend")?.length).toBe(1);
-		expect(calls.get("applyInspectImageModeChange")?.length).toBe(1);
 	});
 
 	test("provider orders go to their module setters", async () => {

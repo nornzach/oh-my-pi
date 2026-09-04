@@ -36,8 +36,7 @@ export class RpcLiveController {
 
 	async start(voice?: string): Promise<RpcLiveState> {
 		if (this.#controller) return this.#state;
-		let controller: LiveSessionController;
-		controller = new LiveSessionController({
+		const controller = new LiveSessionController({
 			session: this.#session,
 			extractAssistantText: assistantText,
 			voice,
