@@ -1,8 +1,9 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as lsp from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool, type WriteToolDetails } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -36,6 +37,7 @@ describe("write tool overwrite diff", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await removeWithRetries(tmpDir);
 	});
 
@@ -56,6 +58,27 @@ describe("write tool overwrite diff", () => {
 		expect(d.diff).toContain("-2|line2");
 		expect(d.diff).toContain("+2|CHANGED");
 		expect(d.firstChangedLine).toBe(2);
+	});
+
+	it("shows the formatted file contents in the overwrite diff", async () => {
+		const filePath = path.join(tmpDir, "formatted.ts");
+		await Bun.write(filePath, "const value = 1;\n");
+		vi.spyOn(lsp, "createLspWritethrough").mockReturnValue(async (destination, content) => {
+			const finalContent = content.replace("value=2", "value = 2;");
+			await Bun.write(destination, finalContent);
+			return { finalContent };
+		});
+		const session = createSession(tmpDir);
+		session.enableLsp = true;
+		const result = await new WriteTool(session).execute("call-formatted", {
+			path: filePath,
+			content: "const value=2\n",
+		});
+
+		expect(await Bun.file(filePath).text()).toBe("const value = 2;\n");
+		expect(details(result).diff).toContain("-1|const value = 1;");
+		expect(details(result).diff).toContain("+1|const value = 2;");
+		expect(details(result).diff).not.toContain("value=2");
 	});
 
 	it("omits the overwrite fields when creating a new file", async () => {
