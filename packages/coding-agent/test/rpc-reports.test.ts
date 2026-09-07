@@ -4,6 +4,7 @@ import {
 	buildRpcContextReport,
 	buildRpcJobs,
 	shareRpcSession,
+	previewRpcShareSession,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-reports";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AsyncJobSnapshotItem } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
@@ -156,6 +157,69 @@ describe("shareRpcSession", () => {
 		});
 		return { base: `http://localhost:${server.port}`, stop: () => server.stop(true) };
 	}
+
+	test("local preview does not upload and stale snapshots cannot upload", async () => {
+		let uploads = 0;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				await req.arrayBuffer();
+				uploads++;
+				return Response.json({ id: "confirmed01" });
+			},
+		});
+		try {
+			const entries = [messageEntry("e1", null, "original conversation")];
+			const session = stubSession(entries, `http://localhost:${server.port}`);
+			const preview = previewRpcShareSession(session);
+			expect(uploads).toBe(0);
+			entries.push(messageEntry("e2", "e1", "new private message"));
+			await expect(shareRpcSession(session, preview.snapshotId)).rejects.toThrow("Refresh the local preview");
+			expect(uploads).toBe(0);
+			const updated = previewRpcShareSession(session);
+			await shareRpcSession(session, updated.snapshotId);
+			expect(uploads).toBe(1);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("the confirmed size-limited preview equals the decrypted uploaded payload", async () => {
+		let payload = new Uint8Array(new ArrayBuffer(0));
+		const server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				payload = new Uint8Array(await request.arrayBuffer());
+				return Response.json({ id: "previewbytes01" });
+			},
+		});
+		try {
+			const sourceText = randomHex(1_000_000);
+			const session = stubSession([messageEntry("e1", null, sourceText)], `http://localhost:${server.port}`);
+			const preview = previewRpcShareSession(session);
+			expect(preview.truncated).toBe(true);
+			expect(payload.byteLength).toBe(0);
+			const result = await shareRpcSession(session, preview.snapshotId);
+			const key = await crypto.subtle.importKey(
+				"raw",
+				Buffer.from(result.url.split("#")[1]!, "base64url"),
+				"AES-GCM",
+				false,
+				["decrypt"],
+			);
+			const plain = await crypto.subtle.decrypt(
+				{ name: "AES-GCM", iv: payload.subarray(0, 12) },
+				key,
+				payload.subarray(12),
+			);
+			expect(JSON.parse(new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(plain))))).toEqual(
+				JSON.parse(preview.preview),
+			);
+			expect(preview.preview).not.toContain(sourceText);
+		} finally {
+			server.stop(true);
+		}
+	});
 
 	test("returns the viewer url without a truncated flag when content fits", async () => {
 		const server = shareServer();

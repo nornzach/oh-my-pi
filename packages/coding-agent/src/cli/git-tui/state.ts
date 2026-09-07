@@ -6,6 +6,7 @@
  * the split diff pane, and the staging/commit actions the sidebar triggers.
  */
 import * as path from "node:path";
+import { parseGitStatus } from "../../utils/git-status";
 import type { VcsGitRepo, VcsNumstatEntry } from "@oh-my-pi/pi-natives";
 import {
 	DiffSide,
@@ -417,16 +418,7 @@ export class GitModel {
 	#setChanges(statusText: string): void {
 		const unstaged: ChangedFile[] = [];
 		const staged: ChangedFile[] = [];
-		const tokens = statusText.split("\0");
-		for (let i = 0; i < tokens.length; i++) {
-			const record = tokens[i];
-			if (record.length < 4) continue;
-			const x = record[0];
-			const y = record[1];
-			const filePath = record.slice(3);
-			// In `-z` output a rename/copy record is followed by the original path
-			// as its own NUL-separated token.
-			const origPath = x === "R" || x === "C" ? tokens[++i] : undefined;
+		for (const { path: filePath, oldPath: origPath, index: x, worktree: y } of parseGitStatus(statusText)) {
 			if (x === "?" && y === "?") {
 				unstaged.push({ path: filePath, kind: "untracked", area: "unstaged" });
 				continue;

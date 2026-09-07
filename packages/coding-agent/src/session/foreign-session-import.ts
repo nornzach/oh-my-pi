@@ -36,7 +36,7 @@ export function foreignSessionInfoToSessionInfo(info: ForeignSessionInfo): Sessi
 export async function persistForeignSession(
 	store: ForeignSessionStore,
 	info: ForeignSessionInfo,
-	options?: { fallbackCwd?: string; sessionDir?: string; suppressBreadcrumb?: boolean },
+	options?: { fallbackCwd?: string; sessionDir?: string; suppressBreadcrumb?: boolean; sessionFile?: string },
 ): Promise<SessionManager> {
 	const imported = await store.load(info);
 	imported.appendCustomEntry("foreign_session_import", {

@@ -10,6 +10,7 @@ import { describe, expect, it } from "bun:test";
 import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 function freshSession(): SessionManager {
 	const cwd = join("/tmp", `omp-on-disk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -17,6 +18,37 @@ function freshSession(): SessionManager {
 }
 
 describe("SessionManager.isSessionOnDisk (issue #8860)", () => {
+	it.each(["bashExecution", "pythonExecution"] as const)(
+		"retains %s output across a session switch without a model reply",
+		async role => {
+			using tempDir = TempDir.createSync("gui-execution-persistence-");
+			const session = SessionManager.create(tempDir.path(), tempDir.path());
+			const result = {
+				output: "retained local result",
+				exitCode: 0,
+				cancelled: false,
+				truncated: false,
+				timestamp: 1,
+			};
+			session.appendMessage(
+				role === "bashExecution"
+					? { ...result, role, command: "printf result" }
+					: { ...result, role, code: "print('result')", excludeFromContext: true },
+			);
+			const original = session.getSessionFile();
+			if (!original) throw new Error("Missing persistent session path");
+			await session.newSession();
+			await session.setSessionFile(original);
+			expect(session.getEntries()).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({ role, output: "retained local result" }),
+				}),
+			);
+			await session.close();
+		},
+	);
+
 	it("returns false for a fresh lazy session whose JSONL was never materialized", () => {
 		const session = freshSession();
 		expect(session.getSessionId()).not.toBe("");

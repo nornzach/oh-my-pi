@@ -213,8 +213,13 @@ function resetUsageCost(usage: Usage | undefined): void {
 	usage.premiumRequests = undefined;
 }
 
-function isAssistantEntry(entry: SessionEntry): boolean {
-	return entry.type === "message" && entry.message.role === "assistant";
+function isDurableOutputEntry(entry: SessionEntry): boolean {
+	return (
+		entry.type === "message" &&
+		(entry.message.role === "assistant" ||
+			entry.message.role === "bashExecution" ||
+			entry.message.role === "pythonExecution")
+	);
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -832,12 +837,12 @@ export class SessionManager {
 		return body;
 	}
 
-	#historyContainsAssistantMessage(): boolean {
-		return this.#entries.some(isAssistantEntry);
+	#historyContainsDurableOutput(): boolean {
+		return this.#entries.some(isDurableOutputEntry);
 	}
 
 	#shouldHaveSessionFile(): boolean {
-		return this.#forceFileCreation || this.#fileIsCurrent || this.#historyContainsAssistantMessage();
+		return this.#forceFileCreation || this.#fileIsCurrent || this.#historyContainsDurableOutput();
 	}
 
 	/**
@@ -1669,8 +1674,8 @@ export class SessionManager {
 
 			// Rewrite at the new location when the file already existed (update cwd) or
 			// there is in-memory output worth materializing; otherwise stay lazy.
-			const hasAssistant = this.#historyContainsAssistantMessage();
-			if (this.#persist && this.#sessionFile && (sessionFileExisted || hasAssistant)) {
+			const hasOutput = this.#historyContainsDurableOutput();
+			if (this.#persist && this.#sessionFile && (sessionFileExisted || hasOutput)) {
 				this.#forceFileCreation = true;
 				await this.#rewriteAtomically();
 			}
@@ -1694,7 +1699,7 @@ export class SessionManager {
 
 	/** Persist this session's transcript as a newly identified OMP session. */
 	async persistCopy(
-		options?: { sessionDir?: string; suppressBreadcrumb?: boolean },
+		options?: { sessionDir?: string; suppressBreadcrumb?: boolean; sessionFile?: string },
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionManager> {
 		const sessionDir = options?.sessionDir ?? SessionManager.getDefaultSessionDir(this.#cwd, undefined, storage);
@@ -1702,7 +1707,7 @@ export class SessionManager {
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		// Kind inherits: a copy of a chat session must stay chat-stamped,
 		// or the copy would resume later with full tools (I1).
-		manager.#resetToNewSession({ kind: this.#header.kind });
+		manager.#resetToNewSession({ kind: this.#header.kind }, options?.sessionFile);
 		manager.#sessionName = this.#sessionName;
 		manager.#titleSource = this.#titleSource;
 		manager.#titleUpdatedAt = this.#titleUpdatedAt;
@@ -3264,7 +3269,7 @@ export async function cleanupEmptyMoveSession(
 	if (path.resolve(sessionFile) !== path.resolve(movedFromEmptySessionFile)) return;
 	const entries = sessionManager.getEntries();
 	const hasRealMessages = entries.some(
-		e => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
+		e => isDurableOutputEntry(e) || (e.type === "message" && e.message.role === "user"),
 	);
 	if (hasRealMessages) return;
 	try {

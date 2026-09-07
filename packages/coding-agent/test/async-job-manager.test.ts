@@ -33,6 +33,30 @@ describe("AsyncJobManager", () => {
 		vi.restoreAllMocks();
 	});
 
+	test("end time is fixed on settlement, not when cancellation is requested", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
+		const body = Promise.withResolvers<string>();
+		let now = 100;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		const id = manager.register("bash", "slow shutdown", () => body.promise);
+		now = 200;
+		manager.cancel(id);
+		expect(manager.getJob(id)?.endedAt).toBeUndefined();
+		now = 300;
+		body.resolve("stopped");
+		await manager.getJob(id)?.promise;
+		expect(manager.getJob(id)?.endedAt).toBe(300);
+		now = 900;
+		expect(manager.getJob(id)?.endedAt).toBe(300);
+		const failedId = manager.register("eval", "failed evaluation", async () => {
+			throw new Error("failure");
+		});
+		await manager.getJob(failedId)?.promise;
+		expect(manager.getJob(failedId)?.status).toBe("failed");
+		expect(manager.getJob(failedId)?.endedAt).toBe(900);
+		await manager.dispose();
+	});
+
 	test("forwards progress updates and delivers completion", async () => {
 		const progressEvents: Array<{ text: string; details?: Record<string, unknown> }> = [];
 		const completions: Array<{ jobId: string; text: string }> = [];

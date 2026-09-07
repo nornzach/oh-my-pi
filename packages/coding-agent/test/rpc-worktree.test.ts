@@ -97,6 +97,12 @@ describe("rpc-worktree", () => {
 		});
 	});
 
+	it("rejects an unsupported name without silently creating a differently named branch", async () => {
+		await expect(createRpcWorktree(stubSession(repo), { name: "测试分支" })).rejects.toThrow();
+		const branches = await $`git branch "--format=%(refname:short)"`.cwd(repo).text();
+		expect(branches.trim()).toBe("main");
+	});
+
 	it("creates a worktree on a new omp/gui branch under the managed dir", async () => {
 		const result = await createRpcWorktree(stubSession(repo), {
 			name: "My Feature",

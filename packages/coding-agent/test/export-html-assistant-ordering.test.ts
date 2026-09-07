@@ -64,7 +64,11 @@ function renderSession(entries: unknown[], leafId: string): RenderedSession {
 		configurable: true,
 	});
 	Object.defineProperty(window, "matchMedia", {
-		value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+		value: () => ({
+			matches: false,
+			addEventListener() {},
+			removeEventListener() {},
+		}),
 		configurable: true,
 	});
 	const themeSelect = document.getElementById("theme-select");
@@ -193,17 +197,81 @@ function renderedSidebarOrder({ document }: RenderedSession): string[] {
 }
 
 describe("HTML export assistant content ordering", () => {
+	test("renders Python execution output and retains legacy JavaScript execution navigation", () => {
+		const rendered = renderSession(
+			[
+				{
+					type: "message",
+					id: "python",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:01.000Z",
+					message: {
+						role: "pythonExecution",
+						code: "print('<result>')",
+						output: "<result>",
+						exitCode: 0,
+						timestamp: 1,
+					},
+				},
+				{
+					type: "message",
+					id: "legacy",
+					parentId: "python",
+					timestamp: "2026-01-01T00:00:02.000Z",
+					message: {
+						role: "jsExecution",
+						code: "throw Error('legacy')",
+						output: "legacy failure",
+						exitCode: 1,
+						timestamp: 2,
+					},
+				},
+				{
+					type: "message",
+					id: "answer",
+					parentId: "legacy",
+					timestamp: "2026-01-01T00:00:03.000Z",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "done" }],
+						stopReason: "stop",
+						timestamp: 3,
+					},
+				},
+			],
+			"answer",
+		);
+		expect(rendered.document.querySelector(".tool-execution.success .tool-output")?.textContent).toContain(
+			"<result>",
+		);
+		expect(rendered.document.querySelector(".tool-output result")).toBeNull();
+		expect(rendered.document.querySelector(".tool-execution.error")?.textContent).toContain("(exit 1)");
+		expect(renderedSidebarOrder(rendered)).toEqual([
+			"[python]: print('<result>')",
+			"[js]: throw Error('legacy')",
+			"assistant: done",
+		]);
+	});
+
 	test("preserves interleaved text, tool calls, thinking, images, and the terminal stop reason", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "before-read" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
 				{ type: "text", text: "between-tools" },
 				{
 					type: "toolCall",
 					id: "tool-2",
 					name: "task",
-					arguments: { agent: "ExploreCompletion", prompt: "Inspect completion handling" },
+					arguments: {
+						agent: "ExploreCompletion",
+						prompt: "Inspect completion handling",
+					},
 				},
 				{ type: "thinking", thinking: "thinking-after-task" },
 				{ type: "image", mimeType: "image/png", data: "aa" },
@@ -227,9 +295,19 @@ describe("HTML export assistant content ordering", () => {
 	test("keeps the text-tool-text-tool-text ordering invariant", () => {
 		const rendered = renderAssistant([
 			{ type: "text", text: "first" },
-			{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "one.ts" } },
+			{
+				type: "toolCall",
+				id: "tool-1",
+				name: "read",
+				arguments: { path: "one.ts" },
+			},
 			{ type: "text", text: "middle" },
-			{ type: "toolCall", id: "tool-2", name: "grep", arguments: { pattern: "needle" } },
+			{
+				type: "toolCall",
+				id: "tool-2",
+				name: "grep",
+				arguments: { pattern: "needle" },
+			},
 			{ type: "text", text: "last" },
 		]);
 
@@ -240,13 +318,21 @@ describe("HTML export assistant content ordering", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "before-read" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
 				{ type: "text", text: "between-tools" },
 				{
 					type: "toolCall",
 					id: "tool-2",
 					name: "task",
-					arguments: { agent: "ExploreCompletion", prompt: "Inspect completion handling" },
+					arguments: {
+						agent: "ExploreCompletion",
+						prompt: "Inspect completion handling",
+					},
 				},
 				{ type: "thinking", thinking: "thinking-after-task" },
 				{ type: "image", mimeType: "image/png", data: "aa" },
@@ -290,7 +376,12 @@ describe("HTML export assistant content ordering", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "first\nline" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "one.ts" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "one.ts" },
+				},
 				{ type: "text", text: "after" },
 			],
 			"stop",
@@ -304,7 +395,12 @@ describe("HTML export assistant content ordering", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "before-tool" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "one.ts" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "one.ts" },
+				},
 			],
 			"stop",
 			true,
@@ -322,7 +418,12 @@ describe("HTML export assistant content ordering", () => {
 	test("keeps a pending tool call in the projected sidebar without a tool result", () => {
 		const rendered = renderAssistant([
 			{ type: "text", text: "before-tool" },
-			{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "pending.ts" } },
+			{
+				type: "toolCall",
+				id: "tool-1",
+				name: "read",
+				arguments: { path: "pending.ts" },
+			},
 			{ type: "text", text: "after-tool" },
 		]);
 
@@ -342,7 +443,12 @@ describe("HTML export assistant content ordering", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "before-tool" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "hidden.ts" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "hidden.ts" },
+				},
 				{ type: "text", text: "after-tool" },
 			],
 			"stop",
@@ -361,9 +467,19 @@ describe("HTML export assistant content ordering", () => {
 		const rendered = renderAssistant(
 			[
 				{ type: "text", text: "before-read" },
-				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "one.ts" } },
+				{
+					type: "toolCall",
+					id: "tool-1",
+					name: "read",
+					arguments: { path: "one.ts" },
+				},
 				{ type: "text", text: "after-read" },
-				{ type: "toolCall", id: "tool-2", name: "hub", arguments: { op: "jobs" } },
+				{
+					type: "toolCall",
+					id: "tool-2",
+					name: "hub",
+					arguments: { op: "jobs" },
+				},
 				{ type: "text", text: "after-hub" },
 			],
 			"stop",

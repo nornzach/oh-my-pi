@@ -1,3 +1,4 @@
+import type { SettingProvenance } from "../../config/settings";
 /**
  * RPC protocol types for headless operation.
  *
@@ -212,7 +213,8 @@ export type RpcCommand =
 	// Session reports (structured TUI /context /tools /share /jobs parity)
 	| { id?: string; type: "get_context_report" }
 	| { id?: string; type: "get_active_tools" }
-	| { id?: string; type: "share_session" }
+	| { id?: string; type: "preview_share_session" }
+	| { id?: string; type: "share_session"; snapshotId?: string }
 	| { id?: string; type: "get_jobs" }
 
 	// One-shot session actions (TUI /prewalk /fresh /shake /reload-plugins
@@ -393,6 +395,8 @@ export type RpcCommand =
 	// checkout) or "default" (repository default branch). worktree_remove
 	// refuses a dirty worktree unless force, the refusal carrying the counts.
 	| { id?: string; type: "get_git_status" }
+	| { id?: string; type: "get_git_changes" }
+	| { id?: string; type: "get_git_diff"; path: string }
 	| { id?: string; type: "worktree_create"; name: string; baseCwd?: string; baseRef?: "HEAD" | "default" }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
 
@@ -413,6 +417,7 @@ export type RpcCommand =
 // ============================================================================
 
 export interface RpcSessionState {
+	collab?: RpcCollabState;
 	model?: Model;
 	thinkingLevel: ThinkingLevel | undefined;
 	/** Configured selector: `auto` while auto mode is active, else the effective level. Drives pickers (Codex-style) rather than cyclers. */
@@ -700,6 +705,7 @@ export interface RpcUsageResult {
 
 /** One setting entry from the unified schema, projected for the GUI. */
 export interface RpcSettingEntry {
+	provenance?: SettingProvenance;
 	path: string;
 	type: "boolean" | "string" | "number" | "enum" | "array" | "record";
 	value: unknown;
@@ -1437,6 +1443,22 @@ export interface RpcWorkspaceDirectoriesResult {
  * session cwd (TUI gitSegment parity). `isRepo` false outside a repository
  * (counts zeroed, branch null); `branch` null when detached.
  */
+/** Net changes from the current HEAD to this checkout, including untracked files. */
+export interface RpcGitChanges {
+	isRepo: boolean;
+	root: string | null;
+	base: string | null;
+	files: { path: string; oldPath?: string; status: string }[];
+	truncated: boolean;
+}
+
+export interface RpcGitDiff {
+	path: string;
+	diff: string;
+	kind: "text" | "binary" | "large" | "symlink" | "directory";
+	truncated: boolean;
+}
+
 export interface RpcGitStatus {
 	isRepo: boolean;
 	branch: string | null;
@@ -1543,6 +1565,16 @@ export interface RpcActiveToolsResult {
 }
 
 /** Result of share_session. `truncated` rides only when content was trimmed. */
+export interface RpcShareSessionPreview {
+	/** The local preview already reflects upload size limits. */
+	truncated?: boolean;
+	snapshotId: string;
+	preview: string;
+	serverUrl: string;
+	store: "blob" | "gist";
+	redactionEnabled: boolean;
+}
+
 export interface RpcShareSessionResult {
 	url: string;
 	truncated?: boolean;
@@ -1858,7 +1890,12 @@ export type RpcResponse =
 			type: "response";
 			command: "get_settings";
 			success: true;
-			data: { values: Record<string, unknown>; advisorEnabled: boolean; advisorActive: boolean };
+			data: {
+				values: Record<string, unknown>;
+				provenance?: Record<string, SettingProvenance>;
+				advisorEnabled: boolean;
+				advisorActive: boolean;
+			};
 	  }
 	| {
 			id?: string;
@@ -1868,6 +1905,8 @@ export type RpcResponse =
 			data: {
 				path: string;
 				value: unknown;
+				savedValue?: unknown;
+				provenance?: SettingProvenance;
 				advisorEnabled?: boolean;
 				advisorActive?: boolean;
 			};
@@ -1937,6 +1976,7 @@ export type RpcResponse =
 	// Session reports (read-only)
 	| { id?: string; type: "response"; command: "get_context_report"; success: true; data: RpcContextReportResult }
 	| { id?: string; type: "response"; command: "get_active_tools"; success: true; data: RpcActiveToolsResult }
+	| { id?: string; type: "response"; command: "preview_share_session"; success: true; data: RpcShareSessionPreview }
 	| { id?: string; type: "response"; command: "share_session"; success: true; data: RpcShareSessionResult }
 	| { id?: string; type: "response"; command: "get_jobs"; success: true; data: RpcJobsResult }
 
@@ -2052,6 +2092,8 @@ export type RpcResponse =
 
 	// Git worktrees
 	| { id?: string; type: "response"; command: "get_git_status"; success: true; data: RpcGitStatus }
+	| { id?: string; type: "response"; command: "get_git_changes"; success: true; data: RpcGitChanges }
+	| { id?: string; type: "response"; command: "get_git_diff"; success: true; data: RpcGitDiff }
 	| { id?: string; type: "response"; command: "worktree_create"; success: true; data: RpcWorktreeCreateResult }
 	| { id?: string; type: "response"; command: "worktree_remove"; success: true; data: { removed: true } }
 

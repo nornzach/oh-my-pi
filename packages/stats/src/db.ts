@@ -1132,6 +1132,39 @@ export function getRecentRequests(limit = 100): MessageStats[] {
 	return (stmt.all(limit) as any[]).map(rowToMessageStats);
 }
 
+/** Stable keyset paging over the existing request table, including equal timestamps. */
+export function getRecentRequestPage(options: {
+	limit: number;
+	cutoff: number | null;
+	until: number;
+	maxId?: number;
+	after?: { timestamp: number; id: number };
+}): { rows: MessageStats[]; total: number; hasMore: boolean; maxId: number } {
+	if (!db) return { rows: [], total: 0, hasMore: false, maxId: 0 };
+	const maxId =
+		options.maxId ?? (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM messages").get() as { id: number }).id;
+	const conditions = ["timestamp <= ?", "id <= ?"];
+	const values: number[] = [options.until, maxId];
+	if (options.cutoff !== null) {
+		conditions.push("timestamp >= ?");
+		values.push(options.cutoff);
+	}
+	const total = (
+		db.prepare(`SELECT COUNT(*) AS count FROM messages WHERE ${conditions.join(" AND ")}`).get(...values) as {
+			count: number;
+		}
+	).count;
+	if (options.after) {
+		conditions.push("(timestamp < ? OR (timestamp = ? AND id < ?))");
+		values.push(options.after.timestamp, options.after.timestamp, options.after.id);
+	}
+	const rows = db
+		.prepare(`SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp DESC, id DESC LIMIT ?`)
+		.all(...values, options.limit + 1)
+		.map(rowToMessageStats);
+	return { rows: rows.slice(0, options.limit), total, hasMore: rows.length > options.limit, maxId };
+}
+
 export function getRecentErrors(limit = 100, cutoff?: number | null): MessageStats[] {
 	if (!db) return [];
 	const hasCutoff = cutoff !== undefined && cutoff !== null;

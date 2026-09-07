@@ -5,6 +5,7 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import {
 	getRecentErrors as dbGetRecentErrors,
 	getRecentRequests as dbGetRecentRequests,
+	getRecentRequestPage,
 	getBehaviorByModel,
 	getBehaviorOverall,
 	getBehaviorTimeSeries,
@@ -35,6 +36,7 @@ import {
 	updateUserMessageLinks,
 } from "./db";
 import { getSessionEntry, listAllSessionFiles, type ParseSessionResult, parseSessionFile } from "./parser";
+import type { RequestPage } from "./types";
 import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so the compiled binary and npm bundle only need one
@@ -489,6 +491,54 @@ export async function getFolderStats(range?: string | null): Promise<FolderStats
 export async function getRecentRequests(limit?: number): Promise<MessageStats[]> {
 	await initDb();
 	return dbGetRecentRequests(limit);
+}
+
+export async function getRequestPage(range = "24h", limit = 50, cursor?: string | null): Promise<RequestPage> {
+	if (!Number.isInteger(limit) || limit < 1 || limit > 200)
+		throw new RangeError("limit must be an integer from 1 to 200");
+	if (!Object.hasOwn(TIME_RANGE_TO_CONFIG, range)) throw new RangeError("Invalid request range");
+	let cutoff = getTimeRangeConfig(range).cutoff;
+	let until = Date.now();
+	let maxId: number | undefined;
+	let after: { timestamp: number; id: number } | undefined;
+	if (cursor) {
+		if (cursor.length > 512) throw new RangeError("Invalid request cursor");
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+		} catch {
+			throw new RangeError("Invalid request cursor");
+		}
+		if (
+			!Array.isArray(parsed) ||
+			parsed.length !== 6 ||
+			parsed[4] !== range ||
+			!Number.isSafeInteger(parsed[0]) ||
+			!Number.isSafeInteger(parsed[1]) ||
+			parsed[1] <= 0 ||
+			(parsed[2] !== null && !Number.isSafeInteger(parsed[2])) ||
+			!Number.isSafeInteger(parsed[3]) ||
+			!Number.isSafeInteger(parsed[5]) ||
+			parsed[5] < parsed[1] ||
+			parsed[0] > parsed[3] ||
+			(parsed[2] !== null && parsed[2] > parsed[3])
+		)
+			throw new RangeError("Invalid request cursor");
+		after = { timestamp: parsed[0], id: parsed[1] };
+		cutoff = parsed[2];
+		until = parsed[3];
+		maxId = parsed[5];
+	}
+	await initDb();
+	const page = getRecentRequestPage({ limit, cutoff, until, after, maxId });
+	const last = page.rows.at(-1);
+	const nextCursor =
+		page.hasMore && last?.id !== undefined
+			? Buffer.from(JSON.stringify([last.timestamp, last.id, cutoff, until, range, page.maxId])).toString(
+					"base64url",
+				)
+			: null;
+	return { rows: page.rows, total: page.total, nextCursor, snapshotAt: until };
 }
 
 export async function getRecentErrors(range?: string | null, limit?: number): Promise<MessageStats[]> {

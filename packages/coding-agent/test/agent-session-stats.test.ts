@@ -112,7 +112,11 @@ describe("AgentSession session stats", () => {
 		appendUsage(manager, target, 7);
 		session = createStatsSession(manager, target);
 
-		expect(session.getSessionStats()).toMatchObject({ tokens: { total: 7 }, cost: 7 });
+		expect(session.getSessionStats()).toMatchObject({
+			tokens: { total: 7 },
+			cost: 7,
+			history: { totalTokens: 107, cost: 107 },
+		});
 	});
 
 	it("preserves authoritative provider occupancy above the local transcript estimate", () => {

@@ -470,6 +470,13 @@ function physicalTargetSegments(target: string, pathApi: typeof path = path): st
 // Settings Class
 // ═══════════════════════════════════════════════════════════════════════════
 
+export interface SettingProvenance {
+	/** Configured layers, in increasing precedence; records can merge across layers. */
+	layers: ("global" | "project" | "overlay" | "runtime")[];
+	globalValue?: unknown;
+	globalPath?: string;
+}
+
 export class Settings {
 	#configPath: string | null;
 	#cwd: string;
@@ -644,6 +651,16 @@ export class Settings {
 			value !== undefined ? (resolvePathScopedStringArray(path, value, this.#cwd) ?? value) : getDefault(path);
 		this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
+	}
+
+	getProvenance(path: SettingPath): SettingProvenance {
+		const segments = SETTING_PATH_SEGMENTS[path];
+		const layers: SettingProvenance["layers"] = [];
+		if (getByPath(this.#global, segments) !== undefined) layers.push("global");
+		if (getByPath(this.#projectSettingsForMerge(), segments) !== undefined) layers.push("project");
+		if (getByPath(this.#configOverlay, segments) !== undefined) layers.push("overlay");
+		if (getByPath(this.#overrides, segments) !== undefined) layers.push("runtime");
+		return { layers, globalValue: getByPath(this.#global, segments), globalPath: this.#configPath ?? undefined };
 	}
 
 	/**

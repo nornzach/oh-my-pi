@@ -37,6 +37,13 @@ export interface MessageStats {
 	agentType: AgentType;
 }
 
+export interface RequestPage {
+	rows: MessageStats[];
+	total: number;
+	nextCursor: string | null;
+	snapshotAt: number;
+}
+
 /**
  * Full details of a request, including content.
  */

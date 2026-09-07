@@ -128,6 +128,7 @@ export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaRes
 			path,
 			type: def.type as RpcSettingEntry["type"],
 			value: settings.get(path),
+			provenance: settings.getProvenance(path),
 			default: getDefault(path),
 			label: (ui?.label as string | undefined) ?? path,
 			description: ui?.description as string | undefined,
@@ -219,4 +220,21 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 	});
 
 	return { providers };
+}
+
+/** Validate the public RPC boundary before a malformed value can reach persistent settings. */
+export function validateRpcSettingValue(path: SettingPath, value: unknown): void {
+	if (!Object.hasOwn(SETTINGS_SCHEMA, path)) throw new Error(`Unknown setting path: ${path}`);
+	const def = SETTINGS_SCHEMA[path];
+	const valid =
+		value === undefined
+			? getDefault(path) === undefined
+			: def.type === "enum"
+				? "values" in def && (def.values as readonly unknown[]).includes(value)
+				: def.type === "array"
+					? Array.isArray(value)
+					: def.type === "record"
+						? value !== null && typeof value === "object" && !Array.isArray(value)
+						: typeof value === def.type && (def.type !== "number" || Number.isFinite(value));
+	if (!valid) throw new Error(`Invalid value for ${path}: expected ${def.type}`);
 }

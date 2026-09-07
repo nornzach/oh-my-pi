@@ -70,7 +70,7 @@ export async function createRpcWorktree(
 	input: { name: string; baseCwd?: string; baseRef?: "HEAD" | "default" },
 ): Promise<RpcWorktreeCreateResult> {
 	const name = slugifyName(input.name);
-	if (!NAME_PATTERN.test(name)) {
+	if (/[^a-z0-9 -]/i.test(input.name) || !NAME_PATTERN.test(name)) {
 		throw new RpcWorktreeError(
 			"invalid_name",
 			`Invalid worktree name "${input.name}" — use 1-41 chars of [a-z0-9-], starting with a letter or digit.`,

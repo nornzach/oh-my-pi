@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Request history can be paged beyond 200 entries without duplicate or skipped rows when timestamps match or new data arrives.
 - Included cache-write tokens in the cache hit-rate denominator so the metric reflects all prompt tokens.
 ## [18.1.3] - 2026-09-02
 

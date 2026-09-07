@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getDashboardStats, getFolderStats } from "@oh-my-pi/omp-stats/aggregator";
+import { getDashboardStats, getFolderStats, getRequestPage } from "@oh-my-pi/omp-stats/aggregator";
 import { initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
 import type { FolderStats, MessageStats } from "@oh-my-pi/omp-stats/types";
 import { handleApi } from "../src/server";
@@ -132,4 +132,34 @@ describe("getDashboardStats time range", () => {
 		);
 		expect(folders).toEqual([expect.objectContaining({ folder: "/tmp/current-project", totalRequests: 1 })]);
 	});
+});
+
+it("pages past 200 equal-timestamp requests without repeats and excludes rows indexed after the first page", async () => {
+	await initDb();
+	const timestamp = Date.now() - 1000;
+	insertMessageStats(Array.from({ length: 237 }, (_, index) => makeMessage(timestamp, `page-${index}`)));
+	insertMessageStats([makeMessage(timestamp - 48 * 60 * 60 * 1000, "out-of-range")]);
+	let page = await getRequestPage("24h", 25);
+	const ids = page.rows.map(row => row.entryId);
+	insertMessageStats([makeMessage(timestamp - 1, "late-indexed")]);
+	while (page.nextCursor) {
+		page = await getRequestPage("24h", 25, page.nextCursor);
+		expect(page.total).toBe(237);
+		ids.push(...page.rows.map(row => row.entryId));
+	}
+	expect(ids).toEqual(Array.from({ length: 237 }, (_, index) => `page-${236 - index}`));
+	const refreshed = await getRequestPage("all", 200);
+	expect(refreshed.total).toBe(239);
+});
+
+it("rejects malformed paging parameters with HTTP 400 and keeps the legacy endpoint array", async () => {
+	for (const query of ["limit=-1", "limit=201", "limit=NaN", "cursor=broken", "range=unknown"]) {
+		const response = await handleApi(new Request(`http://localhost/api/stats/requests?${query}`));
+		expect(response.status).toBe(400);
+	}
+	await initDb();
+	insertMessageStats([makeMessage(Date.now(), "legacy")]);
+	const response = await handleApi(new Request("http://localhost/api/stats/recent?limit=1"));
+	const rows = (await response.json()) as MessageStats[];
+	expect(rows.map(row => row.entryId)).toEqual(["legacy"]);
 });

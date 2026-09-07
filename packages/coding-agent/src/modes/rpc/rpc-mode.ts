@@ -1,3 +1,4 @@
+import type { SettingProvenance } from "../../config/settings";
 /**
  * RPC mode: Headless operation with JSON stdin/stdout protocol.
  *
@@ -62,7 +63,7 @@ import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { applyRpcHookEnabled, applyRpcMcpAction, applyRpcPluginEnabled, applyRpcSkillEnabled } from "./rpc-actions";
 import { applyRpcAbortSubagent, applyRpcReviveSubagent, buildRpcAgentDefinitions } from "./rpc-agents";
 import { RpcBtwController } from "./rpc-btw";
-import { RpcCollabController } from "./rpc-collab";
+import { RpcCollabController, isReadOnlyCollabCommand } from "./rpc-collab";
 import { buildRpcCommandArgCompletions } from "./rpc-completions";
 import {
 	buildRpcHooksResult,
@@ -73,7 +74,12 @@ import {
 	buildRpcPromptTemplatesResult,
 	buildRpcSkillsResult,
 } from "./rpc-domains";
-import { buildRpcProvidersResult, buildRpcSettingsSchema, buildRpcUsageResult } from "./rpc-extensions";
+import {
+	buildRpcProvidersResult,
+	buildRpcSettingsSchema,
+	buildRpcUsageResult,
+	validateRpcSettingValue,
+} from "./rpc-extensions";
 import { applyRpcImportForeignSession, buildRpcForeignSessionList } from "./rpc-foreign";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
@@ -134,7 +140,13 @@ import {
 	applyRpcQueueMove,
 	applyRpcQueueRemove,
 } from "./rpc-queue";
-import { buildRpcActiveTools, buildRpcContextReport, buildRpcJobs, shareRpcSession } from "./rpc-reports";
+import {
+	buildRpcActiveTools,
+	buildRpcContextReport,
+	buildRpcJobs,
+	previewRpcShareSession,
+	shareRpcSession,
+} from "./rpc-reports";
 import {
 	applyRpcFresh,
 	applyRpcGetForceTool,
@@ -175,6 +187,7 @@ import {
 	buildRpcWorkspaceDirectories,
 	RpcWorkspaceBusyError,
 } from "./rpc-workspace";
+import { getRpcGitChanges, getRpcGitDiff } from "./rpc-git-diff";
 import { buildRpcGitStatus, createRpcWorktree, RpcWorktreeError, removeRpcWorktree } from "./rpc-worktree";
 
 // Re-export types for consumers
@@ -526,6 +539,8 @@ function isBackgroundRpcCommand(type: RpcCommand["type"]): boolean {
 		type === "eval" ||
 		type === "list_foreign_sessions" ||
 		type === "import_foreign_session" ||
+		type === "get_git_changes" ||
+		type === "get_git_diff" ||
 		type === "worktree_create" ||
 		type === "worktree_remove" ||
 		type === "pr_repo" ||
@@ -1483,6 +1498,13 @@ export async function runRpcMode(
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 		const id = command.id;
+		if (collabController.state.readOnly && !isReadOnlyCollabCommand(command.type))
+			return error(
+				id,
+				command.type,
+				"This collaboration session is read-only. Leave it before changing the session.",
+				"collab_read_only",
+			);
 
 		switch (command.type) {
 			case "negotiate_protocol": {
@@ -1646,6 +1668,7 @@ export async function runRpcMode(
 
 			case "get_state": {
 				const state: RpcSessionState = {
+					collab: collabController.state,
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
 					thinkingConfigured: session.configuredThinkingLevel(),
@@ -2234,6 +2257,10 @@ export async function runRpcMode(
 			// Git worktrees (GUI tab × worktree binding; plan/20 in the GUI repo)
 			// =================================================================
 
+			case "get_git_changes":
+				return success(id, "get_git_changes", await getRpcGitChanges(session.sessionManager.getCwd()));
+			case "get_git_diff":
+				return success(id, "get_git_diff", await getRpcGitDiff(session.sessionManager.getCwd(), command.path));
 			case "get_git_status": {
 				return success(id, "get_git_status", await buildRpcGitStatus(session));
 			}
@@ -2699,34 +2726,41 @@ export async function runRpcMode(
 			case "get_settings": {
 				const paths = command.paths ?? Object.keys(SETTINGS_SCHEMA);
 				const values: Record<string, unknown> = {};
+				const provenance: Record<string, SettingProvenance> = {};
 				for (const p of paths) {
-					if (p in SETTINGS_SCHEMA) {
+					if (Object.hasOwn(SETTINGS_SCHEMA, p)) {
 						values[p] = session.settings.get(p as SettingPath);
+						provenance[p] = session.settings.getProvenance(p as SettingPath);
 					}
 				}
 				return success(id, "get_settings", {
 					values,
+					provenance,
 					advisorEnabled: session.isAdvisorEnabled(),
 					advisorActive: session.isAdvisorActive(),
 				});
 			}
 
 			case "set_setting": {
-				if (!(command.path in SETTINGS_SCHEMA)) {
+				if (!Object.hasOwn(SETTINGS_SCHEMA, command.path)) {
 					return error(id, "set_setting", `Unknown setting path: ${command.path}`);
 				}
 				try {
+					validateRpcSettingValue(command.path as SettingPath, command.value);
 					session.settings.set(command.path as SettingPath, command.value as never);
 					await session.settings.flush();
 					// Live-apply runtime keys to the running session — previously only
 					// the TUI selector did this, so RPC edits looked broken until restart.
-					await applyRuntimeSetting(session, command.path, command.value);
+					const effectiveValue = session.settings.get(command.path as SettingPath);
+					await applyRuntimeSetting(session, command.path, effectiveValue);
 					const advisorEnabled = command.path === "advisor.enabled" ? session.isAdvisorEnabled() : undefined;
 					const advisorActive = command.path === "advisor.enabled" ? session.isAdvisorActive() : undefined;
 					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					return success(id, "set_setting", {
 						path: command.path,
-						value: command.value,
+						value: session.settings.get(command.path as SettingPath),
+						savedValue: command.value,
+						provenance: session.settings.getProvenance(command.path as SettingPath),
 						...(advisorEnabled === undefined ? {} : { advisorEnabled, advisorActive }),
 					});
 				} catch (err: unknown) {
@@ -3093,9 +3127,17 @@ export async function runRpcMode(
 				return success(id, "get_active_tools", buildRpcActiveTools(session));
 			}
 
+			case "preview_share_session": {
+				try {
+					return success(id, "preview_share_session", previewRpcShareSession(session));
+				} catch (err: unknown) {
+					return error(id, "preview_share_session", err instanceof Error ? err.message : String(err));
+				}
+			}
+
 			case "share_session": {
 				try {
-					return success(id, "share_session", await shareRpcSession(session));
+					return success(id, "share_session", await shareRpcSession(session, command.snapshotId));
 				} catch (err: unknown) {
 					return error(id, "share_session", err instanceof Error ? err.message : String(err));
 				}

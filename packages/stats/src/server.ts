@@ -14,6 +14,7 @@ import {
 	getProviderDashboardStats,
 	getRecentErrors,
 	getRecentRequests,
+	getRequestPage,
 	getRequestDetails,
 	getToolDashboardStats,
 	getTotalMessageCount,
@@ -235,6 +236,18 @@ export async function handleApi(req: Request): Promise<Response> {
 	if (path === "/api/stats/providers") {
 		const stats = await getProviderDashboardStats(range);
 		return Response.json(stats);
+	}
+
+	if (path === "/api/stats/requests") {
+		try {
+			const limit = url.searchParams.get("limit");
+			return Response.json(
+				await getRequestPage(range ?? "24h", limit === null ? 50 : Number(limit), url.searchParams.get("cursor")),
+			);
+		} catch (cause) {
+			if (cause instanceof RangeError) return Response.json({ error: cause.message }, { status: 400 });
+			throw cause;
+		}
 	}
 
 	if (path === "/api/stats/recent") {

@@ -5,7 +5,24 @@ import type { ExtensionUIDialogOptions, ExtensionUISelectItem } from "../../exte
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { EventBus } from "../../utils/event-bus";
 import type { InteractiveModeContext } from "../types";
-import type { RpcCollabState } from "./rpc-types";
+import type { RpcCollabState, RpcCommand } from "./rpc-types";
+
+/** Read-only collaboration permits inspection and local export, but no session mutation. */
+export function isReadOnlyCollabCommand(type: RpcCommand["type"]): boolean {
+	return (
+		type.startsWith("get_") ||
+		type.startsWith("list_") ||
+		type.startsWith("preview_") ||
+		[
+			"negotiate_protocol",
+			"set_host_tools",
+			"set_host_uri_schemes",
+			"set_subagent_subscription",
+			"collab_leave",
+			"export_html",
+		].includes(type)
+	);
+}
 
 interface RpcCollabControllerOptions {
 	session: AgentSession;
@@ -42,7 +59,7 @@ export class RpcCollabController {
 	}
 
 	get isGuest(): boolean {
-		return this.#guest !== undefined;
+		return this.#guest !== undefined && this.#ctx.collabGuest === this.#guest;
 	}
 
 	get state(): RpcCollabState {
@@ -58,7 +75,7 @@ export class RpcCollabController {
 				participants: host.participants,
 			};
 		}
-		const guest = this.#guest;
+		const guest = this.isGuest ? this.#guest : undefined;
 		if (guest) {
 			return {
 				role: "guest",
@@ -70,6 +87,7 @@ export class RpcCollabController {
 	}
 
 	async start(relayUrl?: string): Promise<RpcCollabState> {
+		if (!this.isGuest) this.#guest = undefined;
 		if (this.#guest) throw new Error("Leave the current collab session before hosting");
 		if (this.#host) return this.state;
 		const configured = relayUrl?.trim() || this.#options.session.settings.get("collab.relayUrl") || "";
@@ -78,10 +96,12 @@ export class RpcCollabController {
 		await host.start(normalizeRelayUrl(configured), this.#options.session.settings.get("collab.webUrl") || "");
 		this.#host = host;
 		this.#ctx.collabHost = host;
+		this.#publishState();
 		return this.state;
 	}
 
 	async join(link: string): Promise<RpcCollabState> {
+		if (!this.isGuest) this.#guest = undefined;
 		if (this.#host) throw new Error("Stop hosting before joining another collab session");
 		if (this.#guest) return this.state;
 		const trimmed = link.trim();
@@ -89,6 +109,7 @@ export class RpcCollabController {
 		const guest = new CollabGuestLink(this.#ctx);
 		await guest.join(trimmed);
 		this.#guest = guest;
+		this.#publishState();
 		return this.state;
 	}
 
@@ -105,35 +126,40 @@ export class RpcCollabController {
 		}
 		this.#ctx.collabGuest = undefined;
 		this.#ctx.collabHost = undefined;
+		this.#publishState();
 		return this.state;
 	}
 
 	sendPrompt(text: string, images?: ImageContent[]): boolean {
-		if (!this.#guest) return false;
+		if (!this.isGuest || !this.#guest) return false;
 		this.#guest.sendPrompt(text, images);
 		return true;
 	}
 
 	sendAbort(): boolean {
-		if (!this.#guest) return false;
+		if (!this.isGuest || !this.#guest) return false;
 		this.#guest.sendAbort();
 		return true;
 	}
 
 	abortRemoteAgent(agentId: string): boolean {
-		if (!this.#guest) return false;
+		if (!this.isGuest || !this.#guest) return false;
 		this.#guest.hubRemote.kill(agentId);
 		return true;
 	}
 
 	reviveRemoteAgent(agentId: string): boolean {
-		if (!this.#guest) return false;
+		if (!this.isGuest || !this.#guest) return false;
 		this.#guest.hubRemote.revive(agentId);
 		return true;
 	}
 
 	async dispose(): Promise<void> {
 		await this.leave();
+	}
+
+	#publishState(restored = false): void {
+		this.#options.output({ type: "collab_state", state: this.state, restored });
 	}
 
 	#buildContext(): InteractiveModeContext {
@@ -147,7 +173,7 @@ export class RpcCollabController {
 			collabHost: undefined,
 			collabGuest: undefined,
 			statusLine: {
-				setCollabStatus: (_status: CollabStatusSegment | null) => {},
+				setCollabStatus: (_status: CollabStatusSegment | null) => this.#publishState(),
 				getCachedContextBreakdown: () => session.getContextBreakdown() ?? {},
 				invalidate: () => {},
 				resetActiveTime: () => {},
@@ -188,10 +214,11 @@ export class RpcCollabController {
 			syncRunningSubagentBadge: () => {},
 			resetObserverRegistry: () => {},
 			updateEditorBorderColor: () => {},
-			renderInitialMessages: () => {},
+			renderInitialMessages: () => this.#publishState(true),
 			reloadTodos: async () => {},
 			handleResumeSession: async (sessionFile: string) => {
 				await session.switchSession(sessionFile);
+				this.#publishState(true);
 			},
 		} as unknown as InteractiveModeContext;
 		return context;

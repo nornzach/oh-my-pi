@@ -1,3 +1,4 @@
+import type { UsageStatistics } from "./session-entries";
 import type {
 	Agent,
 	AgentMessage,
@@ -65,7 +66,15 @@ export interface AgentSessionDisposeOptions {
 /** Listener notified when command metadata changes. */
 export type CommandMetadataChangedListener = () => void | Promise<void>;
 /** Public summary of an asynchronous job. */
-export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime" | "agentId">;
+export type AsyncJobSnapshotItem = Pick<
+	AsyncJob,
+	"id" | "type" | "status" | "label" | "startTime" | "endedAt" | "agentId"
+> & {
+	cancellationPending?: boolean;
+	resultPreview?: string;
+	errorPreview?: string;
+	previewTruncated?: boolean;
+};
 
 /** Snapshot of running, recent, and pending-delivery asynchronous jobs. */
 export interface AsyncJobSnapshot {
@@ -429,6 +438,8 @@ export interface ContextUsageBreakdown {
 
 /** Session statistics for the `/session` command. */
 export interface SessionStats {
+	/** Entire session journal, including pre-compaction entries and sibling branches. */
+	history?: UsageStatistics & { sampledAt: number };
 	sessionFile: string | undefined;
 	sessionId: string;
 	userMessages: number;

@@ -2164,26 +2164,30 @@ export class AgentSession {
 		this.#planInternalAbortPending = false;
 	}
 
-	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
+	getAsyncJobSnapshot(options?: { recentLimit?: number; includeResults?: boolean }): AsyncJobSnapshot | null {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
-		const running = manager.getRunningJobs(ownerFilter).map(job => ({
+		const summarize = (job: AsyncJob) => ({
 			id: job.id,
 			type: job.type,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
+			endedAt: job.endedAt,
 			agentId: job.agentId,
-		}));
-		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			startTime: job.startTime,
-			agentId: job.agentId,
-		}));
+			cancellationPending: job.status === "cancelled" && job.endedAt === undefined,
+			...(options?.includeResults
+				? {
+						resultPreview: job.resultText?.slice(0, 20_000),
+						errorPreview: job.errorText?.slice(0, 20_000),
+						previewTruncated: (job.resultText?.length ?? 0) > 20_000 || (job.errorText?.length ?? 0) > 20_000,
+					}
+				: {}),
+		});
+		const running = manager.getRunningJobs(ownerFilter).map(summarize);
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(summarize);
+
 		const delivery = manager.getDeliveryState(ownerFilter);
 		return { running, recent, delivery };
 	}

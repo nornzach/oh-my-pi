@@ -5,6 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ClaudeSessionStore } from "../src/session/claude-session-store";
 import { CodexSessionStore } from "../src/session/codex-session-store";
+import { applyRpcImportForeignSession } from "../src/modes/rpc/rpc-foreign";
+import type { AgentSession } from "../src/session/agent-session";
+import * as foreignImport from "../src/session/foreign-session-import";
 import { persistForeignSession } from "../src/session/foreign-session-import";
 import type { ForeignSessionInfo } from "../src/session/foreign-session-store";
 import { buildSessionContext } from "../src/session/session-context";
@@ -359,4 +362,22 @@ describe("foreign session persistence", () => {
 			await reopened.close();
 		}
 	});
+});
+
+it("RPC import retries and concurrent clicks reuse one copy without changing the source", async () => {
+	const { info, store } = await createClaudeFixture();
+	const before = await Bun.file(info.path).text();
+	const sessionDir = path.join(tempRoot, "imported");
+	vi.spyOn(foreignImport, "createForeignSessionStore").mockReturnValue(store);
+	vi.spyOn(SessionManager, "getDefaultSessionDir").mockReturnValue(sessionDir);
+	const session = { sessionManager: { getCwd: () => tempRoot } } as unknown as AgentSession;
+	const [first, second] = await Promise.all([
+		applyRpcImportForeignSession(session, "claude", info.id),
+		applyRpcImportForeignSession(session, "claude", info.id),
+	]);
+	expect(second.sessionPath).toBe(first.sessionPath);
+	expect(second.sessionId).toBe(first.sessionId);
+	expect((await fs.readdir(sessionDir)).filter(file => file.endsWith(".jsonl"))).toHaveLength(1);
+	expect(await Bun.file(info.path).text()).toBe(before);
+	expect((await applyRpcImportForeignSession(session, "claude", info.id)).reused).toBe(true);
 });

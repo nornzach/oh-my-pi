@@ -62,6 +62,8 @@ export interface ShareSessionOptions {
 	 * authenticated `gh`) and falls back to the server.
 	 */
 	store?: ShareStore;
+	/** A confirmed GUI preview must not silently upload to a different store. */
+	confirmedPreview?: boolean;
 	/** Agent state for system prompt + tool descriptions in the snapshot. */
 	state?: AgentState;
 	/**
@@ -484,7 +486,13 @@ function redactShareMessage(
 
 /** Share the session; uploads to the share server unless `options.store` is `"gist"`. */
 export async function shareSession(sm: SessionManager, options?: ShareSessionOptions): Promise<ShareSessionResult> {
-	const data = buildShareSnapshot(sm, options);
+	return shareSnapshot(buildShareSnapshot(sm, options), options);
+}
+
+/** Upload a previously inspected snapshot through the same redaction/sealing pipeline. */
+export async function shareSnapshot(data: SessionData, options?: ShareSessionOptions): Promise<ShareSessionResult> {
+	// Detach before the first await: live entries may keep streaming during sealing.
+	data = structuredClone(data);
 	const keyBytes = new Uint8Array(SHARE_KEY_BYTES);
 	crypto.getRandomValues(keyBytes);
 	const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
@@ -503,6 +511,8 @@ export async function shareSession(sm: SessionManager, options?: ShareSessionOpt
 				sealedBytes: forGist.sealed.byteLength,
 			};
 		}
+		if (options?.confirmedPreview)
+			throw new Error("GitHub gist upload failed. No upload was sent to the share server.");
 		// gh unusable or gist creation failed — fall back to the share server.
 		return shareViaServer(key, data, base, keyText, forGist);
 	}
@@ -521,31 +531,38 @@ interface SealedSession {
 	truncated: boolean;
 }
 
-/** Seal `data`, trimming content until the sealed blob fits `maxBytes`. Exported for tests. */
-export async function sealToFit(key: CryptoKey, data: SessionData, maxBytes: number): Promise<SealedSession> {
-	let sealed = await sealSessionData(key, data);
-	if (sealed.byteLength <= maxBytes) return { sealed, truncated: false };
+/** Fit the exact preview before confirmation. AES-GCM adds a 16-byte tag and our 12-byte IV. */
+export function fitShareSnapshot(
+	data: SessionData,
+	store: ShareStore = "blob",
+): { data: SessionData; truncated: boolean } {
+	return fitSessionData(data, store === "gist" ? GIST_MAX_SEALED_BYTES : SERVER_MAX_SEALED_BYTES);
+}
 
-	// Work on a deep copy; the caller may re-fit the original at another budget.
+function fitSessionData(data: SessionData, maxBytes: number): { data: SessionData; truncated: boolean } {
+	const sealedSize = (value: SessionData) =>
+		Bun.gzipSync(new TextEncoder().encode(JSON.stringify(value))).byteLength + IV_LENGTH + 16;
+	if (sealedSize(data) <= maxBytes) return { data, truncated: false };
 	const working = structuredClone(data);
 	stripImagePayloads(working);
-	sealed = await sealSessionData(key, working);
-	if (sealed.byteLength <= maxBytes) return { sealed, truncated: true };
-
+	if (sealedSize(working) <= maxBytes) return { data: working, truncated: true };
 	for (const cap of TEXT_CAPS) {
 		capLongStrings(working, cap);
-		sealed = await sealSessionData(key, working);
-		if (sealed.byteLength <= maxBytes) return { sealed, truncated: true };
+		if (sealedSize(working) <= maxBytes) return { data: working, truncated: true };
 	}
-
-	// Last resort: drop oldest entries (orphaned children render as roots).
 	while (working.entries.length > 4) {
 		working.entries = working.entries.slice(Math.ceil(working.entries.length / 2));
-		sealed = await sealSessionData(key, working);
-		if (sealed.byteLength <= maxBytes) return { sealed, truncated: true };
+		if (sealedSize(working) <= maxBytes) return { data: working, truncated: true };
 	}
+	throw new Error(
+		`Session too large to share: ${sealedSize(working)} bytes sealed exceeds the ${maxBytes} byte limit`,
+	);
+}
 
-	throw new Error(`Session too large to share: ${sealed.byteLength} bytes sealed exceeds the ${maxBytes} byte limit`);
+/** Seal the same fitted data used by the local preview. Exported for tests. */
+export async function sealToFit(key: CryptoKey, data: SessionData, maxBytes: number): Promise<SealedSession> {
+	const fitted = fitSessionData(data, maxBytes);
+	return { sealed: await sealSessionData(key, fitted.data), truncated: fitted.truncated };
 }
 
 /** `[12B IV][AES-256-GCM(gzip(JSON))]` — decrypted and gunzipped by share-loader.js. */

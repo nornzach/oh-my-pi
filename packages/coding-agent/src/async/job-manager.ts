@@ -84,6 +84,8 @@ export interface AsyncJob {
 	type: AsyncJobType;
 	status: "running" | "completed" | "failed" | "cancelled";
 	startTime: number;
+	/** Set only when the job body has settled, including after cancellation. */
+	endedAt?: number;
 	label: string;
 	abortController: AbortController;
 	promise: Promise<void>;
@@ -375,6 +377,8 @@ export class AsyncJobManager {
 				job.errorText = errorText;
 				this.#enqueueDelivery(id, errorText);
 				this.#scheduleEviction(id);
+			} finally {
+				job.endedAt = Date.now();
 			}
 		})();
 

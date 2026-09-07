@@ -1,3 +1,8 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { directoryExists, withFileLock } from "@oh-my-pi/pi-utils";
+import { SessionManager } from "../../session/session-manager";
+import { loadSessionFile } from "../../session/session-loader";
 /**
  * Foreign-session import RPC actions: list Claude/Codex sessions and import
  * one as a fresh OMP session copy (the source data is never modified).
@@ -50,7 +55,7 @@ export async function applyRpcImportForeignSession(
 	session: AgentSession,
 	source: ForeignSessionSource,
 	foreignId: string,
-): Promise<{ sessionPath: string; sessionId: string }> {
+): Promise<{ sessionPath: string; sessionId: string; cwd: string; reused?: boolean }> {
 	assertRpcForeignSource(source);
 	const store = createForeignSessionStore(source);
 	const sessions = await store.list();
@@ -58,10 +63,29 @@ export async function applyRpcImportForeignSession(
 	if (!info) {
 		throw new Error(`Foreign session not found: ${foreignId}`);
 	}
-	const imported = await persistForeignSession(store, info, { fallbackCwd: session.sessionManager.getCwd() });
-	const sessionPath = imported.getSessionFile();
-	if (!sessionPath) {
-		throw new Error("Import did not produce a session file");
-	}
-	return { sessionPath, sessionId: imported.getSessionId() };
+	const cwd = (await directoryExists(info.cwd)) ? info.cwd : session.sessionManager.getCwd();
+	const sessionDir = SessionManager.getDefaultSessionDir(cwd);
+	const digest = new Bun.CryptoHasher("sha256")
+		.update(JSON.stringify([source, info.path, info.id, info.modified.toISOString()]))
+		.digest("hex");
+	const destination = path.join(sessionDir, `import_${digest}.jsonl`);
+	await fs.mkdir(sessionDir, { recursive: true });
+	// Stable destination + atomic session persistence closes timeout/retry and concurrent-import races.
+	return withFileLock(destination, async () => {
+		if (await Bun.file(destination).exists()) {
+			const loaded = await loadSessionFile(destination);
+			const header = loaded.entries.find(entry => entry.type === "session");
+			if (!header || header.type !== "session")
+				throw new Error("The existing imported session cannot be read. Inspect it before retrying.");
+			return { sessionPath: destination, sessionId: header.id, cwd: header.cwd, reused: true };
+		}
+		const imported = await persistForeignSession(store, info, {
+			fallbackCwd: cwd,
+			sessionDir,
+			sessionFile: destination,
+		});
+		const sessionPath = imported.getSessionFile();
+		if (!sessionPath) throw new Error("Import did not produce a session file");
+		return { sessionPath, sessionId: imported.getSessionId(), cwd: imported.getCwd() };
+	});
 }

@@ -166,6 +166,7 @@ export class SessionStatsTracker {
 		return {
 			sessionFile: this.#host.sessionManager.getSessionFile(),
 			sessionId: this.#host.sessionId(),
+			history: { ...this.#host.sessionManager.getUsageStatistics(), sampledAt: Date.now() },
 			userMessages,
 			assistantMessages,
 			toolCalls,

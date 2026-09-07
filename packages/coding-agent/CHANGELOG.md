@@ -11,6 +11,10 @@
 
 ### Fixed
 
+- Sessions containing only Bash or Python executions now survive switching tasks, and HTML exports include Python output.
+- Desktop clients receive accurate configuration sources, lifetime usage totals, completed job durations, and collaboration permissions.
+- Repeated session imports reuse the existing imported session, and sharing can be confirmed against an exact local preview.
+
 	- Fixed GPT-6 Astra extended-context support and preserved maximum context windows reported by OpenAI Codex discovery ([#10980](https://github.com/can1357/oh-my-pi/pull/10980) by [@H4vC](https://github.com/H4vC)).
 
 ### Fixed
