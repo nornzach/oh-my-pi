@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import {
 	buildTransformedCodexRequestBody,
 	createOpenAICodexCompatibilityMetadata,
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
+	openCodexCompactionEventStream,
 	prewarmOpenAICodexResponses,
 	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
@@ -2943,6 +2945,113 @@ describe("openai-codex streaming", () => {
 		expect(fallbackDetails.fallbackCount).toBe(1);
 	});
 
+	it.each(["during handshake", "before request", "during request"] as const)(
+		"preserves timeout classification when compaction is aborted %s",
+		async phase => {
+			const tempDir = TempDir.createSync("@pi-codex-stream-");
+			setAgentDir(tempDir.path());
+			const controller = new AbortController();
+			const timeout = new DOMException("The operation timed out.", "TimeoutError");
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const fetchMock = vi.fn<FetchImpl>(() => {
+				throw new Error("Aborted compaction must not fall back to SSE");
+			});
+			class TimeoutWebSocket extends MockWebSocket {
+				constructor(url: string, options?: WsOptions) {
+					super(url, options);
+					if (phase === "during handshake") {
+						queueMicrotask(() => controller.abort(timeout));
+					} else {
+						this.scheduleOpen();
+					}
+				}
+
+				override send(): void {
+					controller.abort(timeout);
+				}
+
+				override close(): void {
+					super.close();
+					this.emit("close", { code: 1000 } as CloseEvent);
+				}
+			}
+			global.WebSocket = TimeoutWebSocket as unknown as typeof WebSocket;
+			const model = createCodexTestModel();
+			try {
+				const error = await (async () => {
+					const events = await openCodexCompactionEventStream(
+						model,
+						{ model: model.id, input: [{ type: "compaction_trigger" }] },
+						{
+							apiKey: createCodexTestToken(),
+							signal: controller.signal,
+							fetch: fetchMock,
+							sessionId: `compaction-timeout-${phase}`,
+							providerSessionState,
+						},
+					);
+					if (phase === "before request") controller.abort(timeout);
+					return events.next();
+				})().then(
+					() => {
+						throw new Error("Compaction must reject when its deadline expires");
+					},
+					(error: unknown) => error,
+				);
+				expect(AIError.is(AIError.classify(error), AIError.Flag.Timeout)).toBe(true);
+				expect(fetchMock).not.toHaveBeenCalled();
+			} finally {
+				for (const state of providerSessionState.values()) state.close();
+			}
+		},
+	);
+
+	it("keeps caller cancellation distinct from a compaction timeout", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const controller = new AbortController();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const fetchMock = vi.fn<FetchImpl>(() => {
+			throw new Error("Cancelled compaction must not fall back to SSE");
+		});
+		class CancelledWebSocket extends MockWebSocket {
+			constructor(url: string, options?: WsOptions) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			override send(): void {
+				controller.abort();
+			}
+		}
+		global.WebSocket = CancelledWebSocket as unknown as typeof WebSocket;
+		const model = createCodexTestModel();
+		try {
+			const events = await openCodexCompactionEventStream(
+				model,
+				{ model: model.id, input: [{ type: "compaction_trigger" }] },
+				{
+					apiKey: createCodexTestToken(),
+					signal: controller.signal,
+					fetch: fetchMock,
+					sessionId: "compaction-caller-cancel",
+					providerSessionState,
+				},
+			);
+			const error = await events.next().then(
+				() => {
+					throw new Error("Compaction must reject when cancelled");
+				},
+				(error: unknown) => error,
+			);
+			expect(error).toBeInstanceOf(Error);
+			expect(AIError.is(AIError.classify(error), AIError.Flag.Timeout)).toBe(false);
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			for (const state of providerSessionState.values()) state.close();
+		}
+	});
+
 	it("carries fatal websocket fallback into isolated compaction transport", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
@@ -5156,11 +5265,13 @@ describe("openai-codex streaming", () => {
 
 		let constructorCount = 0;
 		const sockets: DeferredOpenWebSocket[] = [];
+		const socketCreated = Promise.withResolvers<void>();
 		class DeferredOpenWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
 				super(url, options);
 				constructorCount += 1;
 				sockets.push(this);
+				socketCreated.resolve();
 			}
 
 			open(): void {
@@ -5182,23 +5293,23 @@ describe("openai-codex streaming", () => {
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		// Prewarm starts the handshake; the stream call races it before the socket
-		// opens. Tearing down the CONNECTING socket would reject the prewarm with a
-		// fatal "websocket closed before open" and disable websockets for the session.
-		const prewarmPromise = prewarmOpenAICodexResponses(model, {
-			apiKey: token,
-			sessionId: "ws-join-session",
-			providerSessionState,
-		});
+		// Wait for the stream to start its handshake before prewarm joins it.
+		// Request setup can outlast a fixed sleep under full-suite load.
 		const streamResult = streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-join-session",
 			providerSessionState,
 		}).result();
+		await socketCreated.promise;
+		const prewarmPromise = prewarmOpenAICodexResponses(model, {
+			apiKey: token,
+			sessionId: "ws-join-session",
+			providerSessionState,
+		});
 
 		// Let both callers reach the handshake before the socket opens.
-		await Bun.sleep(5);
+		await scheduler.yield();
 		for (const socket of sockets) socket.open();
 
 		await prewarmPromise;
@@ -5214,7 +5325,7 @@ describe("openai-codex streaming", () => {
 		});
 		expect(details.websocketDisabled).toBe(false);
 		expect(fetchMock).not.toHaveBeenCalled();
-	}, 15_000); // real handshake join; 5s default flakes under full-suite load
+	}, 15_000);
 
 	it("surfaces a whitespace flood arriving after a delivered tool call instead of replaying", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
