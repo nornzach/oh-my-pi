@@ -20,7 +20,7 @@ import {
 	createLoopLimitRuntime,
 	isLoopDurationExpired,
 	type LoopLimitRuntime,
-	parseLoopLimitArgs,
+	parseLoopArgs,
 } from "../loop-limit";
 import type { RpcGoalState, RpcLoopModeState, RpcLoopModeUpdateFrame, RpcVibeModeState } from "./rpc-types";
 
@@ -482,7 +482,7 @@ export class RpcLoopModeController {
 			return this.state;
 		}
 		if (this.#enabled) return this.state;
-		const parsed = parseLoopLimitArgs(args ?? "");
+		const parsed = parseLoopArgs(args ?? "");
 		if (typeof parsed === "string") throw new Error(parsed);
 		this.#enabled = true;
 		this.#paused = false;
