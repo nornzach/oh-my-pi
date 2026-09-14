@@ -305,7 +305,6 @@ export async function connectProxiedSocket(
 	const { promise, resolve, reject } = Promise.withResolvers<tls.TLSSocket>();
 
 	const readyEvent = useProxySsl ? "secureConnect" : "connect";
-	let rawSocket: net.Socket | undefined;
 	let tunnelSocket: tls.TLSSocket | undefined;
 	let timeout: NodeJS.Timeout | undefined;
 	let responseData = "";
@@ -381,15 +380,15 @@ export async function connectProxiedSocket(
 		}
 
 		const tlsOptions = options?.tls;
-		const socket = tls.connect({
+		const newTunnelSocket: tls.TLSSocket = tls.connect({
 			...tlsOptions,
 			socket: rawSocket,
 			servername: tlsOptions?.servername ?? targetHost,
 			ALPNProtocols: tlsOptions?.ALPNProtocols ?? ["h2"],
 		});
-		tunnelSocket = socket;
-		socket.once("secureConnect", onTunnelReady);
-		socket.once("error", onTunnelError);
+		tunnelSocket = newTunnelSocket;
+		newTunnelSocket.once("secureConnect", onTunnelReady);
+		newTunnelSocket.once("error", onTunnelError);
 	};
 	const onProxyReady = (): void => {
 		if (!rawSocket) return;
@@ -421,7 +420,7 @@ export async function connectProxiedSocket(
 		timeout.unref?.();
 	}
 
-	const socket = useProxySsl
+	const rawSocket: net.Socket = useProxySsl
 		? tls.connect({
 				host: proxyHost,
 				port: proxyPort,
@@ -430,9 +429,8 @@ export async function connectProxiedSocket(
 				host: proxyHost,
 				port: proxyPort,
 			});
-	rawSocket = socket;
-	socket.once("error", onRawError);
-	socket.once(readyEvent, onProxyReady);
+	rawSocket.once("error", onRawError);
+	rawSocket.once(readyEvent, onProxyReady);
 
 	return promise;
 }

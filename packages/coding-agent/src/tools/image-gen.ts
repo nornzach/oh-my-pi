@@ -408,8 +408,10 @@ async function loadImageFromUrl(
 	if (!contentType?.startsWith("image/")) {
 		throw new Error(`Unsupported image type from URL: ${imageUrl}`);
 	}
-	const bytes = new Uint8Array(await response.arrayBuffer());
-	return { data: bytes.toBase64(), mimeType: contentType };
+	// `Response.bytes()` is absent from older undici types; `arrayBuffer`
+	// exists in both and yields identical bytes.
+	const buffer = new Uint8Array(await response.arrayBuffer());
+	return { data: buffer.toBase64(), mimeType: contentType };
 }
 
 function collectOpenRouterResponseText(message: OpenRouterMessage | undefined): string | undefined {
