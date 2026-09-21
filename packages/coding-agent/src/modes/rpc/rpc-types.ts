@@ -27,17 +27,13 @@ import type {
 } from "../../session/agent-session-types";
 import type { FileEntry } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
-import type {
-	AgentProgress,
-	SubagentEventPayload,
-	SubagentLifecyclePayload,
-	SubagentProgressPayload,
-} from "../../task";
-import type { ConfiguredThinkingLevel } from "../../thinking";
+import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { DebugParams } from "../../tools/debug";
-import type { TodoPhase } from "../../tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LoopLimitRuntime } from "../loop-limit";
-import type { CopyTarget } from "../utils/copy-targets";
+import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import type { RpcMessagesPage } from "./rpc-messages";
 
 // ============================================================================
@@ -2233,6 +2229,8 @@ export interface RpcHostToolDefinition {
 	hidden?: boolean;
 	/** How this host tool is presented when enabled; omission normalizes to `"discoverable"` at the adapter boundary. */
 	loadMode?: ToolLoadMode;
+	/** Whether this host tool can read `skill://` instruction content. */
+	readsSkillUris?: boolean;
 }
 
 /** Emitted by the RPC server when it needs the host to execute a registered tool. */

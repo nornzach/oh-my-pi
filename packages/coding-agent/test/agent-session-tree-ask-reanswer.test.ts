@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from "bun:test";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionRunner, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
-import type { AskToolDetails } from "@oh-my-pi/pi-coding-agent/tools/ask";
+import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { applyRpcSwitchLeaf } from "../src/modes/rpc/rpc-session-extra";
 import { assistantMsg, createTestSession, userMsg } from "./utilities";
 

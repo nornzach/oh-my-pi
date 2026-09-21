@@ -1,10 +1,16 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import { replaceFileAtomically } from "../utils/atomic-file";
 import type { SessionInfo } from "./session-listing";
 
 const PINS_FILENAME = "session-pins.json";
+
+function pinsPath(agentDir: string): string {
+	return path.join(agentDir, PINS_FILENAME);
+}
 
 async function updateSessionPins(
 	agentDir: string,
@@ -15,7 +21,16 @@ async function updateSessionPins(
 	return withFileLock(pinsPath, async () => {
 		const pinned = await loadPinnedSessionIds(agentDir);
 		const result = update(pinned);
-		if (result.changed) await Bun.write(pinsPath, JSON.stringify([...pinned], null, "\t"));
+		if (result.changed) {
+			const tmpPath = `${pinsPath}.${process.pid}.${randomUUID()}.tmp`;
+			try {
+				await fs.writeFile(tmpPath, JSON.stringify([...pinned], null, "\t"), { encoding: "utf-8", mode: 0o600 });
+				await replaceFileAtomically(tmpPath, pinsPath);
+			} catch (error) {
+				await fs.rm(tmpPath, { force: true }).catch(() => {});
+				throw error;
+			}
+		}
 		return result.state;
 	});
 }
@@ -28,7 +43,7 @@ async function updateSessionPins(
  */
 export async function loadPinnedSessionIds(agentDir: string = getAgentDir()): Promise<Set<string>> {
 	try {
-		const pins: unknown = await Bun.file(path.join(agentDir, PINS_FILENAME)).json();
+		const pins: unknown = JSON.parse(await fs.readFile(pinsPath(agentDir), "utf-8"));
 		if (!Array.isArray(pins)) return new Set();
 		return new Set(pins.filter((id): id is string => typeof id === "string"));
 	} catch (err) {
@@ -38,7 +53,17 @@ export async function loadPinnedSessionIds(agentDir: string = getAgentDir()): Pr
 	}
 }
 
-/** Toggle one session's pin and persist the set; returns the new pinned state. */
+/**
+ * Toggle one session's pin and persist the set; returns the new pinned state.
+ *
+ * The read-modify-write runs under the shared cross-process file lock and
+ * commits via write-temp-then-atomic-replace, mirroring the MCP config
+ * writer: two omp instances toggling pins concurrently can no longer lose
+ * each other's update (load-load-write-write), and a crash mid-write leaves
+ * the previous pins file intact instead of a truncated one that degrades to
+ * an empty set. The replace preserves the destination across Windows
+ * EPERM/EEXIST rename failures (`replaceFileAtomically`).
+ */
 export async function toggleSessionPin(sessionId: string, agentDir: string = getAgentDir()): Promise<boolean> {
 	return updateSessionPins(agentDir, pinned => {
 		if (!pinned.delete(sessionId)) pinned.add(sessionId);
