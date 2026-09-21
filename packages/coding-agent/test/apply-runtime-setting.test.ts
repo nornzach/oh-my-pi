@@ -10,8 +10,6 @@ import {
 	applyRuntimeSetting,
 	type RuntimeSettingTarget,
 } from "@oh-my-pi/pi-coding-agent/session/apply-runtime-setting";
-import * as imageGen from "@oh-my-pi/pi-coding-agent/tools/image-gen";
-import * as searchProvider from "@oh-my-pi/pi-coding-agent/web/search/provider";
 
 function makeTarget() {
 	const calls = new Map<string, unknown[][]>();
@@ -94,19 +92,6 @@ describe("applyRuntimeSetting", () => {
 		const { target, calls } = makeTarget();
 		await applyRuntimeSetting(target, "memory.backend", "mnemopi");
 		expect(calls.get("applyMemoryBackend")?.length).toBe(1);
-	});
-
-	test("provider orders go to their module setters", async () => {
-		const searchOrder = spyOn(searchProvider, "setSearchProviderOrder").mockImplementation(() => {});
-		const searchExclude = spyOn(searchProvider, "setExcludedSearchProviders").mockImplementation(() => {});
-		const imageOrder = spyOn(imageGen, "setImageProviderOrder").mockImplementation(() => {});
-		const { target } = makeTarget();
-		await applyRuntimeSetting(target, "providers.webSearchOrder", ["google"]);
-		await applyRuntimeSetting(target, "providers.webSearchExclude", ["exa"]);
-		await applyRuntimeSetting(target, "providers.imageOrder", ["openai", 42]);
-		expect(searchOrder).toHaveBeenCalledTimes(1);
-		expect(searchExclude).toHaveBeenCalledTimes(1);
-		expect(imageOrder).toHaveBeenCalledWith(["openai"]);
 	});
 
 	test("mcp.notifications reaches the shared manager", async () => {

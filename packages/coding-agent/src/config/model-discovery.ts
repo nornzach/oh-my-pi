@@ -795,6 +795,7 @@ export async function discoverOpenAIModelsList(
 		input?: unknown;
 		input_modalities?: unknown;
 		architecture?: unknown;
+		mode?: unknown;
 	}
 	interface ModelListPayload {
 		data?: ModelListItem[];

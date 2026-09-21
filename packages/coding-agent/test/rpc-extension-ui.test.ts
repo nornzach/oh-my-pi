@@ -23,7 +23,137 @@ function resolveSelection(pendingRequests: Map<string, PendingExtensionRequest>,
 	request.resolve({ type: "extension_ui_response", id, value });
 }
 
+async function startStartupDialogFixture(temp: TempDir): Promise<Bun.Subprocess<"pipe", "pipe", "pipe">> {
+	const extensionPath = temp.join("startup.mjs");
+	await Bun.write(
+		extensionPath,
+		`
+export default function(pi) {
+  globalThis.fetch = async () => { throw new Error("Offline startup fixture refuses network"); };
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      if (await ctx.ui.confirm("Startup confirmation", "Continue initialization?")) {
+        const name = await ctx.ui.input("Startup name");
+        await pi.setSessionName(name);
+      }
+    } catch (error) {
+      // Even a fresh dialog after disconnect must fail rather than pausing
+      // the extension's timeout forever.
+      await ctx.ui.select("Disconnected startup", ["Retry"]);
+      throw error;
+    }
+  });
+}
+`,
+	);
+	return Bun.spawn(
+		[
+			process.execPath,
+			path.join(import.meta.dir, "..", "src", "cli.ts"),
+			"--trusted-extension",
+			extensionPath,
+			"--mode",
+			"rpc",
+			"--provider",
+			"anthropic",
+			"--model",
+			"claude-sonnet-4-5",
+		],
+		{
+			cwd: temp.path(),
+			env: {
+				PATH: Bun.env.PATH,
+				HOME: temp.join("home"),
+				PI_CODING_AGENT_DIR: temp.join("agent"),
+				XDG_CONFIG_HOME: temp.join("config"),
+				XDG_DATA_HOME: temp.join("data"),
+				XDG_CACHE_HOME: temp.join("cache"),
+				CI: "true",
+				PI_NO_TITLE: "1",
+			},
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 20_000,
+		},
+	);
+}
+
 describe("RPC extension UI", () => {
+	it("answers startup dialogs before ready and gates queued commands and negotiation until initialization completes", async () => {
+		await using temp = await TempDir.create("@rpc-startup-ui-");
+		const child = await startStartupDialogFixture(temp);
+		const stderr = new Response(child.stderr).text();
+		const send = async (frame: object) => {
+			child.stdin.write(`${JSON.stringify(frame)}\n`);
+			await child.stdin.flush();
+		};
+		const observed: string[] = [];
+		let state: unknown;
+		try {
+			// Both arrive before session_start finishes; negotiation must not change
+			// the framing advertised by ready or let ordinary commands race init.
+			await send({ type: "negotiate_protocol", protocolVersion: 2, id: "negotiate" });
+			await send({ type: "get_state", id: "early-state" });
+			for await (const frame of readJsonl<unknown>(child.stdout)) {
+				if (!isRecord(frame)) continue;
+				if (frame.type === "extension_ui_request" && frame.method === "confirm") {
+					observed.push("confirm");
+					await send({ type: "extension_ui_response", id: frame.id, confirmed: true });
+				} else if (frame.type === "extension_ui_request" && frame.method === "input") {
+					observed.push("input");
+					await send({ type: "extension_ui_response", id: frame.id, value: "initialized-by-host" });
+				} else if (frame.type === "ready") {
+					observed.push("ready");
+					expect(frame.protocolVersion).toBe(1);
+				} else if (frame.type === "response" && frame.id === "negotiate") {
+					observed.push("negotiate");
+					expect(frame).toMatchObject({ success: true, data: { protocolVersion: 2 } });
+				} else if (frame.type === "response" && frame.id === "early-state") {
+					observed.push("state");
+					state = frame;
+					child.stdin.end();
+				}
+			}
+			expect(await child.exited).toBe(0);
+			expect(observed).toEqual(["confirm", "input", "ready", "negotiate", "state"]);
+			expect(state).toMatchObject({ success: true, data: { sessionName: "initialized-by-host" } });
+		} finally {
+			child.kill();
+			await child.exited;
+			await stderr;
+		}
+	}, 30_000);
+
+	it("settles active and subsequent startup dialogs when stdin disconnects instead of wedging initialization", async () => {
+		await using temp = await TempDir.create("@rpc-startup-disconnect-");
+		const child = await startStartupDialogFixture(temp);
+		const stderr = new Response(child.stderr).text();
+		let disconnected = false;
+		let extensionError: unknown;
+		try {
+			for await (const frame of readJsonl<unknown>(child.stdout)) {
+				if (!isRecord(frame)) continue;
+				if (frame.type === "extension_ui_request" && frame.method === "confirm") {
+					disconnected = true;
+					child.stdin.end();
+				} else if (frame.type === "extension_error") {
+					extensionError = frame;
+				}
+			}
+			expect(disconnected).toBe(true);
+			expect(await child.exited).toBe(0);
+			expect(extensionError).toMatchObject({
+				event: "session_start",
+				error: expect.stringContaining("RPC client disconnected"),
+			});
+		} finally {
+			child.kill();
+			await child.exited;
+			await stderr;
+		}
+	}, 30_000);
+
 	it("returns a dropped prompt and its images to the host editor", () => {
 		const output = vi.fn<(frame: object) => void>();
 

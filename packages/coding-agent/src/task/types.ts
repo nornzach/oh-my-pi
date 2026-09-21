@@ -34,53 +34,10 @@ export const MAX_OUTPUT_LINES = parseNumber($env.PI_TASK_MAX_OUTPUT_LINES, 5000)
 /** EventBus channel for raw subagent events */
 export const TASK_SUBAGENT_EVENT_CHANNEL = "task:subagent:event";
 
-/** EventBus channel for aggregated subagent progress */
-export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
-
-/** EventBus channel for subagent lifecycle (start/end) */
-export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
-
-/** Payload emitted on TASK_SUBAGENT_PROGRESS_CHANNEL */
-export interface SubagentProgressPayload {
-	index: number;
-	agent: string;
-	agentSource: AgentSource;
-	task: string;
-	parentToolCallId?: string;
-	/** Registry id of the spawning subagent for nested spawns; absent at the root. */
-	parentSubagentId?: string;
-	assignment?: string;
-	progress: AgentProgress;
-	sessionFile?: string;
-	/** See {@link SubagentLifecyclePayload.detached}. */
-	detached?: boolean;
-}
-
 /** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
 export interface SubagentEventPayload {
 	id: string;
 	event: AgentSessionEvent;
-}
-
-/** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
-export interface SubagentLifecyclePayload {
-	id: string;
-	agent: string;
-	agentSource: AgentSource;
-	description?: string;
-	status: "started" | "completed" | "failed" | "aborted";
-	sessionFile?: string;
-	parentToolCallId?: string;
-	/** Registry id of the spawning subagent for nested spawns; absent at the root. */
-	parentSubagentId?: string;
-	index: number;
-	/**
-	 * Spawn runs as a detached background job: the parent turn keeps working
-	 * while this agent runs. Sync task spawns (parent blocked on the call) and
-	 * eval `agent()` bridge spawns (rendered inside their eval cell) leave this
-	 * unset — surfaces like the subagent HUD only list detached spawns.
-	 */
-	detached?: boolean;
 }
 
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */

@@ -864,10 +864,6 @@ export class SelectorController {
 				break;
 			}
 
-			// Provider settings - update runtime preferences
-			case "providers.webSearchOrder":
-			case "providers.webSearchExclude":
-			case "providers.imageOrder":
 			// MCP update injection - live subscribe/unsubscribe
 			case "mcp.notifications":
 				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {

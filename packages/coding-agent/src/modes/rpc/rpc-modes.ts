@@ -1,3 +1,4 @@
+import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 /**
  * Session-mode controllers for RPC mode (vibe / goal / loop).
  *
@@ -19,7 +20,6 @@ import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
 	isLoopDurationExpired,
-	type LoopLimitRuntime,
 	parseLoopArgs,
 } from "../loop-limit";
 import type { RpcGoalState, RpcLoopModeState, RpcLoopModeUpdateFrame, RpcVibeModeState } from "./rpc-types";

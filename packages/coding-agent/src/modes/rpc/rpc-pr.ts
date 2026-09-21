@@ -25,7 +25,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { resolvePrimaryModel } from "../../commit/model-selection";
 import { extractToolCall } from "../../commit/utils";
 import type { AgentSession } from "../../session/agent-session";
-import { toReasoningEffort } from "../../thinking";
+import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { checkoutPullRequest } from "../../tools/gh-pr-checkout";
 import { parsePrUnifiedDiff } from "../../tools/gh-pr-diff";
 import { github } from "../../utils/github";

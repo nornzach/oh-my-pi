@@ -329,26 +329,6 @@ export interface BashToolInput {
 	pty?: boolean;
 }
 
-export interface BashToolDetails {
-	meta?: OutputMeta;
-	/** Artifact containing the full raw output when the inline body was capped. */
-	artifactId?: string;
-	timeoutSeconds?: number;
-	requestedTimeoutSeconds?: number;
-	timeoutDisabled?: boolean;
-	wallTimeMs?: number;
-	/** Exit code of a command that ran to completion but failed (non-zero). */
-	exitCode?: number;
-	/** True when the command was killed by its timeout deadline (not a failure). */
-	timedOut?: boolean;
-	/** Live ACP update only; completed results refer to released terminals. */
-	terminalId?: string;
-	async?: {
-		state: "running" | "completed" | "failed";
-		jobId: string;
-		type: "bash";
-	};
-}
 export interface BashToolOptions {}
 
 type ManagedBashJobCompletion =

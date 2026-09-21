@@ -1,16 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { rebindRpcSessionCwd } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import {
 	applyRpcAddDirectory,
 	applyRpcMoveSession,
 	applyRpcRemoveDirectory,
 	buildRpcWorkspaceDirectories,
 	RpcWorkspaceBusyError,
+	RpcWorkspaceRestoreError,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-workspace";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getProjectAgentDir, getProjectDir, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 /**
  * Contract tests for the workspace-directory RPC commands (TUI /dirs,
@@ -52,15 +60,19 @@ function stubSession(
 
 describe("RPC workspace directories", () => {
 	let tempDir: TempDir;
+	let originalProjectDir: string;
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 
 	beforeEach(() => {
+		originalProjectDir = getProjectDir();
 		tempDir = TempDir.createSync("@omp-rpc-workspace-");
 		setAgentDir(tempDir.path());
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
+		setProjectDir(originalProjectDir);
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {
@@ -210,6 +222,164 @@ describe("RPC workspace directories", () => {
 	});
 
 	describe("move_session", () => {
+		async function memoryFixture(sourceBackend: "off" | "hindsight") {
+			const cwd = mkdir("source");
+			const dest = mkdir("destination");
+			const recalledBanks: string[] = [];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					const pathname = new URL(request.url).pathname;
+					if (request.method === "PUT") return Response.json({});
+					if (pathname.endsWith("/memories/recall")) {
+						const bank = pathname.split("/")[4]!;
+						recalledBanks.push(bank);
+						return Response.json({ results: [{ id: bank, text: `${bank}-memory-canary` }] });
+					}
+					return new Response("Unexpected request", { status: 404 });
+				},
+			});
+			const authStorage = createInMemoryAuthStorage();
+			let session: AgentSession | undefined;
+			const dispose = async () => {
+				try {
+					await session?.dispose();
+				} finally {
+					authStorage.close();
+					await server.stop(true);
+				}
+			};
+			try {
+				for (const directory of [cwd, dest]) {
+					await Bun.write(
+						path.join(getProjectAgentDir(directory), "config.yml"),
+						Bun.YAML.stringify({
+							memory: { backend: directory === cwd ? sourceBackend : "hindsight" },
+							hindsight: {
+								apiUrl: server.url.href,
+								bankId: directory === cwd ? "source" : "destination",
+								autoRecall: true,
+								autoRetain: false,
+								mentalModelsEnabled: false,
+							},
+						}),
+					);
+				}
+				const settings = await Settings.loadIsolated({ cwd, agentDir: tempDir.path() });
+				const manager = createManager(cwd);
+				authStorage.setRuntimeApiKey("openai", "test-key");
+				({ session } = await createAgentSession({
+					cwd,
+					agentDir: tempDir.path(),
+					sessionManager: manager,
+					authStorage,
+					modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+					settings,
+					model: getBundledModel("openai", "gpt-4o-mini"),
+					toolNames: ["read"],
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableMCP: false,
+					enableLsp: false,
+					skipPythonPreflight: true,
+					rules: [],
+					preloadedCustomToolPaths: [],
+				}));
+				const model = createMockModel({ handler: { content: ["ok"] } });
+				session.agent.streamFn = model.stream;
+				return { session, manager, cwd, dest, model, recalledBanks, [Symbol.asyncDispose]: dispose };
+			} catch (error) {
+				await dispose();
+				throw error;
+			}
+		}
+
+		it.each(["off", "hindsight"] as const)(
+			"waits for the destination memory prompt before acknowledging a move from %s and recalls only the destination next turn",
+			async sourceBackend => {
+				await using fixture = await memoryFixture(sourceBackend);
+				const { session, manager, dest, model, recalledBanks } = fixture;
+				await session.prompt("Summarize the source project.");
+				const rebindEntered = Promise.withResolvers<void>();
+				const releaseRebind = Promise.withResolvers<void>();
+				const refresh = session.refreshBaseSystemPrompt.bind(session);
+				vi.spyOn(session, "refreshBaseSystemPrompt").mockImplementation(async () => {
+					if (session.getHindsightSessionState()?.bankId === "destination") {
+						rebindEntered.resolve();
+						await releaseRebind.promise;
+					}
+					await refresh();
+				});
+				let completed = false;
+				const move = applyRpcMoveSession(session, dest, {
+					applyCwdChange: newCwd => rebindRpcSessionCwd(session, newCwd, async () => {}),
+				}).then(result => {
+					completed = true;
+					return result;
+				});
+				try {
+					await Promise.race([
+						rebindEntered.promise,
+						move.then(() => {
+							throw new Error("Move acknowledged before destination memory rebind");
+						}),
+					]);
+					expect(manager.getCwd()).toBe(dest);
+					expect(completed).toBe(false);
+				} finally {
+					releaseRebind.resolve();
+					await move;
+				}
+				expect(await move).toEqual({ cwd: dest });
+				await session.prompt("Summarize the destination project.");
+				expect(recalledBanks).toEqual(sourceBackend === "off" ? ["destination"] : ["source", "destination"]);
+				const prompt = model.calls[1]!.context.systemPrompt!.join("\n");
+				expect(prompt).toContain("destination-memory-canary");
+				expect(prompt).not.toContain("source-memory-canary");
+			},
+		);
+
+		it.each([false, true])("recovers a failed memory rebind without a stale active backend (rollback failure: %s)", async rollbackFails => {
+			await using fixture = await memoryFixture("hindsight");
+			const { session, manager, cwd, dest } = fixture;
+			await session.prompt("Remember the source project.");
+			await manager.ensureOnDisk();
+			const sourceFile = manager.getSessionFile()!;
+			const sourceState = session.getHindsightSessionState()!;
+			const flush = sourceState.flushRetainQueue.bind(sourceState);
+			vi.spyOn(sourceState, "flushRetainQueue").mockImplementation(async () => {
+				if (manager.getCwd() === dest) throw new Error("source memory drain failed");
+				await flush();
+			});
+			if (rollbackFails) vi.spyOn(manager, "rollbackMove").mockRejectedValue(new Error("rollback disk failure"));
+			const failure = await applyRpcMoveSession(session, dest, {
+				applyCwdChange: newCwd => rebindRpcSessionCwd(session, newCwd, async () => {}),
+			}).catch((error: unknown) => error);
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toContain("source memory drain failed");
+			if (rollbackFails) {
+				expect(failure).toBeInstanceOf(RpcWorkspaceRestoreError);
+				expect((failure as Error).message).toContain(dest);
+				expect((failure as Error).message).toContain("session closed");
+				expect(manager.getCwd()).toBe(dest);
+				expect(await Bun.file(sourceFile).exists()).toBe(false);
+				expect(session.getHindsightSessionState()).toBeUndefined();
+			} else {
+				expect((failure as Error).message).toContain(`workspace restored to ${cwd}`);
+				expect(manager.getCwd()).toBe(cwd);
+				expect(getProjectDir()).toBe(cwd);
+				expect(manager.getSessionFile()).toBe(sourceFile);
+				expect(await Bun.file(sourceFile).exists()).toBe(true);
+				await session.prompt("Summarize the restored project.");
+				expect(fixture.recalledBanks).not.toContain("destination");
+				expect(session.getHindsightSessionState()?.bankId).toBe("source");
+			}
+		});
+
 		it("relocates the session file to the destination's session dir and rewrites the header cwd", async () => {
 			const cwd = mkdir("project");
 			const dest = mkdir("dest");

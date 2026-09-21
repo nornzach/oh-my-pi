@@ -44,6 +44,12 @@ export interface WriteToolDetails {
 	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
 	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
 	resolvedPath?: string;
+	/** Set when an existing file was overwritten. */
+	overwritten?: boolean;
+	/** Best-effort numbered overwrite diff. */
+	diff?: string;
+	/** First changed line paired with {@link diff}. */
+	firstChangedLine?: number;
 	/** Set when the write dispatched an `xd://` tool device; drives renderer delegation. */
 	xdev?: XdevRenderDispatch;
 }

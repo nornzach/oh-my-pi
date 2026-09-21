@@ -228,9 +228,8 @@ import {
 } from "../tools/resolve";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
-import { isClosedTodo, type TodoPhase } from "../tools/todo";
+import { isClosedTodo, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { AgentDefinition } from "../task/types";
 import type { ModelMention } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
@@ -2836,12 +2835,6 @@ export class AgentSession {
 			.finally(() => {
 				if (key !== undefined && this.#pendingMessageEndPersistence.get(key) === pending) {
 					this.#pendingMessageEndPersistence.delete(key);
-				}
-			});
-		if (key !== undefined) this.#pendingMessageEndPersistence.set(key, pending);
-		this.#messageEndPersistenceTail = pending.catch(() => {});
-		return pending;
-	}
 				}
 			});
 		if (key !== undefined) this.#pendingMessageEndPersistence.set(key, pending);

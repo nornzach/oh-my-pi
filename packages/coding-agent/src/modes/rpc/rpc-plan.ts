@@ -1,3 +1,4 @@
+import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 /**
  * Structured plan approval for RPC mode.
  *
@@ -29,7 +30,7 @@ import { planSaveFileName } from "../../plan-mode/plan-save";
 import planModeApprovedPrompt from "../../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { type PlanProposalHandler, PROPOSE_DEVICE_NAME, writeDeviceDispatch } from "../../tools/resolve";
+import { type PlanProposalHandler, writeDeviceDispatch } from "../../tools/resolve";
 import type { RpcPlanApprovalOption, RpcPlanApprovalResult, RpcPlanProposalFrame } from "./rpc-types";
 
 /** Options advertised on the `plan_proposal` frame (TUI review parity). */

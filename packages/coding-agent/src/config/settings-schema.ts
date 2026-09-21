@@ -11,7 +11,13 @@ import {
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "../live/voices";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "../modes/magic-keywords";
-import type { AnyUiMetadata, SettingTab, SubmenuOption, UiBase } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import {
+	type AnyUiMetadata,
+	type SettingTab,
+	type SubmenuOption,
+	type UiBase,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
+export { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	COMPACTION_METHOD_CHOICES,
 	type CompactionMethod,
@@ -1188,12 +1194,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"tui.titleState": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "appearance",
-			group: "Display",
 	"tui.titleState": {
 		type: "boolean",
 		default: true,

@@ -31,6 +31,8 @@ export function formatBackgroundNotice(jobId: string): string {
 /** Shell execution metadata used by transcript rendering. */
 export interface BashToolDetails {
 	meta?: OutputMeta;
+	/** Artifact containing the full raw output when the inline body was capped. */
+	artifactId?: string;
 	timeoutSeconds?: number;
 	requestedTimeoutSeconds?: number;
 	timeoutDisabled?: boolean;

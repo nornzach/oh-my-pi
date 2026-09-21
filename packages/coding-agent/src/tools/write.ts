@@ -1,4 +1,5 @@
 import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
+export type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

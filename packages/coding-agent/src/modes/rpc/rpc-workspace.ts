@@ -33,6 +33,11 @@ export class RpcWorkspaceBusyError extends Error {
 	}
 }
 
+/** The session was closed because neither rollback nor re-alignment restored a usable workspace. */
+export class RpcWorkspaceRestoreError extends Error {
+	readonly code = "workspace_inconsistent";
+}
+
 /** Project the session's workspace roots for the wire: primary (cwd) first, additional roots in order. */
 export function buildRpcWorkspaceDirectories(session: AgentSession): RpcWorkspaceDirectoriesResult {
 	const manager = session.sessionManager;
@@ -125,12 +130,40 @@ export async function applyRpcMoveSession(
 	} catch (err) {
 		throw new Error(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
 	}
+	const previousState = session.sessionManager.captureState();
 	try {
 		await session.moveSession(resolved);
 	} catch (err) {
 		throw new Error(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 	const cwd = session.sessionManager.getCwd();
-	await deps.applyCwdChange(cwd);
+	try {
+		await deps.applyCwdChange(cwd);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		// Match the headless /move recovery path: use SessionManager's existing
+		// disk/header rollback, then rebind all cwd-derived state to the source.
+		try {
+			await session.sessionManager.rollbackMove(previousState);
+			await deps.applyCwdChange(previousState.cwd);
+		} catch (rollbackError) {
+			const actual = session.sessionManager.getCwd();
+			const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+			try {
+				await deps.applyCwdChange(actual);
+			} catch (realignError) {
+				// Do not allow another prompt to use an old project's memory backend.
+				// Like fatalMoveFailure in the headless lifecycle, retire the session.
+				await session.dispose();
+				throw new RpcWorkspaceRestoreError(
+					`Move failed: ${message}; rollback failed: ${rollbackMessage} (failed to re-align workspace to ${actual}: ${realignError instanceof Error ? realignError.message : String(realignError)}; session closed)`,
+				);
+			}
+			throw new Error(
+				`Move failed: ${message}; rollback failed: ${rollbackMessage} (workspace remains at ${actual})`,
+			);
+		}
+		throw new Error(`Move failed: ${message} (workspace restored to ${previousState.cwd})`);
+	}
 	return { cwd };
 }

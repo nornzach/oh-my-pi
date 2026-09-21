@@ -14,10 +14,7 @@
  * agent-side effect at all.
  */
 import { MCPManager } from "../mcp/manager";
-import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
-import { setImageProviderOrder } from "../tools/image-gen";
-import { setExcludedSearchProviders, setSearchProviderOrder } from "../web/search/provider";
-import { isSearchProviderId } from "../web/search/types";
+import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 /**
  * Narrow structural apply target: `AgentSession` satisfies it; tests
@@ -108,17 +105,6 @@ export async function applyRuntimeSetting(
 			return true;
 		case "memory.backend":
 			await session.applyMemoryBackend();
-			return true;
-		case "providers.webSearchOrder":
-			if (Array.isArray(value)) setSearchProviderOrder(value.filter(isSearchProviderId));
-			return true;
-		case "providers.webSearchExclude":
-			if (Array.isArray(value)) setExcludedSearchProviders(value.filter(isSearchProviderId));
-			return true;
-		case "providers.imageOrder":
-			if (Array.isArray(value)) {
-				setImageProviderOrder(value.filter((entry): entry is string => typeof entry === "string"));
-			}
 			return true;
 		case "mcp.notifications":
 			MCPManager.instance()?.setNotificationsEnabled(value === true);

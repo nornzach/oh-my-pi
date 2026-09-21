@@ -371,7 +371,7 @@ describe("interactive collaboration startup", () => {
 			).toMatchObject([{ access: "view", generation: 2, sessionId: this.sessionManager.getSessionId() }]);
 			throw finished;
 		});
-		spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
+		spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(async () => {});
 		spyOn(pluginHelpers, "preloadPluginRoots").mockResolvedValue(undefined);
 		const originalIsTTY = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -710,7 +710,7 @@ describe("interactive collaboration startup", () => {
 			if (failurePoint === "replay") {
 				spyOn(InteractiveMode.prototype, "renderInitialMessages").mockRejectedValue(startupFailure);
 			}
-			spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
+			spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(async () => {});
 			spyOn(pluginHelpers, "preloadPluginRoots").mockResolvedValue(undefined);
 			const originalIsTTY = process.stdin.isTTY;
 			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });

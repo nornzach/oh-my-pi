@@ -93,7 +93,7 @@ describe("outer startup collaboration gate", () => {
 		vi.spyOn(registry, "publishCollabHost").mockImplementation((source, options) =>
 			publish(source, { ...options, dir: testSession.tempDir }),
 		);
-		vi.spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
+		vi.spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(async () => {});
 		vi.spyOn(pluginHelpers, "preloadPluginRoots").mockResolvedValue(undefined);
 		const init = InteractiveMode.prototype.init;
 		vi.spyOn(InteractiveMode.prototype, "init").mockImplementation(function (this: InteractiveMode, options) {

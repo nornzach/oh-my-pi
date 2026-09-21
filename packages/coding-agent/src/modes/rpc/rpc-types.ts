@@ -8,6 +8,7 @@ import type { SettingProvenance } from "../../config/settings";
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ProviderDiscoveryState } from "../../config/model-provider-discovery";
 import type { BashResult } from "../../exec/bash-executor";
 import type {
@@ -15,9 +16,9 @@ import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 } from "../../extensibility/extensions/types";
-import type { GoalStatus } from "../../goals/state";
+import type { GoalStatus } from "@oh-my-pi/pi-tui/tools/goal";
 import type { LiveTranscript } from "../../live/controller";
-import type { LivePhase } from "../../live/visualizer";
+import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { MemoryBackendId } from "../../memory-backend/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
@@ -32,7 +33,7 @@ import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPa
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { DebugParams } from "../../tools/debug";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import type { LoopLimitRuntime } from "../loop-limit";
+import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import type { RpcMessagesPage } from "./rpc-messages";
 
@@ -868,13 +869,19 @@ export interface RpcLoopModeUpdateFrame {
 	state: RpcLoopModeState;
 }
 
-export interface RpcModelRoleEntry {
+export interface RpcModelRoleCandidate {
+	provider: string;
 	id: string;
 	name: string;
-	tag: string;
-	color: string;
+	kind: ModelKind;
+}
+
+export interface RpcModelRoleEntry extends RpcModelRoleMetadata {
+	/** Configured selector, preserved verbatim even when absent from candidates. */
 	model?: string;
 	source: string;
+	/** Available models accepted by this role, including keyless/local runners. */
+	candidates: RpcModelRoleCandidate[];
 }
 
 export interface RpcModelRolesResult {
@@ -884,9 +891,10 @@ export interface RpcModelRolesResult {
 export interface RpcModelRoleMetadata {
 	id: string;
 	name: string;
-	tag: string;
-	color: string;
+	tag?: string;
+	color?: string;
 	hidden?: boolean;
+	section: "chat" | "kind";
 }
 
 export interface RpcModelRoleMetadataResult {

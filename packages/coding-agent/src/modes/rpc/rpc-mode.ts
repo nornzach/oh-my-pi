@@ -1,3 +1,5 @@
+import { resolveRoleChain } from "../../config/model-resolver";
+import { resolveLocalSpeechModelId } from "../../tts/vocalizer";
 import type { SettingProvenance } from "../../config/settings";
 /**
  * RPC mode: Headless operation with JSON stdin/stdout protocol.
@@ -17,10 +19,9 @@ import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, logger, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
-import { getKnownRoleIds, getRoleInfo, MODEL_ROLES } from "../../config/model-roles";
+import { roleCandidatePool } from "../../config/model-roles";
+import { buildRpcModelRoleMetadata, buildRpcModelRoles } from "./rpc-model-roles";
 import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
-import { reset as resetCapabilities } from "../../capability";
-import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -37,8 +38,8 @@ import {
 	type Skill,
 	type SkillPromptInput,
 } from "../../extensibility/skills";
-import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
+import { rebindMemoryBackendForCwd } from "../../hindsight/backend";
 import type { AgentSession } from "../../session/agent-session";
 import type { DroppedPrompt } from "../../session/agent-session-types";
 import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
@@ -189,6 +190,7 @@ import {
 	applyRpcRemoveDirectory,
 	buildRpcWorkspaceDirectories,
 	RpcWorkspaceBusyError,
+	RpcWorkspaceRestoreError,
 } from "./rpc-workspace";
 import { getRpcGitChanges, getRpcGitDiff } from "./rpc-git-diff";
 import { buildRpcGitStatus, createRpcWorktree, RpcWorktreeError, removeRpcWorktree } from "./rpc-worktree";
@@ -1026,6 +1028,18 @@ export function registerRpcPersistenceSurface(
 	});
 }
 
+/** Re-scope a moved RPC session before acknowledging the move to its host. */
+export async function rebindRpcSessionCwd(
+	session: AgentSession,
+	newCwd: string,
+	reloadPluginState: () => Promise<unknown>,
+): Promise<void> {
+	setProjectDir(newCwd);
+	await session.settings.reloadForCwd(newCwd);
+	await rebindMemoryBackendForCwd(session);
+	await reloadPluginState();
+}
+
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -1048,15 +1062,6 @@ export async function runRpcMode(
 		logger.error("RPC output delivery failed", { error: String(failure) });
 		void session.dispose().finally(() => process.exit(1));
 	});
-	outputWriter.write(
-		frameEncoder.encodeFrames({
-			type: "ready",
-			protocolVersion: 1,
-			supportedProtocolVersions: [1, 2],
-			maxFrameBytes: MAX_RPC_FRAME_BYTES,
-			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		}),
-	);
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		outputWriter.write(frameEncoder.encodeFrames(obj));
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
@@ -1363,38 +1368,6 @@ export async function runRpcMode(
 	});
 	let askReanswerAwaitingResumeLeafId: string | undefined;
 
-	// Set up extensions with RPC-based UI context
-	await initializeExtensions(session, {
-		mode: "rpc",
-		reportSendError: (action, err) => {
-			output(error(undefined, action, err.message));
-		},
-		reportRuntimeError: err => {
-			output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
-		},
-		onShutdown: () => {
-			shutdownState.requested = true;
-		},
-		trackAgentInvokingMessage: task => {
-			extensionUserMessageTracker.trackAgentMessageTask(task);
-		},
-		uiContext: rpcUiContext,
-	});
-
-	// Output all agent events as JSON
-	session.subscribe(event => {
-		output(
-			event.type === "agent_end"
-				? {
-						...event,
-						messages: attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch(), message =>
-								session.getPersistedMessageEntryId(message),
-						),
-					}
-				: event,
-		);
-	});
-
 	// Discriminates a store failure from any other dispose rejection below.
 	let persistenceFailure: Error | undefined;
 	registerRpcPersistenceSurface(
@@ -1406,7 +1379,7 @@ export async function runRpcMode(
 	);
 
 	/** Dispose the session, drain protocol output, then end the process. */
-	const disposeAndExit = async (): Promise<never> => {
+	const disposeAndExit = async (exitCode = 0): Promise<never> => {
 		try {
 			await session.dispose();
 		} catch (error) {
@@ -1432,57 +1405,77 @@ export async function runRpcMode(
 			process.exit(1);
 		}
 		await outputWriter.close();
-		process.exit(0);
+		process.exit(exitCode);
 	};
 
-	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
-	const reloadPluginState = async () => {
-		const cwd = session.sessionManager.getCwd();
-		const projectPath = await resolveActiveProjectRegistryPath(cwd);
-		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
-		resetCapabilities();
-		await session.refreshSkills();
-		session.setSlashCommands(
-			await loadSlashCommands({
-				cwd,
-				extensionRoots: session.effectiveExtensionRoots,
-			}),
-		);
+	const initialize = async (): Promise<void> => {
+		// session_start handlers may await UI replies from the already-running reader.
+		await initializeExtensions(session, {
+			mode: "rpc",
+			reportSendError: (action, err) => {
+				output(error(undefined, action, err.message));
+			},
+			reportRuntimeError: err => {
+				output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
+			},
+			onShutdown: () => {
+				shutdownState.requested = true;
+			},
+			trackAgentInvokingMessage: task => {
+				extensionUserMessageTracker.trackAgentMessageTask(task);
+			},
+			uiContext: rpcUiContext,
+		});
+
+		// Output all agent events as JSON.
+		session.subscribe(event => {
+			output(
+				event.type === "agent_end"
+					? {
+							...event,
+							messages: attachRpcMessageEntryIds(event.messages, session.sessionManager.getBranch(), message =>
+								session.getPersistedMessageEntryId(message),
+							),
+						}
+					: event,
+			);
+		});
+
+		// Plan proposals and mode lifecycle ride a second subscription: plan
+		// proposals emit `plan_proposal` and silently stop the proposal turn while
+		// the host reviews; goal/loop drive their TUI-mirrored transitions.
+		session.subscribe(event => {
+			void planApprovalController.handleSessionEvent(event).catch(err => {
+				output(error(undefined, "plan_approval", err instanceof Error ? err.message : String(err)));
+			});
+			void goalModeController.handleSessionEvent(event).catch(err => {
+				output(error(undefined, "goal", err instanceof Error ? err.message : String(err)));
+			});
+			if (event.type === "agent_end") loopModeController.onAgentEnd();
+		});
+		// A resumed session may already carry plan mode from the journal.
+		planApprovalController.syncArmed();
+
+		// Mirror print-mode's startup arming, minus the abort-after-proposal hook.
+		if (
+			session.settings.get("plan.defaultOnStartup") &&
+			session.settings.get("plan.enabled") &&
+			session.sessionManager.buildSessionContext().messages.length === 0 &&
+			!session.sessionManager.getEntries().some(entry => entry.type === "mode_change") &&
+			!session.getPlanModeState()?.enabled
+		) {
+			const planFilePath = session.getPlanReferencePath() || "local://PLAN.md";
+			const previousTools = session.getEnabledToolNames();
+			const planTools = session.hasBuiltInTool("write") ? [...new Set([...previousTools, "write"])] : previousTools;
+			await session.setActiveToolsByName(planTools);
+			session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
+			session.sessionManager.appendModeChange("plan", { planFilePath });
+		}
+		session.subscribeCommandMetadataChanged(() => {
+			void emitAvailableCommandsUpdate();
+		});
+		await emitAvailableCommandsUpdate();
 	};
-
-	// Plan proposals and mode lifecycle ride a second subscription: plan
-	// proposals emit `plan_proposal` and silently stop the proposal turn while
-	// the host reviews; goal/loop drive their TUI-mirrored transitions.
-	session.subscribe(event => {
-		void planApprovalController.handleSessionEvent(event).catch(err => {
-			output(error(undefined, "plan_approval", err instanceof Error ? err.message : String(err)));
-		});
-		void goalModeController.handleSessionEvent(event).catch(err => {
-			output(error(undefined, "goal", err instanceof Error ? err.message : String(err)));
-		});
-		if (event.type === "agent_end") loopModeController.onAgentEnd();
-	});
-	// A resumed session may already carry plan mode from the journal.
-	planApprovalController.syncArmed();
-
-	// plan.defaultOnStartup: the TUI and print mode arm plan mode on a fresh
-	// boot session; the RPC boot path missed it, so GUI sessions never
-	// inherited the default (audit finding — session behavior trapped in the
-	// TUI). Mirrors print-mode's arming, minus the abort-after-proposal hook.
-	if (
-		session.settings.get("plan.defaultOnStartup") &&
-		session.settings.get("plan.enabled") &&
-		session.sessionManager.buildSessionContext().messages.length === 0 &&
-		!session.sessionManager.getEntries().some(entry => entry.type === "mode_change") &&
-		!session.getPlanModeState()?.enabled
-	) {
-		const planFilePath = session.getPlanReferencePath() || "local://PLAN.md";
-		const previousTools = session.getEnabledToolNames();
-		const planTools = session.hasBuiltInTool("write") ? [...new Set([...previousTools, "write"])] : previousTools;
-		await session.setActiveToolsByName(planTools);
-		session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
-		session.sessionManager.appendModeChange("plan", { planFilePath });
-	}
 
 	const getAvailableCommands = async () =>
 		buildAvailableSlashCommands(session, undefined, { includeTuiOnlyBuiltins: true });
@@ -1504,25 +1497,6 @@ export async function runRpcMode(
 			kind: session.sessionManager.getHeader()?.kind,
 		});
 	};
-	session.subscribeCommandMetadataChanged(() => {
-		void emitAvailableCommandsUpdate();
-	});
-	await emitAvailableCommandsUpdate();
-
-	// Send ready frame AFTER extension initialization so the GUI only sees
-	// "ready" when the command loop is actually able to process commands.
-	// Previously this was sent before initializeExtensions, which meant a
-	// crash or hang during extension setup left the GUI thinking the sidecar
-	// was responsive when it was not.
-	writeFrames(
-		frameEncoder.encodeFrames({
-			type: "ready",
-			protocolVersion: 1,
-			supportedProtocolVersions: [1, 2],
-			maxFrameBytes: MAX_RPC_FRAME_BYTES,
-			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-		}),
-	);
 
 	// Bound the background-discovery await used by model-listing commands.
 	// The RPC command queue is serial, so an unbounded
@@ -1584,6 +1558,10 @@ export async function runRpcMode(
 	// machine-readable "busy" code (TUI "Cannot … while streaming." parity);
 	// domain refusals (missing path, primary removal) ride the plain message.
 	const workspaceError = (id: string | undefined, command: string, err: unknown): RpcResponse => {
+		if (err instanceof RpcWorkspaceRestoreError) {
+			shutdownState.requested = true;
+			return error(id, command, err.message, err.code);
+		}
 		if (err instanceof RpcWorkspaceBusyError) return error(id, command, err.message, err.code);
 		return error(id, command, err instanceof Error ? err.message : String(err));
 	};
@@ -2341,16 +2319,7 @@ export async function runRpcMode(
 			case "move_session": {
 				try {
 					const result = await applyRpcMoveSession(session, command.path, {
-						applyCwdChange: async newCwd => {
-							// TUI applyCwdChange parity: re-point the process, project
-							// settings, provider globals, and plugin/capability caches at
-							// the destination so the next prompt sees the new project's
-							// configuration and commands.
-							setProjectDir(newCwd);
-							await session.settings.reloadForCwd(newCwd);
-							applyProviderGlobalsFromSettings(session.settings);
-							await reloadPluginState();
-						},
+						applyCwdChange: newCwd => rebindRpcSessionCwd(session, newCwd, reloadPluginState),
 					});
 					return success(id, "move_session", result);
 				} catch (err) {
@@ -2527,7 +2496,9 @@ export async function runRpcMode(
 					if (samples.length === 0) return success(id, "transcribe_audio", { text: "" });
 					// Same resolution as the TUI stt-controller: stale/legacy keys
 					// fall back to the SoTA default rather than failing.
-					const modelKey = resolveSttModelSpec(session.settings.get("stt.modelName") as string | undefined).key;
+						const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
+					const selectedId = resolveRoleChain("dictation", session.settings, pool)[0]?.model.id;
+					const modelKey = resolveSttModelSpec(selectedId).key;
 					const language = session.settings.get("stt.language") as string | undefined;
 					const text = await sttClient.transcribe(modelKey, samples, { language: language || undefined });
 					return success(id, "transcribe_audio", { text });
@@ -2543,7 +2514,7 @@ export async function runRpcMode(
 				try {
 					const text = command.text.trim();
 					if (!text) return success(id, "synthesize_speech", { audioBase64: "", mimeType: "audio/wav" });
-					const modelKey = session.settings.get("tts.localModel");
+						const modelKey = resolveLocalSpeechModelId({ settings: session.settings, registry: session.modelRegistry });
 					const voice = session.settings.get("speech.voice") || DEFAULT_TTS_VOICE;
 					const audio = await ttsClient.synthesize(modelKey, text, { voice });
 					if (!audio) {
@@ -2784,10 +2755,9 @@ export async function runRpcMode(
 								if (prompt.secret) {
 									throw new Error(
 										`Provider '${command.providerId}' requires secret input, ` +
-											"which is not supported in RPC mode. Use the terminal UI to log in.",
+										"which is not supported in RPC mode. Use the terminal UI to log in.",
 									);
 								}
-							}
 							const value = await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 });
 							if (value === undefined) throw new LoginCancelledError();
 							return value;
@@ -3062,21 +3032,7 @@ export async function runRpcMode(
 			}
 
 			case "get_model_roles": {
-				const roleIds = getKnownRoleIds(session.settings);
-				const roles = roleIds.map(roleId => {
-					const info = getRoleInfo(roleId, session.settings);
-					const model = session.settings.getModelRole(roleId);
-					const source = session.settings.getModelRoleSource(roleId);
-					return {
-						id: roleId,
-						name: info.name,
-						tag: info.tag,
-						color: info.color,
-						model: model ?? undefined,
-						source,
-					};
-				});
-				return success(id, "get_model_roles", { roles });
+				return success(id, "get_model_roles", buildRpcModelRoles(session.settings, session.modelRegistry));
 			}
 
 			case "set_model_role": {
@@ -3091,28 +3047,7 @@ export async function runRpcMode(
 			}
 
 			case "get_model_role_metadata": {
-				const builtIn = Object.entries(MODEL_ROLES).map(([id, info]) => ({
-					id,
-					name: info.name,
-					tag: info.tag,
-					color: info.color,
-					hidden: info.hidden || undefined,
-				}));
-				const customTags = session.settings.get("modelTags") as
-					| Record<string, { name?: string; color?: string; hidden?: boolean }>
-					| undefined;
-				const custom = customTags
-					? Object.entries(customTags)
-							.filter(([id]) => !(id in MODEL_ROLES))
-							.map(([id, tag]) => ({
-								id,
-								name: tag.name ?? id,
-								tag: id.toUpperCase(),
-								color: tag.color ?? "default",
-								hidden: tag.hidden || undefined,
-							}))
-					: [];
-				return success(id, "get_model_role_metadata", { roles: [...builtIn, ...custom] });
+				return success(id, "get_model_role_metadata", buildRpcModelRoleMetadata(session.settings));
 			}
 
 			// =================================================================
@@ -3490,7 +3425,7 @@ export async function runRpcMode(
 	// response frame. The coordinator drains tracked tasks before exiting and
 	// re-checks the request as each task settles.
 	const shutdownCoordinator = new RpcShutdownCoordinator({
-		isShutdownRequested: () => shutdownState.requested,
+		isShutdownRequested: () => startupSucceeded && shutdownState.requested,
 		performShutdown: async () => {
 			// Route through the idempotent session.dispose() so the browser
 			// reaper (releaseTabsForOwner) and other bounded teardown run before
@@ -3502,8 +3437,17 @@ export async function runRpcMode(
 		},
 	});
 
+	// Use a resolving gate (including failure) so startup without any queued
+	// commands cannot leave an unobserved rejected promise. Background commands
+	// still bypass the serial tail, but cannot enter their handlers before init.
+	const startup = Promise.withResolvers<Error | undefined>();
+	let startupSucceeded = false;
 	const dispatchFrameDeps: RpcInputFrameDeps = {
-		handleCommand,
+		handleCommand: async command => {
+			const failure = await startup.promise;
+			if (failure) throw failure;
+			return handleCommand(command);
+		},
 		output,
 		errorResponse: error,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
@@ -3518,23 +3462,51 @@ export async function runRpcMode(
 		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
 	});
 
-	// Keep the stdin reader moving: side-channel frames dispatch immediately,
-	// ordinary commands serialize through inputDispatcher, and bash remains
-	// background-dispatched so abort_bash can overtake it. Frames are read
-	// line-by-line by readRpcInputFrames so a single malformed line is reported
-	// as an error frame and the loop keeps running instead of throwing out of
-	// the reader and killing the whole process (issue #5194).
-	await readRpcInputFrames(
-		input ?? Bun.stdin.stream(),
+	// Start the sole reader BEFORE session_start. UI/host side channels must
+	// remain live even while startup awaits a dialog. Malformed lines remain
+	// recoverable; EOF immediately closes bridges, including future UI requests.
+	const inputAbort = new AbortController();
+	let inputFailure: Error | undefined;
+	const inputTask = readRpcInputFrames(
+		input,
 		parsed => inputDispatcher.dispatch(parsed),
 		message => output(error(undefined, "parse", message)),
-	);
+		inputAbort.signal,
+	)
+		.catch(err => {
+			inputFailure = err instanceof Error ? err : new Error(String(err));
+			output(error(undefined, "input", inputFailure.message));
+		})
+		.finally(() => {
+			pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
+			hostToolBridge.close("RPC client disconnected before host tool execution completed");
+			hostUriBridge.clear("RPC client disconnected before host URI request completed");
+		});
 
-	// stdin closed — RPC client is gone. Fail pending side-channel requests
-	// first so active/queued commands can settle, then drain accepted work.
-	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
-	hostToolBridge.close("RPC client disconnected before host tool execution completed");
-	hostUriBridge.clear("RPC client disconnected before host URI request completed");
+	let startupFailure: Error | undefined;
+	try {
+		await initialize();
+		if (inputFailure) throw inputFailure;
+		// Exactly one truthful ready, in v1, before queued negotiation/commands.
+		output({
+			type: "ready",
+			protocolVersion: 1,
+			supportedProtocolVersions: [1, 2],
+			maxFrameBytes: MAX_RPC_FRAME_BYTES,
+			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+		});
+		startupSucceeded = true;
+	} catch (err) {
+		startupFailure = err instanceof Error ? err : new Error(String(err));
+		output(error(undefined, "startup", startupFailure.message));
+		inputAbort.abort();
+	} finally {
+		// Failed startup rejects accepted work through normal correlated responses,
+		// not through a rejected reader task or a permanently closed command gate.
+		startup.resolve(startupFailure);
+	}
+
+	await inputTask;
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();
@@ -3545,5 +3517,5 @@ export async function runRpcMode(
 	// immediately. Returned rather than awaited: `runRpcMode` is typed
 	// `Promise<never>`, and only returning the `Promise<never>` keeps this end
 	// point unreachable for the compiler.
-	return disposeAndExit();
+	return disposeAndExit(startupFailure || inputFailure ? 1 : 0);
 }
