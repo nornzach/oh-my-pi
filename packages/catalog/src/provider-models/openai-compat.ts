@@ -29,6 +29,7 @@ import { resolveModelReference } from "../identity/reference";
 import type { ModelManagerOptions, ModelsDevFallback } from "../model-manager";
 import { type GeneratedProvider, getBundledModels } from "../models";
 import {
+	KIND_API_KINDS,
 	MODEL_KINDS,
 	type Api,
 	type FetchImpl,
@@ -54,6 +55,7 @@ import {
 	mergeCopilotApiHeaders,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
+import { normalizeSingularityApiBaseUrl } from "../wire/singularityapi";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { getDefaultModelDiscoveryBaseUrl, resolveModelCacheProviderId } from "./cache-provider-id";
 import { getClinePassModelMetadata } from "./cline-pass";
@@ -3227,127 +3229,210 @@ export function openrouterModelManagerOptions(config?: OpenRouterModelManagerCon
 		// override bundled `api: "openrouter"` models during online-if-uncached startup.
 		cacheProviderId: resolveModelCacheProviderId("openrouter"),
 		fetchDynamicModels: async () => {
-			const [chatModels, imageModels, decisionModels] = await Promise.all([
-				fetchOpenAICompatibleModels({
-					api: "openrouter",
-					provider: "openrouter",
-					baseUrl,
-					apiKey,
-					filterModel: (entry: OpenAICompatibleModelRecord) => {
-						const params = entry.supported_parameters;
-						return Array.isArray(params) && params.includes("tools");
-					},
-					mapModel: (
-						entry: OpenAICompatibleModelRecord,
-						defaults: ModelSpec<"openrouter">,
-						_context: OpenAICompatibleModelMapperContext<"openrouter">,
-					): ModelSpec<"openrouter"> => {
-						const reference = references.get(defaults.id);
-						const baseModel = mapWithBundledReference(entry, defaults, reference);
-						const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
-						const params = Array.isArray(entry.supported_parameters)
-							? entry.supported_parameters.filter((value): value is string => typeof value === "string")
-							: [];
-						const thinking = mapOpenRouterThinking(entry);
-						const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
-						const input: ("text" | "image")[] = Array.isArray(architecture?.input_modalities)
-							? toInputCapabilities(architecture.input_modalities)
-							: String(architecture?.modality ?? "").includes("image")
-								? ["text", "image"]
-								: ["text"];
-						const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
-
-						const supportsToolChoice = params.includes("tool_choice");
-
-						return {
-							...baseModel,
-							reasoning: params.includes("reasoning"),
-							...(thinking !== undefined ? { thinking } : {}),
-							input,
-							cost: {
-								input: parseFloat(String(pricing?.prompt ?? "0")) * 1_000_000,
-								output: parseFloat(String(pricing?.completion ?? "0")) * 1_000_000,
-								cacheRead: parseFloat(String(pricing?.input_cache_read ?? "0")) * 1_000_000,
-								cacheWrite: parseFloat(String(pricing?.input_cache_write ?? "0")) * 1_000_000,
-							},
-							contextWindow:
-								typeof entry.context_length === "number" ? entry.context_length : baseModel.contextWindow,
-							maxTokens:
-								typeof topProvider?.max_completion_tokens === "number"
-									? topProvider.max_completion_tokens
-									: baseModel.maxTokens,
-							...(!supportsToolChoice && {
-								compat: { ...baseModel.compat, supportsToolChoice: false },
-							}),
-						};
-					},
-					fetch: config?.fetch,
-				}),
-				fetchOpenAICompatibleModels({
-					api: "openrouter-images",
-					provider: "openrouter",
-					baseUrl: `${baseUrl}/images`,
-					apiKey,
-					filterModel: entry => {
-						const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
-						return (
-							Array.isArray(architecture?.output_modalities) && architecture.output_modalities.includes("image")
-						);
-					},
-					mapModel: (_entry, defaults): ModelSpec<"openrouter-images"> => ({
-						...defaults,
+			const [chatModels, imageModels, decisionModels, rerankModels, videoModels, embeddingModels] =
+				await Promise.all([
+					fetchOpenAICompatibleModels({
+						api: "openrouter",
+						provider: "openrouter",
 						baseUrl,
-						kind: "image",
-						reasoning: false,
-						input: ["text", "image"],
-						supportsTools: false,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-						contextWindow: null,
-						maxTokens: null,
+						apiKey,
+						filterModel: (entry: OpenAICompatibleModelRecord) => {
+							const params = entry.supported_parameters;
+							return Array.isArray(params) && params.includes("tools");
+						},
+						mapModel: (
+							entry: OpenAICompatibleModelRecord,
+							defaults: ModelSpec<"openrouter">,
+							_context: OpenAICompatibleModelMapperContext<"openrouter">,
+						): ModelSpec<"openrouter"> => {
+							const reference = references.get(defaults.id);
+							const baseModel = mapWithBundledReference(entry, defaults, reference);
+							const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+							const params = Array.isArray(entry.supported_parameters)
+								? entry.supported_parameters.filter((value): value is string => typeof value === "string")
+								: [];
+							const thinking = mapOpenRouterThinking(entry);
+							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
+							const input: ("text" | "image")[] = Array.isArray(architecture?.input_modalities)
+								? toInputCapabilities(architecture.input_modalities)
+								: String(architecture?.modality ?? "").includes("image")
+									? ["text", "image"]
+									: ["text"];
+							const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
+
+							const supportsToolChoice = params.includes("tool_choice");
+
+							return {
+								...baseModel,
+								reasoning: params.includes("reasoning"),
+								...(thinking !== undefined ? { thinking } : {}),
+								input,
+								cost: {
+									input: parseFloat(String(pricing?.prompt ?? "0")) * 1_000_000,
+									output: parseFloat(String(pricing?.completion ?? "0")) * 1_000_000,
+									cacheRead: parseFloat(String(pricing?.input_cache_read ?? "0")) * 1_000_000,
+									cacheWrite: parseFloat(String(pricing?.input_cache_write ?? "0")) * 1_000_000,
+								},
+								contextWindow:
+									typeof entry.context_length === "number" ? entry.context_length : baseModel.contextWindow,
+								maxTokens:
+									typeof topProvider?.max_completion_tokens === "number"
+										? topProvider.max_completion_tokens
+										: baseModel.maxTokens,
+								...(!supportsToolChoice && {
+									compat: { ...baseModel.compat, supportsToolChoice: false },
+								}),
+							};
+						},
+						fetch: config?.fetch,
 					}),
-					fetch: config?.fetch,
-				}),
-				// Decision models (`text->decisions`) are absent from the default roster
-				// and answer only through the Decisions API, outside the `/v1` prefix.
-				fetchOpenAICompatibleModels({
-					api: "openrouter-decisions",
-					provider: "openrouter",
-					baseUrl,
-					apiKey,
-					query: { output_modalities: "decisions" },
-					filterModel: entry => {
-						const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
-						return (
-							Array.isArray(architecture?.output_modalities) &&
-							architecture.output_modalities.includes("decisions")
-						);
-					},
-					mapModel: (entry, defaults): ModelSpec<"openrouter-decisions"> => {
-						const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
-						const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
-						return {
+					fetchOpenAICompatibleModels({
+						api: "openrouter-images",
+						provider: "openrouter",
+						baseUrl: `${baseUrl}/images`,
+						apiKey,
+						filterModel: entry => {
+							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
+							return (
+								Array.isArray(architecture?.output_modalities) &&
+								architecture.output_modalities.includes("image")
+							);
+						},
+						mapModel: (_entry, defaults): ModelSpec<"openrouter-images"> => ({
 							...defaults,
-							baseUrl: decisionsBaseUrl,
-							kind: "judge",
+							baseUrl,
+							kind: "image",
 							reasoning: false,
-							input: ["text"],
+							input: ["text", "image"],
 							supportsTools: false,
-							cost: {
-								input: parseFloat(String(pricing?.prompt ?? "0")) * 1_000_000,
-								output: parseFloat(String(pricing?.completion ?? "0")) * 1_000_000,
-								cacheRead: 0,
-								cacheWrite: 0,
-							},
-							contextWindow: typeof entry.context_length === "number" ? entry.context_length : null,
-							maxTokens:
-								typeof topProvider?.max_completion_tokens === "number"
-									? topProvider.max_completion_tokens
-									: null,
-						};
-					},
-					fetch: config?.fetch,
-				}),
-			]);
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: null,
+							maxTokens: null,
+						}),
+						fetch: config?.fetch,
+					}),
+					// Decision models (`text->decisions`) are absent from the default roster
+					// and answer only through the Decisions API, outside the `/v1` prefix.
+					fetchOpenAICompatibleModels({
+						api: "openrouter-decisions",
+						provider: "openrouter",
+						baseUrl,
+						apiKey,
+						query: { output_modalities: "decisions" },
+						filterModel: entry => {
+							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
+							return (
+								Array.isArray(architecture?.output_modalities) &&
+								architecture.output_modalities.includes("decisions")
+							);
+						},
+						mapModel: (entry, defaults): ModelSpec<"openrouter-decisions"> => {
+							const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+							const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
+							return {
+								...defaults,
+								baseUrl: decisionsBaseUrl,
+								kind: "judge",
+								reasoning: false,
+								input: ["text"],
+								supportsTools: false,
+								cost: {
+									input: parseFloat(String(pricing?.prompt ?? "0")) * 1_000_000,
+									output: parseFloat(String(pricing?.completion ?? "0")) * 1_000_000,
+									cacheRead: 0,
+									cacheWrite: 0,
+								},
+								contextWindow: typeof entry.context_length === "number" ? entry.context_length : null,
+								maxTokens:
+									typeof topProvider?.max_completion_tokens === "number"
+										? topProvider.max_completion_tokens
+										: null,
+							};
+						},
+						fetch: config?.fetch,
+					}),
+					fetchOpenAICompatibleModels({
+						api: "openrouter-rerank",
+						provider: "openrouter",
+						baseUrl,
+						apiKey,
+						query: { output_modalities: "rerank" },
+						filterModel: entry => {
+							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
+							return (
+								Array.isArray(architecture?.output_modalities) &&
+								architecture.output_modalities.includes("rerank")
+							);
+						},
+						mapModel: (entry, defaults): ModelSpec<"openrouter-rerank"> => {
+							const architecture = isRecord(entry.architecture) ? entry.architecture : undefined;
+							const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
+							return {
+								...defaults,
+								baseUrl,
+								kind: "rerank",
+								reasoning: false,
+								input: Array.isArray(architecture?.input_modalities)
+									? toInputCapabilities(architecture.input_modalities)
+									: ["text"],
+								supportsTools: false,
+								// OpenRouter bills reranking per search; ModelCost has no search-unit axis.
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+								contextWindow: typeof entry.context_length === "number" ? entry.context_length : null,
+								maxTokens:
+									typeof topProvider?.max_completion_tokens === "number"
+										? topProvider.max_completion_tokens
+										: null,
+							};
+						},
+						fetch: config?.fetch,
+					}),
+					fetchOpenAICompatibleModels({
+						api: "openrouter-video",
+						provider: "openrouter",
+						baseUrl: `${baseUrl}/videos`,
+						apiKey,
+						mapModel: (_entry, defaults): ModelSpec<"openrouter-video"> => ({
+							...defaults,
+							baseUrl,
+							kind: "video",
+							reasoning: false,
+							input: ["text", "image"],
+							supportsTools: false,
+							// OpenRouter bills video by output second/SKU; ModelCost has no duration axis.
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: null,
+							maxTokens: null,
+						}),
+						fetch: config?.fetch,
+					}),
+					fetchOpenAICompatibleModels({
+						api: "openai-embeddings",
+						provider: "openrouter",
+						baseUrl: `${baseUrl}/embeddings`,
+						apiKey,
+						mapModel: (entry, defaults): ModelSpec<"openai-embeddings"> => {
+							const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+							return {
+								...defaults,
+								baseUrl,
+								kind: "embedding",
+								reasoning: false,
+								input: ["text"],
+								supportsTools: false,
+								cost: {
+									input: parseFloat(String(pricing?.prompt ?? "0")) * 1_000_000,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+								},
+								contextWindow: typeof entry.context_length === "number" ? entry.context_length : null,
+								maxTokens: null,
+							};
+						},
+						fetch: config?.fetch,
+					}),
+				]);
 
 			if (imageModels === null) {
 				logger.warn("OpenRouter image model discovery unavailable; preserving chat model discovery", {
@@ -3359,12 +3444,39 @@ export function openrouterModelManagerOptions(config?: OpenRouterModelManagerCon
 					endpoint: `${baseUrl}/models?output_modalities=decisions`,
 				});
 			}
-			if (chatModels === null && imageModels === null && decisionModels === null) return null;
+			if (rerankModels === null) {
+				logger.warn("OpenRouter rerank model discovery unavailable; preserving other model discovery", {
+					endpoint: `${baseUrl}/models?output_modalities=rerank`,
+				});
+			}
+			if (videoModels === null) {
+				logger.warn("OpenRouter video model discovery unavailable; preserving other model discovery", {
+					endpoint: `${baseUrl}/videos/models`,
+				});
+			}
+			if (embeddingModels === null) {
+				logger.warn("OpenRouter embedding model discovery unavailable; preserving other model discovery", {
+					endpoint: `${baseUrl}/embeddings/models`,
+				});
+			}
+			if (
+				chatModels === null &&
+				imageModels === null &&
+				decisionModels === null &&
+				rerankModels === null &&
+				videoModels === null &&
+				embeddingModels === null
+			) {
+				return null;
+			}
 
 			const models = new Map<string, ModelSpec<Api>>();
 			for (const model of chatModels ?? []) models.set(model.id, model);
 			for (const model of imageModels ?? []) models.set(model.id, model);
 			for (const model of decisionModels ?? []) models.set(model.id, model);
+			for (const model of rerankModels ?? []) models.set(model.id, model);
+			for (const model of videoModels ?? []) models.set(model.id, model);
+			for (const model of embeddingModels ?? []) models.set(model.id, model);
 			return Array.from(models.values()).sort((left, right) => left.id.localeCompare(right.id));
 		},
 	};
@@ -6329,10 +6441,11 @@ export function mapModelsDevToModels(
 				const normalizedKind = policy.catalog.kind ?? m.kind;
 				if (typeof normalizedKind !== "string" || !MODEL_KINDS.some(value => value === normalizedKind)) continue;
 				if (normalizedKind !== "chat") {
-					if (normalizedKind !== "image" && normalizedKind !== "tts" && normalizedKind !== "stt") continue;
-					kindApi = providers[desc.providerId]?.kindApis?.[normalizedKind];
+					const kindApiKind = KIND_API_KINDS.find(value => value === normalizedKind);
+					if (kindApiKind === undefined) continue;
+					kindApi = providers[desc.providerId]?.kindApis?.[kindApiKind];
 					if (kindApi === undefined) continue;
-					kind = normalizedKind;
+					kind = kindApiKind;
 				}
 			}
 
@@ -7286,5 +7399,122 @@ export function charmHyperModelManagerOptions(
 				},
 				fetch: config?.fetch,
 			}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// SingularityAPI
+// ---------------------------------------------------------------------------
+
+export interface SingularityApiModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+interface SingularityApiCapability extends Record<string, unknown> {
+	endpoint?: unknown;
+	context_window_tokens?: unknown;
+	maximum_output_tokens?: unknown;
+	default_output_tokens?: unknown;
+	pricing?: unknown;
+}
+
+/** Endpoints that decide which transport serves a `/v1/models` row. */
+const SINGULARITYAPI_CHAT_ENDPOINT = "/v1/chat/completions";
+const SINGULARITYAPI_IMAGE_ENDPOINT = "/v1/images/generations";
+
+function singularityApiCapabilities(entry: OpenAICompatibleModelRecord): readonly SingularityApiCapability[] {
+	const capabilities = entry.capabilities;
+	if (!Array.isArray(capabilities)) return [];
+	return capabilities.filter((capability): capability is SingularityApiCapability => isRecord(capability));
+}
+
+function toSingularityApiRate(value: unknown): number {
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? parsed : 0;
+}
+
+function resolveSingularityApiCost(capability: SingularityApiCapability | undefined): ModelSpec<Api>["cost"] {
+	const pricing = capability !== undefined && isRecord(capability.pricing) ? capability.pricing : undefined;
+	if (!pricing) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	return {
+		input: toSingularityApiRate(pricing.input_per_million_usd),
+		output: toSingularityApiRate(pricing.output_per_million_usd),
+		cacheRead: 0,
+		cacheWrite: 0,
+	};
+}
+
+/**
+ * Map one `/v1/models` row onto its serving transport.
+ *
+ * The wire's own `capabilities` list decides the transport: a row that serves
+ * chat completions is a chat model, and a row whose only surface is
+ * `/v1/images/generations` is routed to `openai-images` so
+ * `generateImage`-style dispatch can reach it. Without that assignment the row
+ * kept the discovery default (`openai-completions`) while still being marked
+ * as an image model, so it was offered as an image target and then rejected by
+ * every image client. The gateway bills image requests per request, never by
+ * tokens, so those rows carry no token tariff.
+ */
+function mapSingularityApiModel(entry: OpenAICompatibleModelRecord, defaults: ModelSpec<Api>): ModelSpec<Api> {
+	const capabilities = singularityApiCapabilities(entry);
+	const capability = capabilities.find(candidate => candidate.endpoint === SINGULARITYAPI_CHAT_ENDPOINT);
+	if (
+		capability === undefined &&
+		capabilities.some(candidate => candidate.endpoint === SINGULARITYAPI_IMAGE_ENDPOINT)
+	) {
+		return {
+			...defaults,
+			api: "openai-images",
+			name: toModelName(entry.name, defaults.name),
+			kind: "image",
+			reasoning: false,
+			input: ["text", "image"],
+			supportsTools: false,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: null,
+			maxTokens: null,
+		};
+	}
+	return {
+		...defaults,
+		name: toModelName(entry.name, defaults.name),
+		contextWindow: toPositiveNumber(capability?.context_window_tokens, defaults.contextWindow),
+		maxTokens: toPositiveNumber(capability?.maximum_output_tokens, defaults.maxTokens),
+		cost: resolveSingularityApiCost(capability),
+	};
+}
+/**
+ * SingularityAPI universal inference gateway: chat completions over a 300+
+ * model catalog, plus image generation for the rows that advertise it.
+ * `GET /v1/models` publishes each row's per-endpoint capabilities — context
+ * window, max output tokens, and per-million pricing as 12-decimal strings —
+ * with `cache-control: no-store`, so discovery reads limits and tariffs
+ * straight off the wire and the endpoint list picks each row's transport.
+ * Rows without a reasoning vocabulary stay non-reasoning; reviewed KDL rules
+ * own the ladders the gateway leaves implicit (DeepSeek Flash/Pro, GPT-5.6
+ * flagships), because a model discovered as non-reasoning never sends a
+ * `reasoning_effort` and the gateway requires one alongside tools.
+ */
+export function singularityApiModelManagerOptions(config?: SingularityApiModelManagerConfig): ModelManagerOptions<Api> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeSingularityApiBaseUrl(config?.baseUrl);
+	return {
+		providerId: "singularityapi",
+		cacheProviderId: resolveModelCacheProviderId("singularityapi", { apiKey, baseUrl }),
+		dynamicModelsAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels<Api>({
+					api: "openai-completions",
+					provider: "singularityapi",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => mapSingularityApiModel(entry, defaults),
+					fetch: config?.fetch,
+				}),
+		}),
 	};
 }
