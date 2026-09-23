@@ -72,7 +72,7 @@ export async function buildRpcUsageResult(session: AgentSession): Promise<RpcUsa
 			for (const report of raw) {
 				const identity =
 					report.provider === currentProvider
-						? authStorage.getOAuthAccountIdentity(report.provider, session.sessionId)
+						? authStorage.oauth.identity(report.provider, session.sessionId)
 						: undefined;
 				const accountLabel = identity?.email ?? identity?.accountId;
 				reports.push(mapUsageReport(report, accountLabel));
@@ -176,7 +176,7 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 
 	// Also include providers that have stored credentials but no models yet.
 	try {
-		for (const cred of authStorage.listStoredCredentials()) {
+		for (const cred of authStorage.credentials.list()) {
 			providerIds.add(cred.provider);
 		}
 	} catch {
@@ -189,8 +189,8 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 
 	const providers: RpcProviderInfo[] = [];
 	for (const id of providerIds) {
-		const authenticated = authStorage.hasAuth(id);
-		const identity = authenticated ? authStorage.getOAuthAccountIdentity(id, session.sessionId) : undefined;
+		const authenticated = authStorage.keys.source(id) !== undefined;
+		const identity = authenticated ? authStorage.oauth.identity(id, session.sessionId) : undefined;
 		const loginAvailable = loginIds.has(id);
 
 		// Determine auth kind.

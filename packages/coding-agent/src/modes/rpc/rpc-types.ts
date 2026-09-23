@@ -26,7 +26,7 @@ import type {
 	ContextUsageBreakdown,
 	RestoredQueuedMessageWithDelivery,
 } from "../../session/agent-session-types";
-import type { FileEntry } from "../../session/session-entries";
+import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
@@ -58,6 +58,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
+	| { id?: string; type: "get_entries"; since?: string }
+	| { id?: string; type: "get_tree" }
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
@@ -73,6 +75,7 @@ export type RpcCommand =
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
 	| { id?: string; type: "cycle_thinking_level" }
+	| { id?: string; type: "get_available_thinking_levels" }
 
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
@@ -1662,6 +1665,20 @@ export type RpcResponse =
 			success: true;
 			data: { commands: RpcAvailableSlashCommand[] };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_entries";
+			success: true;
+			data: { entries: SessionEntry[]; leafId: string | null };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_tree";
+			success: true;
+			data: { tree: SessionTreeNode[]; leafId: string | null };
+	  }
 	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
@@ -1724,6 +1741,13 @@ export type RpcResponse =
 			command: "cycle_thinking_level";
 			success: true;
 			data: { level: Effort } | null;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_available_thinking_levels";
+			success: true;
+			data: { levels: ThinkingLevel[] };
 	  }
 
 	// Queue modes
