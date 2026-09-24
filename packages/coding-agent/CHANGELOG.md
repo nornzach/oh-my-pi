@@ -2,32 +2,51 @@
 
 ## [Unreleased]
 
+## [18.3.0] - 2026-09-24
+
+### Breaking Changes
+
+- The `hub` tool is deprecated; use `wait`, `write`, and the `proc://` protocols instead.
+- The `irc.timeoutMs` configuration setting has been removed.
+- The edit mode syntax now uses `*** Edit File:`, `*** Find`, and `*** Replace` headers instead of `SM:` headers.
+- Cancelling a process through `write` now requires an explicit `proc://<id>/kill` target; other write targets validate content normally.
+
 ### Added
 
-- Added `/changelog last [N]` to show the latest release, or the last N releases. `/changelog` still shows the recent default and `/changelog full` still shows the complete history.
-- Added 'daybreak' badge to `omp usage` output for enabled accounts
-- Added `omp login` command for terminal-based OAuth authentication, including automated model discovery refresh and browser-opening support
-- Enabled `org-scoped-identity` and `oauth-token-env` configuration parsing for authentication providers
-- Adopted namespaced `authStorage` API for CLI and session management
-- Added usage reporting for failed native judgments, including error stop reason and message
-- Added openrouter/~typesafe/jev-latest as a native judge candidate in priority configuration
-- Added `OMP_MCP_STARTUP_TIMEOUT_MS` and `mcp.startupTimeoutMs` to configure the initial MCP discovery window, plus `OMP_MCP_REQUIRE_READY=1` to fail headless print runs before the first turn when a server is unavailable.
-- Added `auth.accountPolicies` for per-account OAuth priority and reserve controls, with matching policy state in `omp usage` ([#12243](https://github.com/can1357/oh-my-pi/pull/12243) by [@schickling-assistant](https://github.com/schickling-assistant)).
-- Added `/export` and `/usage` to focused subagent views: `/export` writes the focused subagent's transcript (including its own subagents) and `/usage` shows account usage without returning to the main session ([#12986](https://github.com/can1357/oh-my-pi/pull/12986) by [@H4vC](https://github.com/H4vC)).
-- Added saving of clipboard-pasted images to the session artifact directory so the agent receives a file path it can read, copy, or upload (for example, attaching a pasted screenshot to an issue tracker) ([#12985](https://github.com/can1357/oh-my-pi/pull/12985) by [@H4vC](https://github.com/H4vC)).
-- Added `/annotate` to attach notes to a code-review diff, the latest reply, a session message, a file, or quoted text, then paste them into the prompt or send them with a review ([#12601](https://github.com/can1357/oh-my-pi/pull/12601) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy))
+- Added `omp://` documentation scopes for `find` and `omp find`. Search all embedded harness documentation with `omp://` or a specific document with `omp://<file>.md`; results are returned as canonical URLs that `read` can open, including range selectors.
+- Added extension support for ephemeral, `/btw`-style side turns through `ctx.runEphemeralTurn()`, with optional tool suppression and output/context limits without adding the turn to session history.
+- Added background job and service management through the `wait` tool and `proc://` URLs, including supervised services in `bash` and direct agent messaging through `agent://` write targets.
+- Added `*** Insert Before` and `*** Insert After` edit operations for adding lines without replacing existing code.
+- Added the `toks` command for offline token counting, including support for Jev (TypeSafe Jev 1.13) encodings.
+- Added automatic discovery of Apple Foundation Models on supported Apple silicon devices.
+- Added `/changelog last [N]` for viewing the latest release or a selected number of recent releases.
+- Added terminal-based OAuth authentication with `omp login`, including browser-assisted login, account and organization details, and automatic model discovery refresh. Added provider support for `org-scoped-identity`, `oauth-token-env`, and per-account OAuth priority/reserve policies through `auth.accountPolicies`, with policy state shown by `omp usage`.
+- Added the `daybreak` badge to `omp usage` for enabled accounts.
+- Added `/export` and `/usage` to focused subagent views for exporting a focused transcript and viewing account usage without returning to the main session.
+- Pasted clipboard images are now saved in the session artifact directory, allowing agents to read, copy, or upload them by file path.
+- Added `/annotate` for attaching notes to diffs, replies, session messages, files, or quoted text and inserting or sending those notes in prompts and reviews.
+- Added configurable MCP startup behavior through `MCP_STARTUP_TIMEOUT_MS`/`mcp.startupTimeoutMs` and `OMP_MCP_REQUIRE_READY=1`, allowing headless runs to require MCP servers to become ready before the first turn.
+- Added native judgment usage reporting, including error stop reasons and messages, and added `openrouter/~typesafe/jev-latest` as a native judge candidate.
 
 ### Changed
 
-- Unified terminal OAuth flow logic across `omp login` and `omp auth-broker login`
-- Included identity account/organization info in terminal login success messages
-- Changed judgment fallback to consider only native candidates, preventing prompted models from replacing failed natives
+- Session compaction now supports native Anthropic snapshot branches and rewinds.
+- The default `bash.autoBackground.strategy` is now `catalog`.
+- The `Launch` configuration group has been renamed to `Services`.
+- Terminal OAuth behavior is now consistent between `omp login` and `omp auth-broker login`.
+- Judgment fallback now uses only native candidates, preventing prompted models from replacing failed native judges.
+- Browser screenshot comparisons now tolerate minor rasterizer differences.
 
 ### Fixed
 
-- Fixed comma-separated line selectors such as `:19,59` in `read`, `grep` paths, and `fetch` reading from the first number through EOF. A bare number in a list is now that single line; a lone `:50` still reads from line 50.
-- Fixed `write` success text reporting JavaScript string length as bytes. The count is now the UTF-8 byte length.
-- Fixed headless print mode (`-p`) silently dropping MCP servers slower than the startup window; print mode now waits for configured servers (bounded by `OMP_MCP_TIMEOUT_MS`) and warns on stderr when one is not ready ([#12188](https://github.com/can1357/oh-my-pi/issues/12188), reported by [@aaronjmars](https://github.com/aaronjmars)).
+- Fixed credential-aware API key resolution during authentication rotation.
+- Fixed comma-separated line selectors in `read`, `grep` paths, and `fetch`; selectors now read the requested range, while a bare number selects only that line.
+- Fixed `write` reporting JavaScript character counts instead of UTF-8 byte counts.
+- Fixed background job and service status reporting, including incorrect durations, reused job IDs, stale logs after named-service restarts, and foreground calls incorrectly appearing as background jobs.
+- Fixed `wait` and agent messaging so completed subagent results and peer messages are delivered reliably, including when a wait is interrupted by an incoming message.
+- Fixed headless print mode dropping or silently ignoring MCP servers that start slowly; it now waits within the configured timeout and warns when a server is not ready.
+- Fixed reader-mode `fetch` sending inline SVG icons and base64 images as unreadable model input; alt text is retained instead.
+- Fixed long non-Latin judged TTSR output exceeding token limits by applying token-aware truncation.
 
 ## [18.2.11] - 2026-09-23
 
@@ -2712,3 +2731,4 @@
 Older entries are archived in [packages\coding-agent\CHANGELOG.md@66783f3c68ba](https://github.com/can1357/oh-my-pi/blob/66783f3c68ba682828e684c33070fa2c905a55a4/packages\coding-agent\CHANGELOG.md).
 Older entries are archived in [packages/coding-agent/CHANGELOG.md@4c6407864c6e](https://github.com/can1357/oh-my-pi/blob/4c6407864c6e2b66d3d1e7852beab736058abb0f/packages/coding-agent/CHANGELOG.md).
 Older entries are archived in [packages/coding-agent/CHANGELOG.md@da359efe2858](https://github.com/can1357/oh-my-pi/blob/da359efe2858f68baa4ae290574c7c4c9c8da3c3/packages/coding-agent/CHANGELOG.md).
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@3642216898e4](https://github.com/can1357/oh-my-pi/blob/3642216898e473f6a4472e78f792e641891c6d62/packages/coding-agent/CHANGELOG.md).

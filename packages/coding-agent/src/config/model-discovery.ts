@@ -6,7 +6,13 @@
  * discovery lives in pi-catalog's provider-models.
  */
 import { type ApiKey, withAuth } from "@oh-my-pi/pi-ai/auth-retry";
-import type { Api, FetchImpl, Model, RemoteCompactionConfig } from "@oh-my-pi/pi-ai/types";
+import { getAppleFoundationModelsAvailability } from "@oh-my-pi/pi-ai/providers/apple-foundation-models";
+import type {
+	Api,
+	FetchImpl,
+	Model,
+	RemoteCompactionConfig,
+} from "@oh-my-pi/pi-ai/types";
 import { buildDiscoveredModel, buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	getBundledModelReferenceIndex,
@@ -22,7 +28,11 @@ import {
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
 	resolveLiteLLMApi,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
+import type {
+	KindApiKind,
+	ModelSpec,
+	OpenAICompat,
+} from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
@@ -35,8 +45,10 @@ import type { ProviderDiscovery } from "./models-config-schema";
 // mid-stream when models hit the cap on legitimate large tool calls (see
 // issue #1528: `write` payloads >~5KB on deepseek-v4-pro surfaced as
 // "socket connection was closed unexpectedly").
-export const DISCOVERY_DEFAULT_CONTEXT_WINDOW = OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
-export const DISCOVERY_DEFAULT_MAX_TOKENS = OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
+export const DISCOVERY_DEFAULT_CONTEXT_WINDOW =
+	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+export const DISCOVERY_DEFAULT_MAX_TOKENS =
+	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
 const MAX_MODEL_DISCOVERY_PAGES = 100;
 
 /**
@@ -64,7 +76,10 @@ export class DiscoveryHttpError extends Error {
  * never masquerades as a dead endpoint (issue #12281).
  */
 export function isDiscoveryAuthRejection(error: unknown): boolean {
-	return error instanceof DiscoveryHttpError && (error.status === 401 || error.status === 403);
+	return (
+		error instanceof DiscoveryHttpError &&
+		(error.status === 401 || error.status === 403)
+	);
 }
 
 /**
@@ -77,7 +92,10 @@ export function isDiscoveryAuthRejection(error: unknown): boolean {
  * `AbortSignal.timeout()`, whose delayed reason previously crashed Bun's
  * concurrent GC during an unrelated allocation.
  */
-async function withTimeoutSignal<T>(timeoutMs: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function withTimeoutSignal<T>(
+	timeoutMs: number,
+	fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
 	const controller = new AbortController();
 	const timeout = Promise.withResolvers<never>();
 	const timer = setTimeout(() => {
@@ -106,8 +124,16 @@ const REMOTE_DISCOVERY_TIMEOUT_MS = 10_000;
  * empty (issue #7087). Anything that is not strictly loopback therefore gets
  * {@link REMOTE_DISCOVERY_TIMEOUT_MS}.
  */
-export function discoveryProbeTimeoutMs(baseUrl: string, loopbackMs: number, customTimeoutMs?: number): number {
-	if (typeof customTimeoutMs === "number" && customTimeoutMs > 0 && Number.isFinite(customTimeoutMs)) {
+export function discoveryProbeTimeoutMs(
+	baseUrl: string,
+	loopbackMs: number,
+	customTimeoutMs?: number,
+): number {
+	if (
+		typeof customTimeoutMs === "number" &&
+		customTimeoutMs > 0 &&
+		Number.isFinite(customTimeoutMs)
+	) {
 		return customTimeoutMs;
 	}
 	let hostname: string;
@@ -118,7 +144,10 @@ export function discoveryProbeTimeoutMs(baseUrl: string, loopbackMs: number, cus
 	}
 	hostname = hostname.replace(/^\[/, "").replace(/\]$/, "");
 	const isLoopback =
-		hostname === "localhost" || hostname === "0.0.0.0" || hostname === "::1" || hostname.startsWith("127.");
+		hostname === "localhost" ||
+		hostname === "0.0.0.0" ||
+		hostname === "::1" ||
+		hostname.startsWith("127.");
 	return isLoopback ? loopbackMs : REMOTE_DISCOVERY_TIMEOUT_MS;
 }
 
@@ -137,7 +166,10 @@ function normalizeOllamaHostEnv(value: string | undefined): string | undefined {
 				: `http://${trimmed}`;
 	try {
 		const parsed = new URL(candidate);
-		if (!parsed.hostname || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+		if (
+			!parsed.hostname ||
+			(parsed.protocol !== "http:" && parsed.protocol !== "https:")
+		) {
 			return undefined;
 		}
 		if (!parsed.port && parsed.protocol === "http:") {
@@ -151,7 +183,11 @@ function normalizeOllamaHostEnv(value: string | undefined): string | undefined {
 
 export function getImplicitOllamaBaseUrl(): string {
 	const baseUrl = Bun.env.OLLAMA_BASE_URL?.trim();
-	return baseUrl || normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST) || DEFAULT_OLLAMA_BASE_URL;
+	return (
+		baseUrl ||
+		normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST) ||
+		DEFAULT_OLLAMA_BASE_URL
+	);
 }
 
 export function getOllamaContextLengthOverride(): number | undefined {
@@ -173,7 +209,9 @@ const DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC = 8_192;
 
 /** Routes discovered-model `maxTokens` defaults around Anthropic's 3× output divisor. */
 export function discoveryDefaultMaxTokens(api: Api | undefined): number {
-	return api === "anthropic-messages" ? DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC : DISCOVERY_DEFAULT_MAX_TOKENS;
+	return api === "anthropic-messages"
+		? DISCOVERY_DEFAULT_MAX_TOKENS_ANTHROPIC
+		: DISCOVERY_DEFAULT_MAX_TOKENS;
 }
 
 export interface DiscoveryProviderConfig {
@@ -267,9 +305,13 @@ function isLlamaCppUnlimitedSentinel(value: unknown): boolean {
  * server bounds generation by the runtime context window. Anything else
  * leaves the discovery default in place.
  */
-function extractLlamaCppMaxTokens(payload: Record<string, unknown>): "contextWindow" | undefined {
+function extractLlamaCppMaxTokens(
+	payload: Record<string, unknown>,
+): "contextWindow" | undefined {
 	const generationSettings = payload.default_generation_settings;
-	const params = isRecord(generationSettings) ? generationSettings.params : undefined;
+	const params = isRecord(generationSettings)
+		? generationSettings.params
+		: undefined;
 	const candidates = [
 		isRecord(params) ? params.max_tokens : undefined,
 		isRecord(params) ? params.n_predict : undefined,
@@ -278,16 +320,23 @@ function extractLlamaCppMaxTokens(payload: Record<string, unknown>): "contextWin
 		payload.max_tokens,
 		payload.n_predict,
 	];
-	return candidates.some(isLlamaCppUnlimitedSentinel) ? "contextWindow" : undefined;
+	return candidates.some(isLlamaCppUnlimitedSentinel)
+		? "contextWindow"
+		: undefined;
 }
 
-function resolveLlamaCppMaxTokens(contextWindow: number, maxTokens: "contextWindow" | undefined): number {
+function resolveLlamaCppMaxTokens(
+	contextWindow: number,
+	maxTokens: "contextWindow" | undefined,
+): number {
 	return maxTokens === "contextWindow"
 		? contextWindow
 		: Math.min(contextWindow, maxTokens ?? DISCOVERY_DEFAULT_MAX_TOKENS);
 }
 
-function extractOllamaRuntimeContextWindow(payload: Record<string, unknown>): number | undefined {
+function extractOllamaRuntimeContextWindow(
+	payload: Record<string, unknown>,
+): number | undefined {
 	const parameters = payload.parameters;
 	if (typeof parameters !== "string") {
 		return undefined;
@@ -296,7 +345,9 @@ function extractOllamaRuntimeContextWindow(payload: Record<string, unknown>): nu
 	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
 }
 
-function extractOllamaContextWindow(payload: Record<string, unknown>): number | undefined {
+function extractOllamaContextWindow(
+	payload: Record<string, unknown>,
+): number | undefined {
 	const runtimeContextWindow = extractOllamaRuntimeContextWindow(payload);
 	if (runtimeContextWindow !== undefined) {
 		return runtimeContextWindow;
@@ -317,7 +368,9 @@ function extractOllamaContextWindow(payload: Record<string, unknown>): number | 
 	return undefined;
 }
 
-function extractLlamaCppContextWindow(payload: Record<string, unknown>): number | undefined {
+function extractLlamaCppContextWindow(
+	payload: Record<string, unknown>,
+): number | undefined {
 	const generationSettings = payload.default_generation_settings;
 	if (isRecord(generationSettings)) {
 		const contextWindow = toPositiveNumberOrUndefined(generationSettings.n_ctx);
@@ -330,7 +383,10 @@ function extractLlamaCppContextWindow(payload: Record<string, unknown>): number 
 
 function extractLlamaCppModelContextWindows(
 	item: Record<string, unknown>,
-): Pick<LlamaCppModelListEntry, "runtimeContextWindow" | "trainingContextWindow"> {
+): Pick<
+	LlamaCppModelListEntry,
+	"runtimeContextWindow" | "trainingContextWindow"
+> {
 	const meta = item.meta;
 	if (!isRecord(meta)) {
 		return {};
@@ -341,9 +397,14 @@ function extractLlamaCppModelContextWindows(
 	};
 }
 
-function extractLlamaCppModelInputCapabilities(item: Record<string, unknown>): ("text" | "image")[] | undefined {
+function extractLlamaCppModelInputCapabilities(
+	item: Record<string, unknown>,
+): ("text" | "image")[] | undefined {
 	const architecture = item.architecture;
-	if (!isRecord(architecture) || !Array.isArray(architecture.input_modalities)) {
+	if (
+		!isRecord(architecture) ||
+		!Array.isArray(architecture.input_modalities)
+	) {
 		return undefined;
 	}
 	const modalities = new Set<string>();
@@ -359,7 +420,7 @@ function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
 	if (!isRecord(payload) || !Array.isArray(payload.data)) {
 		return [];
 	}
-	return payload.data.flatMap(item => {
+	return payload.data.flatMap((item) => {
 		if (!isRecord(item) || typeof item.id !== "string" || !item.id) {
 			return [];
 		}
@@ -406,7 +467,9 @@ function extractLlamaCppCtxSizeFromIni(value: unknown): number | undefined {
 	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
 }
 
-function extractLlamaCppConfiguredContextWindow(item: Record<string, unknown>): number | undefined {
+function extractLlamaCppConfiguredContextWindow(
+	item: Record<string, unknown>,
+): number | undefined {
 	const status = item.status;
 	if (!isRecord(status)) {
 		return undefined;
@@ -418,7 +481,9 @@ function extractLlamaCppConfiguredContextWindow(item: Record<string, unknown>): 
 	return extractLlamaCppCtxSizeFromIni(status.preset);
 }
 
-function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("text" | "image")[] | undefined {
+function extractLlamaCppInputCapabilities(
+	payload: Record<string, unknown>,
+): ("text" | "image")[] | undefined {
 	const modalities = payload.modalities;
 	if (!isRecord(modalities)) {
 		return undefined;
@@ -442,7 +507,40 @@ export function discoverModelsByProviderType(
 			return discoverProxyModels(providerConfig, ctx);
 		case "litellm":
 			return discoverLiteLLMModels(providerConfig, ctx);
+		case "apple-foundation-models":
+			return discoverAppleFoundationModels(providerConfig);
 	}
+}
+
+/**
+ * Offers Apple's on-device model when the in-process bridge reports it usable;
+ * an ineligible device, disabled Apple Intelligence, or an omp build without
+ * the bridge yields no models.
+ */
+async function discoverAppleFoundationModels(
+	providerConfig: DiscoveryProviderConfig,
+): Promise<Model<Api>[]> {
+	const availability = await getAppleFoundationModelsAvailability();
+	if (!availability.available) return [];
+	const contextWindow =
+		availability.contextSize ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+	return [
+		buildModel({
+			id: "on-device",
+			name: availability.variant
+				? `Apple ${availability.variant}`
+				: "Apple Foundation Model",
+			api: providerConfig.api,
+			provider: providerConfig.provider,
+			baseUrl: providerConfig.baseUrl ?? "local://apple-foundation-models",
+			reasoning: availability.reasoningCapable ?? false,
+			input: availability.vision ? ["text", "image"] : ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow,
+			maxTokens: Math.min(contextWindow, DISCOVERY_DEFAULT_MAX_TOKENS),
+			supportsTools: availability.toolCalling ?? true,
+		} as ModelSpec<Api>),
+	];
 }
 
 async function discoverOllamaModelMetadata(
@@ -454,18 +552,21 @@ async function discoverOllamaModelMetadata(
 ): Promise<OllamaDiscoveredModelMetadata | null> {
 	const showUrl = `${endpoint}/api/show`;
 	try {
-		const payload = await withTimeoutSignal(discoveryProbeTimeoutMs(endpoint, 150, customTimeoutMs), async signal => {
-			const response = await ctx.fetch(showUrl, {
-				method: "POST",
-				headers: { ...headers, "Content-Type": "application/json" },
-				body: JSON.stringify({ model: modelId }),
-				signal,
-			});
-			if (!response.ok) {
-				return null;
-			}
-			return (await response.json()) as unknown;
-		});
+		const payload = await withTimeoutSignal(
+			discoveryProbeTimeoutMs(endpoint, 150, customTimeoutMs),
+			async (signal) => {
+				const response = await ctx.fetch(showUrl, {
+					method: "POST",
+					headers: { ...headers, "Content-Type": "application/json" },
+					body: JSON.stringify({ model: modelId }),
+					signal,
+				});
+				if (!response.ok) {
+					return null;
+				}
+				return (await response.json()) as unknown;
+			},
+		);
 		if (!isRecord(payload)) {
 			return null;
 		}
@@ -473,9 +574,12 @@ async function discoverOllamaModelMetadata(
 		const capabilities = payload.capabilities;
 		if (Array.isArray(capabilities)) {
 			const normalized = new Set(
-				capabilities.flatMap(capability => (typeof capability === "string" ? [capability.toLowerCase()] : [])),
+				capabilities.flatMap((capability) =>
+					typeof capability === "string" ? [capability.toLowerCase()] : [],
+				),
 			);
-			const supportsVision = normalized.has("vision") || normalized.has("image");
+			const supportsVision =
+				normalized.has("vision") || normalized.has("image");
 			return {
 				reasoning: normalized.has("thinking"),
 				input: supportsVision ? ["text", "image"] : ["text"],
@@ -489,7 +593,8 @@ async function discoverOllamaModelMetadata(
 				contextWindow,
 			};
 		}
-		const supportsVision = capabilities.vision === true || capabilities.image === true;
+		const supportsVision =
+			capabilities.vision === true || capabilities.image === true;
 		return {
 			reasoning: capabilities.thinking === true,
 			input: supportsVision ? ["text", "image"] : ["text"],
@@ -508,32 +613,43 @@ export async function discoverOllamaModels(
 	const tagsUrl = `${endpoint}/api/tags`;
 	const headers = { ...providerConfig.headers };
 	const customTimeoutMs = providerConfig.discovery.timeoutMs;
-	const payload = await withTimeoutSignal(discoveryProbeTimeoutMs(endpoint, 250, customTimeoutMs), async signal => {
-		const response = await ctx.fetch(tagsUrl, {
-			headers,
-			signal,
-		});
-		if (!response.ok) {
-			throw new DiscoveryHttpError(response.status, tagsUrl);
-		}
-		return (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
-	});
-	const entries = (payload.models ?? []).flatMap(item => {
+	const payload = await withTimeoutSignal(
+		discoveryProbeTimeoutMs(endpoint, 250, customTimeoutMs),
+		async (signal) => {
+			const response = await ctx.fetch(tagsUrl, {
+				headers,
+				signal,
+			});
+			if (!response.ok) {
+				throw new DiscoveryHttpError(response.status, tagsUrl);
+			}
+			return (await response.json()) as {
+				models?: Array<{ name?: string; model?: string }>;
+			};
+		},
+	);
+	const entries = (payload.models ?? []).flatMap((item) => {
 		const id = item.model || item.name;
 		return id ? [{ id, name: item.name || id }] : [];
 	});
 	const metadataById = new Map(
 		await Promise.all(
 			entries.map(
-				async entry =>
+				async (entry) =>
 					[
 						entry.id,
-						await discoverOllamaModelMetadata(ctx, endpoint, entry.id, headers, customTimeoutMs),
+						await discoverOllamaModelMetadata(
+							ctx,
+							endpoint,
+							entry.id,
+							headers,
+							customTimeoutMs,
+						),
 					] as const,
 			),
 		),
 	);
-	return entries.map(entry => {
+	return entries.map((entry) => {
 		const metadata = metadataById.get(entry.id);
 		return buildModel({
 			id: entry.id,
@@ -545,8 +661,12 @@ export async function discoverOllamaModels(
 			input: metadata?.input ?? ["text"],
 			imageInputDecoder: "stb",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: metadata?.contextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW,
-			maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
+			contextWindow:
+				metadata?.contextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW,
+			maxTokens: Math.min(
+				metadata?.contextWindow ?? Number.POSITIVE_INFINITY,
+				DISCOVERY_DEFAULT_MAX_TOKENS,
+			),
 			headers: providerConfig.headers,
 		} as ModelSpec<Api>);
 	});
@@ -560,16 +680,19 @@ async function discoverLlamaCppServerMetadata(
 ): Promise<LlamaCppDiscoveredServerMetadata | null> {
 	const propsUrl = `${toLlamaCppNativeBaseUrl(baseUrl)}/props`;
 	try {
-		const payload = await withTimeoutSignal(discoveryProbeTimeoutMs(baseUrl, 150, customTimeoutMs), async signal => {
-			const response = await ctx.fetch(propsUrl, {
-				headers,
-				signal,
-			});
-			if (!response.ok) {
-				return null;
-			}
-			return (await response.json()) as unknown;
-		});
+		const payload = await withTimeoutSignal(
+			discoveryProbeTimeoutMs(baseUrl, 150, customTimeoutMs),
+			async (signal) => {
+				const response = await ctx.fetch(propsUrl, {
+					headers,
+					signal,
+				});
+				if (!response.ok) {
+					return null;
+				}
+				return (await response.json()) as unknown;
+			},
+		);
 		if (!isRecord(payload)) {
 			return null;
 		}
@@ -595,24 +718,29 @@ export async function discoverLlamaCppModels(
 	const customTimeoutMs = providerConfig.discovery.timeoutMs;
 	const attempt = async (h: Record<string, string>) => {
 		const [payload, metadata] = await Promise.all([
-			withTimeoutSignal(discoveryProbeTimeoutMs(baseUrl, 250, customTimeoutMs), async signal => {
-				const response = await ctx.fetch(modelsUrl, {
-					headers: h,
-					signal,
-				});
-				if (!response.ok) {
-					throw new DiscoveryHttpError(response.status, modelsUrl);
-				}
-				headers = h;
-				return (await response.json()) as unknown;
-			}),
+			withTimeoutSignal(
+				discoveryProbeTimeoutMs(baseUrl, 250, customTimeoutMs),
+				async (signal) => {
+					const response = await ctx.fetch(modelsUrl, {
+						headers: h,
+						signal,
+					});
+					if (!response.ok) {
+						throw new DiscoveryHttpError(response.status, modelsUrl);
+					}
+					headers = h;
+					return (await response.json()) as unknown;
+				},
+			),
 			discoverLlamaCppServerMetadata(ctx, baseUrl, h, customTimeoutMs),
 		]);
 		return [payload, metadata] as const;
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const [payload, serverMetadata] = apiKey
-		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		? await withAuth(apiKey, (key) =>
+				attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }),
+			)
 		: await attempt(baseHeaders);
 	const models = parseLlamaCppModelList(payload);
 	const discovered: Model<Api>[] = [];
@@ -638,7 +766,10 @@ export async function discoverLlamaCppModels(
 					imageInputDecoder: "stb",
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow,
-					maxTokens: resolveLlamaCppMaxTokens(contextWindow, serverMetadata?.maxTokens),
+					maxTokens: resolveLlamaCppMaxTokens(
+						contextWindow,
+						serverMetadata?.maxTokens,
+					),
 					headers,
 				},
 				providerConfig.discovery.type,
@@ -663,22 +794,30 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 	const baseHeaders: Record<string, string> = { ...model.headers };
 	const attempt = async (headers: Record<string, string>) => {
 		const [entries, serverMetadata] = await Promise.all([
-			withTimeoutSignal(discoveryProbeTimeoutMs(nativeBaseUrl, 250, customTimeoutMs), async signal => {
-				const response = await ctx.fetch(modelsUrl, {
-					headers,
-					signal,
-				});
-				if (!response.ok) {
-					return undefined;
-				}
-				return parseLlamaCppModelList(await response.json());
-			}),
-			discoverLlamaCppServerMetadata(ctx, nativeBaseUrl, headers, customTimeoutMs),
+			withTimeoutSignal(
+				discoveryProbeTimeoutMs(nativeBaseUrl, 250, customTimeoutMs),
+				async (signal) => {
+					const response = await ctx.fetch(modelsUrl, {
+						headers,
+						signal,
+					});
+					if (!response.ok) {
+						return undefined;
+					}
+					return parseLlamaCppModelList(await response.json());
+				},
+			),
+			discoverLlamaCppServerMetadata(
+				ctx,
+				nativeBaseUrl,
+				headers,
+				customTimeoutMs,
+			),
 		]);
 		if (!entries) {
 			return undefined;
 		}
-		const entry = entries.find(entry => entry.id === model.id);
+		const entry = entries.find((entry) => entry.id === model.id);
 		if (!entry) {
 			return undefined;
 		}
@@ -693,14 +832,19 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 		}
 		return {
 			contextWindow,
-			maxTokens: resolveLlamaCppMaxTokens(contextWindow, serverMetadata?.maxTokens),
+			maxTokens: resolveLlamaCppMaxTokens(
+				contextWindow,
+				serverMetadata?.maxTokens,
+			),
 			...(input !== undefined ? { input } : {}),
 		};
 	};
 	try {
 		const apiKey = await ctx.getBearerApiKeyResolver(model.provider);
 		return apiKey
-			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			? await withAuth(apiKey, (key) =>
+					attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }),
+				)
 			: await attempt(baseHeaders);
 	} catch {
 		return undefined;
@@ -727,7 +871,10 @@ export async function discoverLlamaCppModelRuntimeMetadata(
  * of its own.
  */
 export async function discoverLmStudioModelRuntimeMetadata(
-	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers" | "maxTokens">,
+	model: Pick<
+		Model<Api>,
+		"provider" | "id" | "baseUrl" | "headers" | "maxTokens"
+	>,
 	ctx: DiscoveryContext,
 	customTimeoutMs?: number,
 ): Promise<DiscoveredModelRuntimeMetadata | undefined> {
@@ -735,7 +882,7 @@ export async function discoverLmStudioModelRuntimeMetadata(
 	const timeoutMs = customTimeoutMs ?? 10_000;
 	const baseHeaders: Record<string, string> = { ...model.headers };
 	const attempt = async (headers: Record<string, string>) => {
-		const metadata = await withTimeoutSignal(timeoutMs, signal =>
+		const metadata = await withTimeoutSignal(timeoutMs, (signal) =>
 			fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers, signal }),
 		);
 		const entry = metadata?.get(model.id);
@@ -748,18 +895,34 @@ export async function discoverLmStudioModelRuntimeMetadata(
 		}
 		return {
 			contextWindow,
-			...(typeof model.maxTokens === "number" ? { maxTokens: model.maxTokens } : {}),
+			...(typeof model.maxTokens === "number"
+				? { maxTokens: model.maxTokens }
+				: {}),
 			...(entry.input !== undefined ? { input: entry.input } : {}),
 		};
 	};
 	try {
 		const apiKey = await ctx.getBearerApiKeyResolver(model.provider);
 		return apiKey
-			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			? await withAuth(apiKey, (key) =>
+					attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }),
+				)
 			: await attempt(baseHeaders);
 	} catch {
 		return undefined;
 	}
+}
+
+/** Lowercased modality names collected from every shape an OpenAI-compatible row may use. */
+function collectModalities(values: readonly unknown[]): Set<string> {
+	const modalities = new Set<string>();
+	for (const value of values) {
+		if (!Array.isArray(value)) continue;
+		for (const entry of value) {
+			if (typeof entry === "string") modalities.add(entry.toLowerCase());
+		}
+	}
+	return modalities;
 }
 
 /**
@@ -773,18 +936,54 @@ function extractOpenAIModelsListInputCapabilities(item: {
 	input_modalities?: unknown;
 	architecture?: unknown;
 }): ("text" | "image")[] | undefined {
-	const modalities = new Set<string>();
-	const collect = (value: unknown): void => {
-		if (!Array.isArray(value)) return;
-		for (const entry of value) {
-			if (typeof entry === "string") modalities.add(entry.toLowerCase());
-		}
-	};
-	collect(item.input);
-	collect(item.input_modalities);
-	if (isRecord(item.architecture)) collect(item.architecture.input_modalities);
+	const architecture = isRecord(item.architecture)
+		? item.architecture
+		: undefined;
+	const modalities = collectModalities([
+		item.input,
+		item.input_modalities,
+		architecture?.input_modalities,
+	]);
 	if (modalities.size === 0) return undefined;
 	return modalities.has("image") ? ["text", "image"] : ["text"];
+}
+
+/**
+ * Map an explicit non-chat output modality onto the runner kind and API that
+ * serves it. Only endpoint-unambiguous tasks are routed: a row whose sole
+ * output is `embeddings` or an image answers through the `/embeddings` and
+ * `/images/generations` surfaces of the same OpenAI-compatible root the
+ * provider already serves its model list from.
+ *
+ * Anything else stays chat. Rows that also emit `text` are ordinary (multimodal)
+ * chat models, and an `audio` or `video` output alone cannot distinguish a TTS
+ * SKU from a music generator, or a chat response from a video-job API — those
+ * need explicit task metadata this list shape does not carry.
+ */
+function extractOpenAIModelsListOutputTask(item: {
+	output?: unknown;
+	output_modalities?: unknown;
+	architecture?: unknown;
+}): { kind: KindApiKind; api: Api } | undefined {
+	const architecture = isRecord(item.architecture)
+		? item.architecture
+		: undefined;
+	const modalities = collectModalities([
+		item.output,
+		item.output_modalities,
+		architecture?.output_modalities,
+	]);
+	if (modalities.size !== 1) return undefined;
+	const [modality] = modalities;
+	switch (modality) {
+		case "embedding":
+		case "embeddings":
+			return { kind: "embedding", api: "openai-embeddings" };
+		case "image":
+			return { kind: "image", api: "openai-images" };
+		default:
+			return undefined;
+	}
 }
 
 export async function discoverOpenAIModelsList(
@@ -806,7 +1005,9 @@ export async function discoverOpenAIModelsList(
 	const baseHeaders: Record<string, string> = { ...providerConfig.headers };
 	if (
 		providerConfig.api === "anthropic-messages" &&
-		!Object.keys(baseHeaders).some(name => name.toLowerCase() === "anthropic-version")
+		!Object.keys(baseHeaders).some(
+			(name) => name.toLowerCase() === "anthropic-version",
+		)
 	) {
 		baseHeaders["anthropic-version"] = "2023-06-01";
 	}
@@ -822,6 +1023,8 @@ export async function discoverOpenAIModelsList(
 		capabilities?: unknown;
 		input?: unknown;
 		input_modalities?: unknown;
+		output?: unknown;
+		output_modalities?: unknown;
 		architecture?: unknown;
 		mode?: unknown;
 	}
@@ -833,12 +1036,15 @@ export async function discoverOpenAIModelsList(
 	const attempt = async (h: Record<string, string>) => {
 		const nativeMetadataPromise =
 			providerConfig.discovery.type === "lm-studio"
-				? withTimeoutSignal(timeoutMs, signal =>
-						fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers: h, signal }),
+				? withTimeoutSignal(timeoutMs, (signal) =>
+						fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, {
+							headers: h,
+							signal,
+						}),
 					)
 				: Promise.resolve(null);
 		const [payload, nativeMetadata] = await Promise.all([
-			withTimeoutSignal(timeoutMs, async signal => {
+			withTimeoutSignal(timeoutMs, async (signal) => {
 				const data: ModelListItem[] = [];
 				const seenCursors = new Set<string>();
 				let pageUrl = modelsUrl;
@@ -847,12 +1053,18 @@ export async function discoverOpenAIModelsList(
 					if (!res.ok) throw new DiscoveryHttpError(res.status, pageUrl);
 					const payload = (await res.json()) as ModelListPayload;
 					data.push(...(Array.isArray(payload.data) ? payload.data : []));
-					if (providerConfig.api !== "anthropic-messages" || payload.has_more !== true) {
+					if (
+						providerConfig.api !== "anthropic-messages" ||
+						payload.has_more !== true
+					) {
 						headers = h;
 						return { data } satisfies ModelListPayload;
 					}
 					const fallbackCursor = data.at(-1)?.id;
-					const cursor = typeof payload.last_id === "string" ? payload.last_id : fallbackCursor;
+					const cursor =
+						typeof payload.last_id === "string"
+							? payload.last_id
+							: fallbackCursor;
 					if (!cursor || seenCursors.has(cursor)) {
 						throw new Error(`Invalid pagination cursor from ${pageUrl}`);
 					}
@@ -861,7 +1073,9 @@ export async function discoverOpenAIModelsList(
 					nextUrl.searchParams.set("after_id", cursor);
 					pageUrl = nextUrl.toString();
 				}
-				throw new Error(`Model discovery exceeded ${MAX_MODEL_DISCOVERY_PAGES} pages from ${modelsUrl}`);
+				throw new Error(
+					`Model discovery exceeded ${MAX_MODEL_DISCOVERY_PAGES} pages from ${modelsUrl}`,
+				);
 			}),
 			nativeMetadataPromise,
 		]);
@@ -869,8 +1083,11 @@ export async function discoverOpenAIModelsList(
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const [payload, nativeMetadata] = apiKey
-		? await withAuth(apiKey, key => {
-				if (providerConfig.api !== "anthropic-messages" || providerConfig.authHeader === true) {
+		? await withAuth(apiKey, (key) => {
+				if (
+					providerConfig.api !== "anthropic-messages" ||
+					providerConfig.authHeader === true
+				) {
 					return attempt({ ...baseHeaders, Authorization: `Bearer ${key}` });
 				}
 				// Anthropic's Messages-compatible model-list endpoint uses the same
@@ -888,7 +1105,11 @@ export async function discoverOpenAIModelsList(
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
-		if (providerConfig.discovery.type === "litellm" && !isSelectableLiteLLMModelMode(item.mode)) continue;
+		if (
+			providerConfig.discovery.type === "litellm" &&
+			!isSelectableLiteLLMModelMode(item.mode)
+		)
+			continue;
 		const nativeMetadataForModel = nativeMetadata?.get(id);
 		// Thin OpenAI-compatible proxies frequently omit `context_length`/
 		// `max_model_len` on `/v1/models`, leaving discovered models pinned at
@@ -899,25 +1120,68 @@ export async function discoverOpenAIModelsList(
 		// reasoning support — flows through when the provider is silent. Local
 		// runtime state and provider-reported values still win; proxy-specific
 		// headers/baseUrl/cost stay local.
-		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+		const reference = resolveModelReference(id, references) as
+			| ModelSpec<Api>
+			| undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
-		const api =
-			providerConfig.discovery.type === "litellm"
-				? resolveLiteLLMApi(undefined, id, providerConfig.api)
-				: providerConfig.api;
-		const contextWindow =
+		const input = nativeMetadataForModel?.input ??
+			extractOpenAIModelsListInputCapabilities(item) ??
+			reference?.input ?? ["text"];
+		const reportedContextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
 			toPositiveNumberOrUndefined(item.max_input_tokens) ??
 			nativeMetadataForModel?.contextWindow ??
 			reference?.contextWindow ??
-			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
-		const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
-		const thinkingCapability = capabilities?.thinking ?? capabilities?.reasoning ?? capabilities?.extended_thinking;
+			null;
+		// A row that advertises a dedicated task answers through that task's
+		// runner, not the provider's chat API: leaving it on chat both hides it
+		// from its own role and offers the picker a model the chat endpoint
+		// cannot serve (issue #13021).
+		const task = extractOpenAIModelsListOutputTask(item);
+		if (task) {
+			discovered.push(
+				buildModel({
+					id,
+					name: reference?.name ?? id,
+					api: task.api,
+					kind: task.kind,
+					provider: providerConfig.provider,
+					baseUrl,
+					reasoning: false,
+					input,
+					supportsTools: false,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					// Embeddings cap their input by context; image jobs carry no
+					// token window. Neither produces output tokens.
+					contextWindow:
+						task.kind === "embedding" ? reportedContextWindow : null,
+					maxTokens: null,
+					headers,
+				} as ModelSpec<Api>),
+			);
+			continue;
+		}
+		const api =
+			providerConfig.discovery.type === "litellm"
+				? resolveLiteLLMApi(undefined, id, providerConfig.api)
+				: providerConfig.api;
+		const contextWindow =
+			reportedContextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+		const capabilities = isRecord(item.capabilities)
+			? item.capabilities
+			: undefined;
+		const thinkingCapability =
+			capabilities?.thinking ??
+			capabilities?.reasoning ??
+			capabilities?.extended_thinking;
 		const supportsThinking =
-			thinkingCapability === true || (isRecord(thinkingCapability) && thinkingCapability.supported === true);
+			thinkingCapability === true ||
+			(isRecord(thinkingCapability) && thinkingCapability.supported === true);
 		const displayName =
-			typeof item.display_name === "string" && item.display_name.trim() ? item.display_name : undefined;
+			typeof item.display_name === "string" && item.display_name.trim()
+				? item.display_name
+				: undefined;
 		const advertisedMaxTokens = toPositiveNumberOrUndefined(item.max_tokens);
 		discovered.push(
 			buildModel({
@@ -927,11 +1191,15 @@ export async function discoverOpenAIModelsList(
 				provider: providerConfig.provider,
 				baseUrl,
 				reasoning: supportsThinking || reference?.reasoning === true,
-				thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
-				input: nativeMetadataForModel?.input ??
-					extractOpenAIModelsListInputCapabilities(item) ??
-					reference?.input ?? ["text"],
-				...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
+				thinking: inheritReferenceThinking(
+					undefined,
+					reference,
+					providerConfig.provider,
+				),
+				input,
+				...(providerConfig.discovery.type === "lm-studio"
+					? { imageInputDecoder: "stb" as const }
+					: {}),
 				// Proxy/gateway pricing is provider-specific and rarely matches
 				// upstream bundled catalogs, so keep costs local-unknown even
 				// when we successfully recover the upstream model identity.
@@ -941,14 +1209,17 @@ export async function discoverOpenAIModelsList(
 				// window so an ID collision with a larger bundled model can
 				// never request more tokens than the local runtime advertises.
 				maxTokens: Math.min(
-					advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
+					advertisedMaxTokens ??
+						reference?.maxTokens ??
+						discoveryDefaultMaxTokens(api),
 					contextWindow,
 				),
 				headers,
 				compat: {
 					supportsStore: false,
 					supportsDeveloperRole: false,
-					supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+					supportsReasoningEffort:
+						referenceCompat?.supportsReasoningEffort ?? false,
 					...(referenceCompat?.reasoningEffortMap
 						? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
 						: {}),
@@ -968,7 +1239,8 @@ export async function discoverLiteLLMModels(
 ): Promise<Model<Api>[]> {
 	const baseUrl = normalizeLiteLLMDiscoveryBaseUrl(providerConfig.baseUrl);
 	const references = getBundledModelReferenceIndex();
-	const resolveReference = (id: string) => resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+	const resolveReference = (id: string) =>
+		resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 	const baseHeaders: Record<string, string> = { ...providerConfig.headers };
 	let headers = baseHeaders;
 	const timeoutMs = providerConfig.discovery.timeoutMs ?? 10_000;
@@ -982,7 +1254,7 @@ export async function discoverLiteLLMModels(
 			}
 			return response;
 		};
-		const models = await withTimeoutSignal(timeoutMs, signal =>
+		const models = await withTimeoutSignal(timeoutMs, (signal) =>
 			fetchLiteLLMRichModels<Api>({
 				api: providerConfig.api,
 				provider: providerConfig.provider,
@@ -990,7 +1262,8 @@ export async function discoverLiteLLMModels(
 				headers: h,
 				fetch: authAwareFetch,
 				referenceResolver: resolveReference,
-				resolveApi: (entry, id) => resolveLiteLLMApi(entry, id, providerConfig.api),
+				resolveApi: (entry, id) =>
+					resolveLiteLLMApi(entry, id, providerConfig.api),
 				signal,
 			}),
 		);
@@ -1003,7 +1276,9 @@ export async function discoverLiteLLMModels(
 	let richModels: ModelSpec<Api>[] | null;
 	try {
 		richModels = apiKey
-			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			? await withAuth(apiKey, (key) =>
+					attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }),
+				)
 			: await attempt(baseHeaders);
 	} catch {
 		// The rich-metadata probes failed (auth, timeout, or network). The cheap
@@ -1016,7 +1291,7 @@ export async function discoverLiteLLMModels(
 	if (richModels === null) {
 		return discoverOpenAIModelsList({ ...providerConfig, baseUrl }, ctx);
 	}
-	return richModels.map(spec => buildModel({ ...spec, headers }));
+	return richModels.map((spec) => buildModel({ ...spec, headers }));
 }
 
 /**
@@ -1045,7 +1320,7 @@ export async function discoverProxyModels(
 	let headers = baseHeaders;
 	const timeoutMs = providerConfig.discovery.timeoutMs ?? 10_000;
 	const attempt = async (h: Record<string, string>) =>
-		withTimeoutSignal(timeoutMs, async signal => {
+		withTimeoutSignal(timeoutMs, async (signal) => {
 			const res = await ctx.fetch(modelsUrl, {
 				headers: h,
 				signal,
@@ -1055,12 +1330,19 @@ export async function discoverProxyModels(
 			}
 			headers = h;
 			return (await res.json()) as {
-				data?: Array<{ id?: string; name?: string; supported_endpoint_types?: string[]; context_length?: number }>;
+				data?: Array<{
+					id?: string;
+					name?: string;
+					supported_endpoint_types?: string[];
+					context_length?: number;
+				}>;
 			};
 		});
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const payload = apiKey
-		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+		? await withAuth(apiKey, (key) =>
+				attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }),
+			)
 		: await attempt(baseHeaders);
 	const items = payload.data ?? [];
 	const discovered: Model<Api>[] = [];
@@ -1075,7 +1357,10 @@ export async function discoverProxyModels(
 				: providerConfig.api;
 		if (!api) continue;
 		const isAnthropic = api === "anthropic-messages";
-		const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+		const reference = resolveModelReference(
+			id,
+			getBundledModelReferenceIndex(),
+		);
 		const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
 		const displayName =
 			(discoveryName && discoveryName !== id ? discoveryName : undefined) ??
@@ -1090,7 +1375,11 @@ export async function discoverProxyModels(
 				provider: providerConfig.provider,
 				baseUrl,
 				reasoning: reference?.reasoning ?? false,
-				thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
+				thinking: inheritReferenceThinking(
+					undefined,
+					reference,
+					providerConfig.provider,
+				),
 				input: reference?.input ?? ["text"],
 				// Proxy pricing is provider-specific and usually does not match
 				// upstream bundled catalogs, so keep costs local-unknown even when
@@ -1145,7 +1434,9 @@ function toLlamaCppNativeBaseUrl(baseUrl: string): string {
 	try {
 		const parsed = new URL(baseUrl);
 		const trimmedPath = parsed.pathname.replace(/\/+$/g, "");
-		parsed.pathname = trimmedPath.endsWith("/v1") ? trimmedPath.slice(0, -3) || "/" : trimmedPath || "/";
+		parsed.pathname = trimmedPath.endsWith("/v1")
+			? trimmedPath.slice(0, -3) || "/"
+			: trimmedPath || "/";
 		const normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 		return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 	} catch {
@@ -1154,7 +1445,9 @@ function toLlamaCppNativeBaseUrl(baseUrl: string): string {
 }
 
 export function normalizeLiteLLMDiscoveryBaseUrl(baseUrl?: string): string {
-	return normalizeOpenAIModelsListBaseUrl(baseUrl ?? "http://localhost:4000/v1");
+	return normalizeOpenAIModelsListBaseUrl(
+		baseUrl ?? "http://localhost:4000/v1",
+	);
 }
 
 export function normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
@@ -1163,7 +1456,9 @@ export function normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
 	try {
 		const parsed = new URL(raw);
 		const trimmedPath = parsed.pathname.replace(/\/+$/g, "");
-		parsed.pathname = trimmedPath.endsWith("/v1") ? trimmedPath || "/v1" : `${trimmedPath}/v1`;
+		parsed.pathname = trimmedPath.endsWith("/v1")
+			? trimmedPath || "/v1"
+			: `${trimmedPath}/v1`;
 		return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 	} catch {
 		return raw;
@@ -1180,7 +1475,9 @@ export function normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
  * the default normalizer does: chat appends `/chat/completions` to the base
  * string, so a retained query would corrupt the inference URL.
  */
-export function normalizeBareDiscoveryBaseUrl(baseUrl: string | undefined): string {
+export function normalizeBareDiscoveryBaseUrl(
+	baseUrl: string | undefined,
+): string {
 	const raw = baseUrl || "http://127.0.0.1:1234";
 	try {
 		const parsed = new URL(raw);
