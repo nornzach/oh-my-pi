@@ -1,6 +1,5 @@
 import { resolveRoleChain } from "../../config/model-resolver";
 import { resolveLocalSpeechModelId } from "../../tts/vocalizer";
-import type { SettingProvenance } from "../../config/settings";
 /**
  * RPC mode: Headless operation with JSON stdin/stdout protocol.
  *
@@ -10,7 +9,8 @@ import type { SettingProvenance } from "../../config/settings";
  * Protocol:
  * - Commands: JSON objects with `type` field, optional `id` for correlation
  * - Responses: JSON objects with `type: "response"`, `command`, `success`, and optional `data`/`error`
- * - Events: AgentSessionEvent objects streamed as they occur
+ * - Events: AgentSessionEvent objects streamed as they occur (message frames stamped with `messageId`)
+ * - Prompt completion: one `prompt_result` per accepted prompt, correlated by the command `id`
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import * as path from "node:path";
@@ -21,7 +21,8 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, logger, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
 import { roleCandidatePool } from "../../config/model-roles";
 import { buildRpcModelRoleMetadata, buildRpcModelRoles } from "./rpc-model-roles";
-import { SETTINGS_SCHEMA, type SettingPath } from "../../config/settings-schema";
+import { orderedSettings } from "../../config/all-settings";
+import { lookup as lookupSetting } from "../../config/registry";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -42,7 +43,7 @@ import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme 
 import { rebindMemoryBackendForCwd } from "../../hindsight/backend";
 import type { AgentSession } from "../../session/agent-session";
 import type { DroppedPrompt } from "../../session/agent-session-types";
-import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
+import { findMostRecentNonEmptySession } from "../../session/session-listing";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { SessionManager } from "../../session/session-manager";
 import { setSessionPinned } from "../../session/session-pins";
@@ -163,6 +164,14 @@ import { applyRpcForkFrom, applyRpcSwitchLeaf } from "./rpc-session-extra";
 import { buildRpcSessionTree } from "./rpc-session-tree";
 import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcOutputWriter } from "./rpc-output";
+import {
+	RpcExtensionUserMessageTracker,
+	RpcPromptResults,
+	type RpcPromptTicket,
+	watchAndReportPromptResult,
+} from "./rpc-prompt-results";
+import { RpcSessionEventForwarder } from "./rpc-session-events";
+import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
 import type {
@@ -181,6 +190,8 @@ import type {
 	RpcHostUriResult,
 	RpcModelCatalogUpdateFrame,
 	RpcReloadPluginsResult,
+	RpcOpenSessionResult,
+	RpcSettingProvenance,
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
@@ -304,8 +315,8 @@ export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text:
  * Slow half of a skill invocation: builds the skill prompt message (file I/O)
  * and dispatches it through the full prompt pipeline (usage preflight,
  * compaction checks, provider calls). Resolves once the turn is scheduled.
- * Must not run on the RPC serial queue's response path — register it with
- * watchAndReportLocalOnlyPromptResult and answer the command first.
+ * Must not run on the RPC serial queue's response path: `watchPrompt` starts
+ * the slow work after the command has been accepted.
  */
 export async function runRpcSkillCommand(
 	session: RpcSkillCommandSession,
@@ -328,18 +339,18 @@ export async function runRpcSkillCommand(
 
 /**
  * Skill branch of the `prompt` command: resolves the invocation cheaply, then
- * registers the slow dispatch with watchAndReportLocalOnlyPromptResult and
+ * registers the slow dispatch with watchAndReportPromptResult and
  * returns immediately. The caller answers the command right away — building
  * the skill prompt and running the prompt pipeline (usage preflight,
  * compaction, provider calls) can outlast any client's prompt timeout under
  * provider stress; the plain-prompt path responds first for the same reason.
  */
 export async function dispatchRpcSkillPrompt(input: {
-	id: string | undefined;
+	ticket: RpcPromptTicket;
 	session: RpcSkillCommandSession;
 	message: string;
 	streamingBehavior: "steer" | "followUp" | undefined;
-	output: (obj: object) => void;
+	results: RpcPromptResults;
 	onError: (error: Error) => void;
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 }): Promise<RpcSkillCommandResult | null> {
@@ -351,10 +362,10 @@ export async function dispatchRpcSkillPrompt(input: {
 	// promptCustomMessage pipeline (usage preflight, compaction, provider
 	// calls) is what moves behind the acknowledgement.
 	const built = await buildSkillPromptMessage(invocation.skill, invocation, "user");
-	watchAndReportLocalOnlyPromptResult({
-		id: input.id,
+	watchAndReportPromptResult({
+		ticket: input.ticket,
 		startPrompt: () => runRpcSkillCommand(input.session, invocation, input.streamingBehavior ?? "steer", built),
-		output: input.output,
+		results: input.results,
 		onError: input.onError,
 		extensionUserMessageTracker: input.extensionUserMessageTracker,
 	});
@@ -370,117 +381,6 @@ export async function tryRunRpcSkillCommand(
 	if (!invocation) return false;
 	await runRpcSkillCommand(session, invocation, streamingBehavior);
 	return { agentInvoked: true };
-}
-
-export function reportLocalOnlyPromptResult(input: {
-	id: string | undefined;
-	prompt: Promise<boolean>;
-	output: (obj: object) => void;
-	onError: (error: Error) => void;
-	hasExtensionAgentMessageTask?: () => boolean;
-	waitForExtensionAgentMessageTasks?: () => Promise<void>;
-}): void {
-	void input.prompt
-		.then(async agentInvoked => {
-			if (agentInvoked) return;
-			await input.waitForExtensionAgentMessageTasks?.();
-			if (!input.hasExtensionAgentMessageTask?.()) {
-				input.output({ type: "prompt_result", id: input.id, agentInvoked: false });
-			}
-		})
-		.catch(error => {
-			input.onError(error instanceof Error ? error : new Error(String(error)));
-		});
-}
-
-type RpcExtensionUserMessageScope = {
-	hasAgentMessageTask: boolean;
-	pendingAgentMessageTasks: Set<Promise<void>>;
-};
-
-/**
- * Tracks extension-originated messages while an RPC prompt is executing.
- * A slash command can resolve the outer prompt as local-only while also
- * scheduling agent work through pi.sendUserMessage() or pi.sendMessage()
- * with triggerTurn; that prompt must not report agentInvoked:false to the host.
- */
-export class RpcExtensionUserMessageTracker {
-	#activePromptScopes = new Set<RpcExtensionUserMessageScope>();
-
-	markAgentMessageTask(): void {
-		for (const scope of this.#activePromptScopes) {
-			scope.hasAgentMessageTask = true;
-		}
-	}
-
-	trackAgentMessageTask(task: Promise<unknown>): void {
-		for (const scope of this.#activePromptScopes) {
-			this.#trackAgentMessageTaskForScope(scope, task);
-		}
-	}
-
-	#trackAgentMessageTaskForScope(scope: RpcExtensionUserMessageScope, task: Promise<unknown>): void {
-		const scopedTask = task.then(
-			() => {
-				scope.hasAgentMessageTask = true;
-			},
-			() => {},
-		);
-		scope.pendingAgentMessageTasks.add(scopedTask);
-		void scopedTask.finally(() => {
-			scope.pendingAgentMessageTasks.delete(scopedTask);
-		});
-	}
-
-	async #waitForAgentMessageTasks(scope: RpcExtensionUserMessageScope): Promise<void> {
-		while (scope.pendingAgentMessageTasks.size > 0) {
-			await Promise.allSettled(Array.from(scope.pendingAgentMessageTasks));
-		}
-	}
-
-	watchPrompt<T>(startPrompt: () => Promise<T>): {
-		prompt: Promise<T>;
-		hasAgentMessageTask: () => boolean;
-		waitForAgentMessageTasks: () => Promise<void>;
-	} {
-		const scope: RpcExtensionUserMessageScope = {
-			hasAgentMessageTask: false,
-			pendingAgentMessageTasks: new Set(),
-		};
-		this.#activePromptScopes.add(scope);
-		let prompt: Promise<T>;
-		try {
-			prompt = startPrompt();
-		} catch (error) {
-			this.#activePromptScopes.delete(scope);
-			throw error;
-		}
-		return {
-			prompt: prompt.finally(() => {
-				this.#activePromptScopes.delete(scope);
-			}),
-			hasAgentMessageTask: () => scope.hasAgentMessageTask,
-			waitForAgentMessageTasks: () => this.#waitForAgentMessageTasks(scope),
-		};
-	}
-}
-
-export function watchAndReportLocalOnlyPromptResult(input: {
-	id: string | undefined;
-	startPrompt: () => Promise<boolean>;
-	output: (obj: object) => void;
-	onError: (error: Error) => void;
-	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
-}): void {
-	const trackedPrompt = input.extensionUserMessageTracker.watchPrompt(input.startPrompt);
-	reportLocalOnlyPromptResult({
-		id: input.id,
-		prompt: trackedPrompt.prompt,
-		output: input.output,
-		onError: input.onError,
-		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
-		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
-	});
 }
 
 /**
@@ -787,6 +687,44 @@ export async function handleRpcSessionChange(
 	throw new Error("Unsupported RPC session change command");
 }
 
+export type RpcOpenSessionSession = Pick<
+	AgentSession,
+	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages"
+>;
+
+/**
+ * Continue the newest non-empty session in `sessionDir`, or start a fresh one
+ * there — the runtime equivalent of `--session-dir <dir> --continue`, so a host
+ * can bind a pre-spawned process to a conversation it keys by directory.
+ * Reopening the session that is already active is a no-op and does not abort a run.
+ *
+ * @throws Error when the process runs without session persistence (`--no-session`).
+ */
+export async function openRpcSession(
+	session: RpcOpenSessionSession,
+	sessionDir: string,
+	subagentRegistry?: RpcSubagentResetRegistry,
+): Promise<RpcOpenSessionResult> {
+	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
+	const dir = path.resolve(sessionDir);
+	const latest = await findMostRecentNonEmptySession(dir);
+	const current = path.resolve(session.sessionFile);
+	const alreadyOpen = latest
+		? current === path.resolve(latest)
+		: path.dirname(current) === dir && session.messages.length === 0;
+	let cancelled = false;
+	if (!alreadyOpen) {
+		cancelled = latest ? !(await session.switchSession(latest)) : !(await session.newSession({ sessionDir: dir }));
+		if (!cancelled) subagentRegistry?.clear();
+	}
+	return {
+		cancelled,
+		resumed: !cancelled && latest !== null,
+		sessionId: session.sessionId,
+		sessionFile: session.sessionFile,
+	};
+}
+
 function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostToolDefinition[] {
 	return tools.map((tool, index) => {
 		const name = typeof tool.name === "string" ? tool.name.trim() : "";
@@ -1041,16 +979,22 @@ export async function rebindRpcSessionCwd(
 	await reloadPluginState();
 }
 
+/** Startup options for {@link runRpcMode}. */
+export interface RpcModeOptions {
+	/** `--mode rpc-ui`: route tool UI (ask, tool cards) over the protocol as well. */
+	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
+	/** `--no-ui`: extensions run with `hasUI=false`; no dialog or presentation `extension_ui_request` frames are emitted. */
+	headless?: boolean;
+	subagentEventBus?: EventBus;
+	input?: ReadableStream<Uint8Array>;
+}
+
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(
-	session: AgentSession,
-	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
-	subagentEventBus?: EventBus,
-	input: ReadableStream<Uint8Array> = claimRpcInput(),
-): Promise<never> {
+export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
+	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput() } = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -1086,6 +1030,9 @@ export async function runRpcMode(
 	};
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
+	const promptResults = new RpcPromptResults(session, output);
+	const sessionEvents = new RpcSessionEventForwarder(output);
+	const settleWatcher = new RpcSessionSettleWatcher(session, output);
 
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
 	// OAuth UI bridge for mcp_reauth (C1): the browser URL rides the EXISTING
@@ -1356,7 +1303,7 @@ export async function runRpcMode(
 	// A single shared instance routes all responses received on stdin to the
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
-	setToolUIContext?.(rpcUiContext, true);
+	setToolUIContext?.(rpcUiContext, !headless);
 	session.setPromptDropped(prompt => reportDroppedPrompt(output, prompt));
 	const liveController = new RpcLiveController(session, output);
 	const collabController = new RpcCollabController({
@@ -1367,6 +1314,8 @@ export async function runRpcMode(
 		select: (title, options, dialogOptions) => rpcUiContext.select(title, options, dialogOptions),
 		edit: (title, prefill, dialogOptions) => rpcUiContext.editor(title, prefill, dialogOptions),
 	});
+	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
+		output(error(id, command, promptError.message));
 	let askReanswerAwaitingResumeLeafId: string | undefined;
 
 	// Discriminates a store failure from any other dispose rejection below.
@@ -1425,12 +1374,16 @@ export async function runRpcMode(
 			trackAgentInvokingMessage: task => {
 				extensionUserMessageTracker.trackAgentMessageTask(task);
 			},
-			uiContext: rpcUiContext,
+			// Headless hosts get the extension runner's no-op UI: hasUI=false, dialogs resolve to defaults.
+			uiContext: headless ? undefined : rpcUiContext,
 		});
 
-		// Output all agent events as JSON.
+		// Forward all session events through the single filter/stamping path, while
+		// observing the same events for prompt completion and session settling.
 		session.subscribe(event => {
-			output(
+			promptResults.observe(event);
+			settleWatcher.observe(event);
+			const forwardedEvent =
 				event.type === "agent_end"
 					? {
 							...event,
@@ -1438,14 +1391,8 @@ export async function runRpcMode(
 								session.getPersistedMessageEntryId(message),
 							),
 						}
-					: event,
-			);
-		});
-
-		// Plan proposals and mode lifecycle ride a second subscription: plan
-		// proposals emit `plan_proposal` and silently stop the proposal turn while
-		// the host reviews; goal/loop drive their TUI-mirrored transitions.
-		session.subscribe(event => {
+					: event;
+			sessionEvents.forward(forwardedEvent);
 			void planApprovalController.handleSessionEvent(event).catch(err => {
 				output(error(undefined, "plan_approval", err instanceof Error ? err.message : String(err)));
 			});
@@ -1459,9 +1406,8 @@ export async function runRpcMode(
 
 		// Mirror print-mode's startup arming, minus the abort-after-proposal hook.
 		if (
-			session.settings.get("plan.defaultOnStartup") &&
-			session.settings.get("plan.enabled") &&
-			session.sessionManager.buildSessionContext().messages.length === 0 &&
+			lookupSetting("plan.defaultOnStartup")?.get(session.settings) === true &&
+			lookupSetting("plan.enabled")?.get(session.settings) === true &&
 			!session.sessionManager.getEntries().some(entry => entry.type === "mode_change") &&
 			!session.getPlanModeState()?.enabled
 		) {
@@ -1602,81 +1548,83 @@ export async function runRpcMode(
 			// =================================================================
 
 			case "prompt": {
+				// Guest prompts are relayed to the collaboration host and do not create a
+				// local prompt ticket.
 				if (collabController.isGuest && !command.message.trimStart().startsWith("/")) {
 					collabController.sendPrompt(command.message, command.images);
 					return success(id, "prompt");
 				}
-				const skillResult = await dispatchRpcSkillPrompt({
-					id,
-					session,
-					message: command.message,
-					streamingBehavior: command.streamingBehavior,
-					output,
-					onError: promptError => output(error(id, "prompt", promptError.message)),
-					extensionUserMessageTracker,
-				});
-				if (skillResult) {
-					return success(id, "prompt", skillResult);
-				}
-				const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
-					session,
-					sessionManager: session.sessionManager,
-					settings: session.settings,
-					cwd: session.sessionManager.getCwd(),
-					output: text => output({ type: "command_output", text }),
-					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: async () => {
-						await reloadPluginState();
-					},
-					runCommandInBackground: task => shutdownCoordinator.track(task()),
-					notifyTitleChanged: async () => {
-						output({
-							type: "session_info_update",
-							title: session.sessionName,
-							sessionId: session.sessionId,
-							kind: session.sessionManager.getHeader()?.kind,
-						});
-					},
-					notifyConfigChanged: async () => {
-						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-					},
-				});
-				if (builtinResult !== false) {
-					if ("prompt" in builtinResult) {
-						watchAndReportLocalOnlyPromptResult({
-							id,
-							startPrompt: () => session.prompt(builtinResult.prompt, { images: command.images }),
-							output,
-							onError: promptError => output(error(id, "prompt", promptError.message)),
-							extensionUserMessageTracker,
-						});
-						return success(id, "prompt");
+				// Allocate before dispatch so a builtin that schedules a turn (e.g.
+				// `/retry`) cannot start its run ahead of the prompt's event position.
+				const ticket = promptResults.begin(id);
+				try {
+					const skillResult = await dispatchRpcSkillPrompt({
+						ticket,
+						session,
+						message: command.message,
+						streamingBehavior: command.streamingBehavior,
+						results: promptResults,
+						onError: onPromptError(id, "prompt"),
+						extensionUserMessageTracker,
+					});
+					if (skillResult) return success(id, "prompt", skillResult);
+					const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
+						session,
+						sessionManager: session.sessionManager,
+						settings: session.settings,
+						cwd: session.sessionManager.getCwd(),
+						output: text => output({ type: "command_output", text }),
+						refreshCommands: emitAvailableCommandsUpdate,
+						reloadPlugins: reloadPluginState,
+						runCommandInBackground: task => shutdownCoordinator.track(task()),
+						notifyTitleChanged: async () => emitSessionInfoUpdate(),
+						notifyConfigChanged: async () => {
+							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+						},
+					});
+					if (builtinResult !== false) {
+						if ("prompt" in builtinResult) {
+							watchAndReportPromptResult({
+								ticket,
+								startPrompt: () => session.prompt(builtinResult.prompt, { images: command.images }),
+								results: promptResults,
+								onError: onPromptError(id, "prompt"),
+								extensionUserMessageTracker,
+							});
+							return success(id, "prompt");
+						}
+						if (builtinResult.agentInvoked === true) {
+							void session.waitForIdle().then(
+								() => promptResults.settle(ticket),
+								(idleError: unknown) =>
+									promptResults.fail(ticket, idleError instanceof Error ? idleError.message : String(idleError)),
+							);
+						} else {
+							promptResults.discard(ticket);
+						}
+						return success(id, "prompt", { agentInvoked: builtinResult.agentInvoked === true });
 					}
-					// A consumed builtin is normally local-only, but some (e.g.
-					// `/retry`) schedule an agent turn whose events stream after
-					// this response. Report that so the host does not finalize the
-					// request as non-agent work while the agent is running.
-					return success(id, "prompt", { agentInvoked: builtinResult.agentInvoked === true });
-				}
-				if (isTuiOnlyBuiltinSlashCommand(command.message)) {
-					return error(id, "prompt", "Command requires an interactive client UI");
+					if (isTuiOnlyBuiltinSlashCommand(command.message)) {
+						promptResults.discard(ticket);
+						return error(id, "prompt", "Command requires an interactive client UI");
+					}
+					watchAndReportPromptResult({
+						ticket,
+						startPrompt: () =>
+							session.prompt(command.message, {
+								images: command.images,
+								streamingBehavior: command.streamingBehavior,
+							}),
+						results: promptResults,
+						onError: onPromptError(id, "prompt"),
+						extensionUserMessageTracker,
+					});
+					return success(id, "prompt");
+				} catch (promptSetupError) {
+					promptResults.discard(ticket);
+					throw promptSetupError;
 				}
 
-				// Don't await - events will stream
-				// Extension commands are executed immediately, file prompt templates are expanded
-				// If streaming and streamingBehavior specified, queues via steer/followUp
-				watchAndReportLocalOnlyPromptResult({
-					id,
-					startPrompt: () =>
-						session.prompt(command.message, {
-							images: command.images,
-							streamingBehavior: command.streamingBehavior,
-						}),
-					output,
-					onError: promptError => output(error(id, "prompt", promptError.message)),
-					extensionUserMessageTracker,
-				});
-				return success(id, "prompt");
 			}
 
 			case "steer": {
@@ -1705,10 +1653,15 @@ export async function runRpcMode(
 					return success(id, "abort_and_prompt");
 				}
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
 				loopModeController.onHostPrompt(command.message);
-				session
-					.prompt(command.message, { images: command.images })
-					.catch(e => output(error(id, "abort_and_prompt", e.message)));
+				watchAndReportPromptResult({
+					ticket: promptResults.begin(id),
+					startPrompt: () => session.prompt(command.message, { images: command.images }),
+					results: promptResults,
+					onError: onPromptError(id, "abort_and_prompt"),
+					extensionUserMessageTracker,
+				});
 				return success(id, "abort_and_prompt");
 			}
 
@@ -1726,6 +1679,9 @@ export async function runRpcMode(
 				}
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
 				if (!result.data.cancelled) {
+					promptResults.abortOpen();
+					// The detached run publishes no terminal agent_end to settle on.
+					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
 					emitSessionInfoUpdate();
 				}
@@ -1739,11 +1695,25 @@ export async function runRpcMode(
 			case "fork": {
 				const result = await handleRpcSessionChange(session, command, subagentRegistry);
 				if (!result.data.cancelled) {
+					promptResults.abortOpen();
+					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
 					emitSessionInfoUpdate();
 				}
 				planApprovalController.syncArmed();
 				return success(id, result.type, result.data);
+			}
+
+			case "open_session": {
+				const result = await openRpcSession(session, command.sessionDir, subagentRegistry);
+				if (!result.cancelled) {
+					promptResults.abortOpen();
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+					emitSessionInfoUpdate();
+				}
+				planApprovalController.syncArmed();
+				return success(id, "open_session", result);
 			}
 
 			// =================================================================
@@ -1769,6 +1739,8 @@ export async function runRpcMode(
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					autoRetryEnabled: session.autoRetryEnabled,
 					queuedMessageCount: session.queuedMessageCount,
+					hasPendingAsyncWork: session.hasPendingAsyncWork(),
+					isSettled: isRpcSessionSettled(session),
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
@@ -1878,6 +1850,17 @@ export async function runRpcMode(
 				}
 				subagentRegistry.setSubscriptionLevel(command.level);
 				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
+			}
+
+			case "set_event_filter": {
+				const events = command.events;
+				if (
+					events !== null &&
+					(!Array.isArray(events) || !events.every(event => typeof event === "string" && event.length > 0))
+				) {
+					return error(id, "set_event_filter", "events must be null or an array of non-empty event type strings");
+				}
+				return success(id, "set_event_filter", { events: sessionEvents.setFilter(events) });
 			}
 
 			case "get_subagents": {
@@ -2530,10 +2513,10 @@ export async function runRpcMode(
 					if (samples.length === 0) return success(id, "transcribe_audio", { text: "" });
 					// Same resolution as the TUI stt-controller: stale/legacy keys
 					// fall back to the SoTA default rather than failing.
-						const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
+					const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
 					const selectedId = resolveRoleChain("dictation", session.settings, pool)[0]?.model.id;
 					const modelKey = resolveSttModelSpec(selectedId).key;
-					const language = session.settings.get("stt.language") as string | undefined;
+					const language = lookupSetting("stt.language")?.get(session.settings) as string | undefined;
 					const text = await sttClient.transcribe(modelKey, samples, { language: language || undefined });
 					return success(id, "transcribe_audio", { text });
 				} catch (err: unknown) {
@@ -2548,8 +2531,8 @@ export async function runRpcMode(
 				try {
 					const text = command.text.trim();
 					if (!text) return success(id, "synthesize_speech", { audioBase64: "", mimeType: "audio/wav" });
-						const modelKey = resolveLocalSpeechModelId({ settings: session.settings, registry: session.modelRegistry });
-					const voice = session.settings.get("speech.voice") || DEFAULT_TTS_VOICE;
+					const voice = (lookupSetting("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
+					const modelKey = resolveLocalSpeechModelId({ settings: session.settings, registry: session.modelRegistry });
 					const audio = await ttsClient.synthesize(modelKey, text, { voice });
 					if (!audio) {
 						return error(
@@ -2571,7 +2554,8 @@ export async function runRpcMode(
 
 			case "live_start": {
 				try {
-					const state = await liveController.start(command.voice ?? session.settings.get("live.voice"));
+					const voice = command.voice ?? (lookupSetting("live.voice")?.get(session.settings) as string | undefined);
+					const state = await liveController.start(voice);
 					return success(id, "live_start", state);
 				} catch (err: unknown) {
 					return error(id, "live_start", err instanceof Error ? err.message : String(err));
@@ -2840,14 +2824,14 @@ export async function runRpcMode(
 			}
 
 			case "get_settings": {
-				const paths = command.paths ?? Object.keys(SETTINGS_SCHEMA);
+				const paths = command.paths ?? orderedSettings().map(setting => setting.id);
 				const values: Record<string, unknown> = {};
-				const provenance: Record<string, SettingProvenance> = {};
-				for (const p of paths) {
-					if (Object.hasOwn(SETTINGS_SCHEMA, p)) {
-						values[p] = session.settings.get(p as SettingPath);
-						provenance[p] = session.settings.getProvenance(p as SettingPath);
-					}
+				const provenance: Record<string, RpcSettingProvenance> = {};
+				for (const path of paths) {
+					const setting = lookupSetting(path);
+					if (!setting) continue;
+					values[path] = setting.get(session.settings);
+					provenance[path] = session.settings.getProvenanceDetails(setting);
 				}
 				return success(id, "get_settings", {
 					values,
@@ -2858,25 +2842,21 @@ export async function runRpcMode(
 			}
 
 			case "set_setting": {
-				if (!Object.hasOwn(SETTINGS_SCHEMA, command.path)) {
-					return error(id, "set_setting", `Unknown setting path: ${command.path}`);
-				}
+				const setting = lookupSetting(command.path);
+				if (!setting) return error(id, "set_setting", `Unknown setting path: ${command.path}`);
 				try {
-					validateRpcSettingValue(command.path as SettingPath, command.value);
-					session.settings.set(command.path as SettingPath, command.value as never);
+					validateRpcSettingValue(command.path, command.value);
+					setting.set(session.settings, command.value as never);
 					await session.settings.flush();
-					// Live-apply runtime keys to the running session — previously only
-					// the TUI selector did this, so RPC edits looked broken until restart.
-					const effectiveValue = session.settings.get(command.path as SettingPath);
-					await applyRuntimeSetting(session, command.path, effectiveValue);
+					const effectiveValue = setting.get(session.settings);
 					const advisorEnabled = command.path === "advisor.enabled" ? session.isAdvisorEnabled() : undefined;
 					const advisorActive = command.path === "advisor.enabled" ? session.isAdvisorActive() : undefined;
 					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					return success(id, "set_setting", {
 						path: command.path,
-						value: session.settings.get(command.path as SettingPath),
+						value: effectiveValue,
 						savedValue: command.value,
-						provenance: session.settings.getProvenance(command.path as SettingPath),
+						provenance: session.settings.getProvenanceDetails(setting),
 						...(advisorEnabled === undefined ? {} : { advisorEnabled, advisorActive }),
 					});
 				} catch (err: unknown) {
@@ -3305,12 +3285,12 @@ export async function runRpcMode(
 			case "security_validate": {
 				try {
 					const prompt = await buildRpcSecurityValidationPrompt(session, command.scanId, command.findingId);
-					watchAndReportLocalOnlyPromptResult({
-						id,
-						startPrompt: () => session.prompt(prompt, { streamingBehavior: "followUp" }),
-						output,
-						onError: promptError => output(error(id, "security_validate", promptError.message)),
-						extensionUserMessageTracker,
+					const trackedPrompt = extensionUserMessageTracker.watchPrompt(() =>
+						session.prompt(prompt, { streamingBehavior: "followUp" }),
+					);
+					void trackedPrompt.prompt.catch(cause => {
+						const promptError = cause instanceof Error ? cause : new Error(String(cause));
+						output(error(id, "security_validate", promptError.message));
 					});
 					return success(id, "security_validate", { accepted: true });
 				} catch (err: unknown) {

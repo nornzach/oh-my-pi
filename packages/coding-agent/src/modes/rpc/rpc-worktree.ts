@@ -22,6 +22,7 @@ import * as fs from "node:fs/promises";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreeDir, hashPath, logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
+import { lookup as lookupSetting } from "../../config/registry";
 import { parseIsolationBackend } from "../../task/worktree";
 import { withRepoLock } from "../../utils/repo-lock";
 import type { RpcGitStatus, RpcWorktreeCreateResult } from "./rpc-types";
@@ -100,8 +101,8 @@ export async function createRpcWorktree(
 				await repository.createBranch(branch, startPoint, false);
 				const worktree = await repository.worktreeAdd(path, branch, {
 					detach: false,
-					clone: session.settings.get("worktree.clone"),
-					backend: parseIsolationBackend(session.settings.get("isolation.backend")),
+					clone: lookupSetting("worktree.clone")?.get(session.settings) as boolean | undefined,
+					backend: parseIsolationBackend(lookupSetting("isolation.backend")?.get(session.settings) as string | undefined),
 				});
 				if (worktree.cloneError) {
 					logger.warn("GUI worktree clone fell back to plain checkout", { path, error: worktree.cloneError });

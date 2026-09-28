@@ -65,7 +65,7 @@ function isPrewalkImplementationAction(result: ToolResultMessage): boolean {
 export interface PrewalkCoordinatorHost {
 	agent: Agent;
 	sessionManager: SessionManager;
-	settings: Pick<Settings, "get">;
+	settings: Settings;
 	model(): Model | undefined;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
@@ -222,6 +222,7 @@ export class PrewalkCoordinator {
 			timestamp: Date.now(),
 		});
 	}
+
 
 	/** Arms a prewalk immediately for an explicit slash-command request. */
 	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {

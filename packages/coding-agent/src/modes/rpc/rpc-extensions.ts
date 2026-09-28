@@ -6,17 +6,9 @@
 import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { Settings } from "../../config/settings";
-import {
-	getDefault,
-	isCredential,
-	RESTART_REQUIRED_SETTING_PATHS,
-	SETTING_TABS,
-	SETTINGS_SCHEMA,
-	type SettingPath,
-	TAB_GROUPS,
-	TAB_METADATA,
-	TUI_ONLY_SETTING_PATHS,
-} from "../../config/settings-schema";
+import { orderedSettings } from "../../config/all-settings";
+import { lookup as lookupSetting } from "../../config/registry";
+import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import type { AgentSession } from "../../session/agent-session";
 import type {
 	RpcProviderInfo,
@@ -102,45 +94,39 @@ export async function buildRpcUsageResult(session: AgentSession): Promise<RpcUsa
 // Settings
 // ============================================================================
 
-/** Project the unified settings schema into a GUI-consumable form. */
+/** Project the registry into a GUI-consumable settings schema. */
 export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaResult {
 	const entries: RpcSettingEntry[] = [];
-	const schema = SETTINGS_SCHEMA as Record<string, (typeof SETTINGS_SCHEMA)[SettingPath]>;
 
-	for (const path of Object.keys(schema) as SettingPath[]) {
-		const def = schema[path];
-		const ui = "ui" in def ? (def.ui as Record<string, unknown> | undefined) : undefined;
-		const secret = isCredential(path) || ui?.secret === true;
-
+	for (const setting of orderedSettings()) {
+		const ui = setting.ui;
 		let options: RpcSettingEntry["options"];
-		if ("values" in def && Array.isArray(def.values)) {
-			options = (def.values as readonly string[]).map(v => ({ value: v, label: v }));
-		}
+		if (setting.enumValues) options = setting.enumValues.map(value => ({ value, label: value }));
 		if (ui?.options && Array.isArray(ui.options)) {
-			options = (ui.options as Array<{ value: string; label: string; description?: string }>).map(o => ({
-				value: o.value,
-				label: o.label,
-				description: o.description,
+			options = ui.options.map(option => ({
+				value: option.value,
+				label: option.label,
+				description: option.description,
 			}));
 		}
 
 		entries.push({
-			path,
-			type: def.type as RpcSettingEntry["type"],
-			value: settings.get(path),
-			provenance: settings.getProvenance(path),
-			default: getDefault(path),
-			label: (ui?.label as string | undefined) ?? path,
-			description: ui?.description as string | undefined,
-			tab: ui?.tab as string | undefined,
-			group: ui?.group as string | undefined,
+			path: setting.id,
+			type: setting.type as RpcSettingEntry["type"],
+			value: setting.get(settings),
+			provenance: settings.getProvenanceDetails(setting),
+			default: setting.default,
+			label: ui?.label ?? setting.id,
+			description: ui?.description,
+			tab: ui?.tab,
+			group: ui?.group,
 			options,
-			secret,
+			secret: setting.isCredential,
 			advanced: !ui,
-			condition: ui?.condition as string | undefined,
+			condition: ui?.condition,
 			ordered: ui?.ordered === true ? true : undefined,
-			tuiOnly: TUI_ONLY_SETTING_PATHS[path] === true ? true : undefined,
-			restartRequired: RESTART_REQUIRED_SETTING_PATHS[path] === true ? true : undefined,
+			tuiOnly: setting.tuiOnly ? true : undefined,
+			restartRequired: setting.restartRequired ? true : undefined,
 		});
 	}
 
@@ -183,8 +169,9 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 		// listStoredCredentials may not be available on all store implementations.
 	}
 
+	const disabledProvidersSetting = lookupSetting("disabledProviders");
 	const disabledProviders = new Set(
-		(session.settings.get("disabledProviders" as SettingPath) as string[] | undefined) ?? [],
+		(disabledProvidersSetting?.get(session.settings) as string[] | undefined) ?? [],
 	);
 
 	const providers: RpcProviderInfo[] = [];
@@ -223,18 +210,8 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 }
 
 /** Validate the public RPC boundary before a malformed value can reach persistent settings. */
-export function validateRpcSettingValue(path: SettingPath, value: unknown): void {
-	if (!Object.hasOwn(SETTINGS_SCHEMA, path)) throw new Error(`Unknown setting path: ${path}`);
-	const def = SETTINGS_SCHEMA[path];
-	const valid =
-		value === undefined
-			? getDefault(path) === undefined
-			: def.type === "enum"
-				? "values" in def && (def.values as readonly unknown[]).includes(value)
-				: def.type === "array"
-					? Array.isArray(value)
-					: def.type === "record"
-						? value !== null && typeof value === "object" && !Array.isArray(value)
-						: typeof value === def.type && (def.type !== "number" || Number.isFinite(value));
-	if (!valid) throw new Error(`Invalid value for ${path}: expected ${def.type}`);
+export function validateRpcSettingValue(path: string, value: unknown): void {
+	const setting = lookupSetting(path);
+	if (!setting) throw new Error(`Unknown setting path: ${path}`);
+	setting.assertWritable(value);
 }

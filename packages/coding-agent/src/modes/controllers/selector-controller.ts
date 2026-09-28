@@ -6,6 +6,8 @@ import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle, ResizeScrollbackMode } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -30,8 +32,8 @@ import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
 import { createSettingsHost } from "../../config/settings-ui";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
-import type { disableProvider as DisableProvider, enableProvider as EnableProvider } from "../../discovery";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import type { disableProvider as DisableProvider, enableProvider as EnableProvider } from "../../discovery";
 import {
 	getInstalledPluginsRegistryPath,
 	getMarketplacesCacheDir,
@@ -51,7 +53,6 @@ import {
 } from "@oh-my-pi/pi-tui/theme";
 import type { AgentHubOpenOptions, InteractiveModeContext } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
-import { applyRuntimeSetting } from "../../session/apply-runtime-setting";
 import { AskReanswerChatRedirectError, runAskReanswer } from "../../session/ask-reanswer";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import {
@@ -79,21 +80,18 @@ import {
 	concreteThinkingLevel,
 	parseConfiguredThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
-import type { ToolSession } from "../../tools";
-import { AskTool, type AskToolInput } from "../../tools/ask";
+import type { AskToolInput } from "../../tools/ask";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { ToolAbortError } from "../../tools/tool-errors";
-import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { captureBrowserSession } from "../../utils/browser-session";
 import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
+import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import {
 	setSessionTerminalTitle,
 	setTerminalTitleSpinnerStyle,
 	setTerminalTitleStateEnabled,
 } from "../../utils/title-generator";
-import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -102,8 +100,8 @@ import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-o
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
@@ -118,21 +116,37 @@ import { createModelBrowserSource } from "../model-browser-source";
 import type { ModelPickerComponent as ModelPickerComponentType } from "@oh-my-pi/pi-tui/overlays/model-picker";
 import type { OAuthSelectorComponent as OAuthSelectorComponentType } from "@oh-my-pi/pi-tui/overlays/oauth-selector";
 import { PluginSelectorComponent } from "@oh-my-pi/pi-tui/overlays/plugin-selector";
-import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
 import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 
-const MANUAL_LOGIN_PROMPT = "Paste the authorization code (or full redirect URL), then press Enter:";
+import { cfgBranchSummaryEnabled } from "../../session/context-settings";
+import { cfgCycleOrder, cfgDisabledProviders, cfgModelRoleStorage } from "../../config/model-settings";
+import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../../session/settings";
+import {
+	cfgStatusLineCompactThinkingLevel,
+	cfgStatusLineContextLine,
+	cfgStatusLineLeftSegments,
+	cfgStatusLinePreset,
+	cfgStatusLineRightSegments,
+	cfgStatusLineSegmentOptions,
+	cfgStatusLineSeparator,
+	cfgStatusLineSessionAccent,
+	cfgStatusLineShowHookStatus,
+	cfgStatusLineTransparent,
+	cfgTreeFilterMode,
+} from "../settings";
+import { cfgTaskAgentModelOverrides } from "../../task/settings";
 
 interface ModelOverlayModules {
 	ModelHubComponent: typeof ModelHubComponentType;
@@ -160,6 +174,7 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 	return {
 		PASTE_CODE_LOGIN_PROVIDERS: require("@oh-my-pi/pi-ai/index.js").PASTE_CODE_LOGIN_PROVIDERS,
 		getOAuthProviders: require("@oh-my-pi/pi-ai/registry/oauth/index.js").getOAuthProviders,
+
 		LoginDialogComponent: require("@oh-my-pi/pi-tui/overlays/login-dialog.js").LoginDialogComponent,
 		LogoutAccountSelectorComponent: require("@oh-my-pi/pi-tui/overlays/logout-account-selector.js")
 			.LogoutAccountSelectorComponent,
@@ -167,13 +182,13 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 	};
 }
 
-interface ProviderToggleModules {
+interface ProviderToggleUiModules {
 	disableProvider: typeof DisableProvider;
 	enableProvider: typeof EnableProvider;
 }
 
 /** Settings-only boundary for provider discovery mutations. */
-function loadProviderToggles(): ProviderToggleModules {
+function loadProviderToggles(): ProviderToggleUiModules {
 	const discovery = require("../../discovery");
 	return { disableProvider: discovery.disableProvider, enableProvider: discovery.enableProvider };
 }
@@ -295,15 +310,16 @@ export class SelectorController {
 					onStatusLinePreview: previewSettings => {
 						// Update status line with preview settings
 						this.ctx.statusLine.updateSettings({
-							preset: settings.get("statusLine.preset"),
-							leftSegments: settings.get("statusLine.leftSegments"),
-							rightSegments: settings.get("statusLine.rightSegments"),
-							separator: settings.get("statusLine.separator"),
-							showHookStatus: settings.get("statusLine.showHookStatus"),
-							sessionAccent: settings.get("statusLine.sessionAccent"),
-							transparent: settings.get("statusLine.transparent"),
-							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-							contextLine: settings.get("statusLine.contextLine"),
+							preset: cfgStatusLinePreset.get(settings),
+							leftSegments: cfgStatusLineLeftSegments.get(settings),
+							rightSegments: cfgStatusLineRightSegments.get(settings),
+							separator: cfgStatusLineSeparator.get(settings),
+							showHookStatus: cfgStatusLineShowHookStatus.get(settings),
+							sessionAccent: cfgStatusLineSessionAccent.get(settings),
+							transparent: cfgStatusLineTransparent.get(settings),
+							compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
+							contextLine: cfgStatusLineContextLine.get(settings),
+							segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 							...previewSettings,
 						});
 						this.ctx.ui.requestRender();
@@ -326,15 +342,16 @@ export class SelectorController {
 						done();
 						// Restore status line to saved settings
 						this.ctx.statusLine.updateSettings({
-							preset: settings.get("statusLine.preset"),
-							leftSegments: settings.get("statusLine.leftSegments"),
-							rightSegments: settings.get("statusLine.rightSegments"),
-							separator: settings.get("statusLine.separator"),
-							showHookStatus: settings.get("statusLine.showHookStatus"),
-							sessionAccent: settings.get("statusLine.sessionAccent"),
-							transparent: settings.get("statusLine.transparent"),
-							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-							contextLine: settings.get("statusLine.contextLine"),
+							preset: cfgStatusLinePreset.get(settings),
+							leftSegments: cfgStatusLineLeftSegments.get(settings),
+							rightSegments: cfgStatusLineRightSegments.get(settings),
+							separator: cfgStatusLineSeparator.get(settings),
+							showHookStatus: cfgStatusLineShowHookStatus.get(settings),
+							sessionAccent: cfgStatusLineSessionAccent.get(settings),
+							transparent: cfgStatusLineTransparent.get(settings),
+							compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
+							contextLine: cfgStatusLineContextLine.get(settings),
+							segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 						});
 						this.ctx.ui.requestRender();
 					},
@@ -589,9 +606,11 @@ export class SelectorController {
 	}
 
 	/**
-	 * Handle setting changes from the settings selector.
-	 * Most settings are saved directly via SettingsManager in the definitions.
-	 * This handles side effects and session-specific settings.
+	 * Apply the side effects of a setting change the user made in this process
+	 * (settings selector, approved `cfg://` writes); the value is already stored.
+	 * Only `defaultThinkingLevel` needs this: it also switches the live session,
+	 * which config reloads and parent-session writes must not do. Every other
+	 * setting applies through handle listeners owned by the session and InteractiveMode.
 	 */
 	handleSettingChange(id: string, value: unknown): void {
 		// Discovery provider toggles
@@ -616,9 +635,6 @@ export class SelectorController {
 				this.ctx.syncComposerShape();
 				break;
 			case "advisor.enabled":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply advisor setting: ${err}`);
-				});
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
 				break;
@@ -627,37 +643,6 @@ export class SelectorController {
 					this.ctx.session.setAdvisorEnabled(true);
 					this.ctx.ui.requestRender();
 				}
-				break;
-			case "steeringMode":
-			case "followUpMode":
-			case "interruptMode":
-			case "omitThinking":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply ${id}: ${err}`);
-				});
-				break;
-			case "thinkingLevel":
-			case "defaultThinkingLevel":
-				void applyRuntimeSetting(this.ctx.session, "defaultThinkingLevel", value).catch(err => {
-					this.ctx.showError(`Failed to apply thinking level: ${err}`);
-				});
-				this.ctx.statusLine.invalidate();
-				this.ctx.updateEditorBorderColor();
-				break;
-			case "personality":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply personality: ${err}`);
-				});
-				break;
-			case "tools.xdevDocs":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply xd:// prompt docs setting: ${err}`);
-				});
-				break;
-			case "memory.backend":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply memory backend: ${err}`);
-				});
 				break;
 			case "externalThinking":
 				void this.ctx.session.setThinkToolEnabled(value as boolean).catch(err => {
@@ -788,12 +773,12 @@ export class SelectorController {
 
 			case "tui.renderMermaid":
 				setMarkdownMermaidRendering(value as boolean);
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply Mermaid rendering setting: ${err}`);
-				});
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.ui.resetDisplay();
 				break;
+
+
+
 
 			case "theme": {
 				setTheme(value as string, true).then(result => {
@@ -817,17 +802,6 @@ export class SelectorController {
 			case "colorBlindMode": {
 				setColorBlindMode(value === "true" || value === true).then(() => {
 					this.ctx.ui.invalidate();
-				});
-				break;
-			}
-			case "temperature":
-			case "topP":
-			case "topK":
-			case "minP":
-			case "presencePenalty":
-			case "repetitionPenalty": {
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply ${id}: ${err}`);
 				});
 				break;
 			}
@@ -868,16 +842,16 @@ export class SelectorController {
 				break;
 			}
 
-			// MCP update injection - live subscribe/unsubscribe
-			case "mcp.notifications":
-				void applyRuntimeSetting(this.ctx.session, id, value).catch(err => {
-					this.ctx.showError(`Failed to apply ${id}: ${err}`);
-				});
-				break;
 
 			// All other settings are handled by the definitions (get/set on SettingsManager)
 			// No additional side effects needed
 		}
+		if (id !== cfgDefaultThinkingLevel.id || typeof value !== "string") return;
+		const level = parseConfiguredThinkingLevel(value);
+		if (level === undefined || level === this.ctx.session.configuredThinkingLevel()) return;
+		this.ctx.session.setThinkingLevel(level);
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
 	}
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
@@ -925,7 +899,7 @@ export class SelectorController {
 			await this.ctx.session.setModelTemporary(model, level);
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
-			const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
+			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
 			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
 		};
 		if (!compactFirst) {
@@ -951,12 +925,12 @@ export class SelectorController {
 		const { ModelPickerComponent } = loadModelOverlayComponents();
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
 		const current = this.ctx.session.model;
-		const quickRoleOrder = this.ctx.settings.get("cycleOrder");
+		const quickRoleOrder = cfgCycleOrder.get(this.ctx.settings);
 		const quickRoleCycle = this.ctx.session.getRoleModelCycle(quickRoleOrder);
 		const currentSelector = current ? `${current.provider}/${current.id}` : undefined;
 		// Preselect the effective Task model in task mode: the configured override,
 		// else the session model (the bundled task agent inherits it by default).
-		const taskOverride = this.ctx.settings.get("task.agentModelOverrides").task;
+		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
 		const taskSelector = (Array.isArray(taskOverride) ? taskOverride[0] : taskOverride) ?? currentSelector;
 		let closed = false;
 		const done = () => {
@@ -1002,8 +976,8 @@ export class SelectorController {
 				onPickTask: (_model, selector) => {
 					// Session-only: layer the Task override onto the runtime settings
 					// layer so it is never persisted, mirroring the session-model pick.
-					this.ctx.settings.override("task.agentModelOverrides", {
-						...this.ctx.settings.get("task.agentModelOverrides"),
+					cfgTaskAgentModelOverrides.override(this.ctx.settings, {
+						...cfgTaskAgentModelOverrides.get(this.ctx.settings),
 						task: selector,
 					});
 					this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
@@ -1015,7 +989,6 @@ export class SelectorController {
 				currentContextTokens,
 				currentSelector,
 				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
-				taskModeKeyLabel: this.ctx.keybindings.getDisplayString("app.model.selectTemporary") || "alt+p",
 				taskSelector,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
@@ -1059,7 +1032,7 @@ export class SelectorController {
 			{
 				onAssign: async (model, role, thinkingLevel, selector, scope?: ModelRoleSelectionScope) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const configuredStorage = this.ctx.settings.get("modelRoleStorage");
+					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
 					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					const scopeLabel =
@@ -1089,7 +1062,7 @@ export class SelectorController {
 									formatModelSelectorValue(selectorValue, concreteThinking),
 								);
 								if (isAuto) {
-									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
+									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
 								}
 							} else if (shadowedProject) {
 								this.ctx.settings.setProjectModelRole(
@@ -1097,7 +1070,7 @@ export class SelectorController {
 									formatModelSelectorValue(selectorValue, concreteThinking),
 								);
 								if (isAuto) {
-									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
+									cfgDefaultThinkingLevel.set(this.ctx.settings, AUTO_THINKING);
 								}
 							} else {
 								const { switched } = await this.ctx.session.setModel(model, role, {
@@ -1145,7 +1118,7 @@ export class SelectorController {
 				},
 				onUnassign: async (role, scope?: ModelRoleSelectionScope) => {
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const configuredStorage = this.ctx.settings.get("modelRoleStorage");
+					const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
 					const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
 					const scopeLabel =
 						configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
@@ -1189,7 +1162,7 @@ export class SelectorController {
 									let isAutoFromDefault = false;
 									if (!resolved.explicitThinkingLevel && !concreteThinking) {
 										const defaultLevel = parseConfiguredThinkingLevel(
-											this.ctx.settings.get("defaultThinkingLevel"),
+											cfgDefaultThinkingLevel.get(this.ctx.settings),
 										);
 										if (defaultLevel === AUTO_THINKING) {
 											isAutoFromDefault = true;
@@ -1224,13 +1197,13 @@ export class SelectorController {
 				},
 				onFallbackChainChange: (role, chain) => {
 					try {
-						const chains = { ...this.ctx.settings.get("retry.fallbackChains") };
+						const chains = { ...cfgRetryFallbackChains.get(this.ctx.settings) };
 						if (chain.length === 0) {
 							delete chains[role];
 						} else {
 							chains[role] = chain;
 						}
-						this.ctx.settings.set("retry.fallbackChains", chains);
+						cfgRetryFallbackChains.set(this.ctx.settings, chains);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
 							chain.length > 0
@@ -1248,7 +1221,7 @@ export class SelectorController {
 				},
 				onCycleOrderChange: order => {
 					try {
-						this.ctx.settings.set("cycleOrder", order);
+						cfgCycleOrder.set(this.ctx.settings, order);
 						this.ctx.showStatus(
 							order.length > 0 ? `Quick-switch cycle: ${order.join(" → ")}` : "Quick-switch cycle cleared",
 						);
@@ -1593,7 +1566,7 @@ export class SelectorController {
 					let wantsSummary = options.summarize;
 					let customInstructions: string | undefined;
 
-					const branchSummariesEnabled = settings.get("branchSummary.enabled");
+					const branchSummariesEnabled = cfgBranchSummaryEnabled.get(settings);
 
 					while (!wantsSummary && branchSummariesEnabled) {
 						const summaryChoice = await this.ctx.showHookSelector("Summarize branch?", [
@@ -1635,7 +1608,7 @@ export class SelectorController {
 							this.ctx.ui,
 							spinner => theme.fg("accent", spinner),
 							text => theme.fg("muted", text),
-							"Summarizing branch... (esc to cancel)",
+							`Summarizing branch... (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
 							getSymbolTheme().spinnerFrames,
 						);
 						this.ctx.statusContainer.addChild(summaryLoader);
@@ -1721,7 +1694,7 @@ export class SelectorController {
 					this.ctx.sessionManager.appendLabelChange(entryId, label);
 					this.ctx.ui.requestRender();
 				},
-				settings.get("treeFilterMode"),
+				cfgTreeFilterMode.get(settings),
 			);
 			return { component: selector, focus: selector };
 		});
@@ -2095,7 +2068,11 @@ export class SelectorController {
 				// editor's `/login <url>` path is unreachable while the dialog holds
 				// focus (#5339).
 				onManualCodeInput: useManualInput
-					? signal => dialog.showManualInput(MANUAL_LOGIN_PROMPT, signal)
+					? signal =>
+							dialog.showManualInput(
+								`Paste the authorization code (or full redirect URL), then press ${editorKey("tui.input.submit")}:`,
+								signal,
+							)
 					: undefined,
 			});
 			// Scope the post-login refresh to the just-authenticated provider with an
@@ -2258,7 +2235,7 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				{
-					disabledProviders: settings.get("disabledProviders"),
+					disabledProviders: cfgDisabledProviders.get(settings),
 					validateAuth: async (selectedProviderId: string) => {
 						const apiKey = await this.ctx.session.modelRegistry.getApiKeyForProvider(
 							selectedProviderId,

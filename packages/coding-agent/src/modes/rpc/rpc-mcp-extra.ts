@@ -40,6 +40,7 @@ import { addMCPServer, readMCPConfigFile, updateMCPServer } from "../../mcp/conf
 import { lookupMcpOAuthCredentialForServer, removeManagedMcpOAuthCredential } from "../../mcp/oauth-credentials";
 import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../mcp/oauth-flow";
 import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../mcp/types";
+import { lookup as lookupSetting } from "../../config/registry";
 import type { AgentSession } from "../../session/agent-session";
 import { buildRpcMcpServersResult } from "./rpc-domains";
 import type {
@@ -143,9 +144,9 @@ async function reloadRpcMcpServers(session: AgentSession): Promise<void> {
 			// removed/disabled servers cannot leave stale `/server:prompt` entries.
 			session.setMCPPromptCommands([]);
 			await manager.discoverAndConnect({
-				enableProjectConfig: session.settings.get("mcp.enableProjectConfig") ?? true,
+				enableProjectConfig: (lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
 				filterExa: true,
-				filterBrowser: session.settings.get("browser.enabled") ?? false,
+				filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
 			});
 		}
 		await session.refreshMCPTools(manager?.getTools() ?? []);

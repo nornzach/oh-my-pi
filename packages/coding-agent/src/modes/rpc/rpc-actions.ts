@@ -21,6 +21,7 @@ import { MCPManager } from "../../mcp";
 import { loadAllMCPConfigs } from "../../mcp/config";
 import { readMCPConfigFile, removeMCPServer, setMcpServerEnabled } from "../../mcp/config-writer";
 import type { AgentSession } from "../../session/agent-session";
+import { lookup as lookupSetting } from "../../config/registry";
 import { createDomainMarketplaceManager } from "./rpc-domains";
 import { capturePluginActivationState, classifyPluginActivation } from "./rpc-marketplace";
 import { serializeMcpReload } from "./rpc-mcp-extra";
@@ -37,12 +38,12 @@ async function persistDisabledExtensionsToggle(
 	enabled: boolean,
 ): Promise<boolean> {
 	const settings = session.settings;
-	const disabled = [...settings.get("disabledExtensions")];
+	const disabled = [...((lookupSetting("disabledExtensions")?.get(settings) as string[] | undefined) ?? [])];
 	const index = disabled.indexOf(extensionId);
 	if (enabled === (index === -1)) return false;
 	if (enabled) disabled.splice(index, 1);
 	else disabled.push(extensionId);
-	settings.set("disabledExtensions", disabled);
+	lookupSetting("disabledExtensions")?.set(settings, disabled as never);
 	await settings.flush();
 	return true;
 }
@@ -212,9 +213,9 @@ export async function applyRpcMcpAction(
 					await manager.disconnectAll();
 					session.setMCPPromptCommands([]);
 					await manager.discoverAndConnect({
-						enableProjectConfig: session.settings.get("mcp.enableProjectConfig") ?? true,
+						enableProjectConfig: (lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
 						filterExa: true,
-						filterBrowser: session.settings.get("browser.enabled") ?? false,
+						filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
 					});
 				}
 				await session.refreshMCPTools(manager?.getTools() ?? []);

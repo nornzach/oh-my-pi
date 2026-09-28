@@ -22,6 +22,7 @@ import {
 	getModelMatchPreferences,
 	resolveCliModel,
 } from "../../config/model-resolver";
+import { lookup as lookupSetting } from "../../config/registry";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { MCPManager } from "../../mcp";
@@ -113,9 +114,9 @@ export async function applyRpcReloadPlugins(
 			// leave stale entries; new prompts repopulate via the manager callback.
 			session.setMCPPromptCommands([]);
 			await manager.discoverAndConnect({
-				enableProjectConfig: session.settings.get("mcp.enableProjectConfig") ?? true,
+				enableProjectConfig: (lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
 				filterExa: true,
-				filterBrowser: session.settings.get("browser.enabled") ?? false,
+				filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
 			});
 			await session.refreshMCPTools(manager.getTools());
 		});

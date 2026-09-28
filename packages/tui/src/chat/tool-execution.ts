@@ -937,7 +937,9 @@ export class ToolExecutionComponent extends Container {
 		const benignSkip = this.#isBenignSkip();
 		const stateBgKey =
 			this.#isPartial || benignSkip ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
-		const stateBgFn = (t: string) => theme.bg(stateBgKey, t);
+		// bgFill, not bg: rows carry nested full resets (e.g. truncateToWidth's
+		// `\x1b[0m` before its ellipsis) that would otherwise punch holes in the tint.
+		const stateBgFn = (t: string) => theme.bgFill(stateBgKey, t);
 
 		// A benign skip is a synthetic placeholder for a call that never executed,
 		// so bypass any bespoke error frame and draw the neutral generic card —
@@ -1297,12 +1299,14 @@ export class ToolExecutionComponent extends Container {
 			}
 			context.renderDiff = renderDiff;
 		} else if (this.#toolName === "write") {
-			// Device-dispatch previews resolve renderers from the canonical tool map.
+			// Device-dispatch previews render through the host's canonical resolver,
+			// which covers mounted devices and active top-level tools (the `write`
+			// transport accepts both). Deciding the predicate here instead would
+			// leave a `write xd://<top-level tool>` card on the generic fallback.
 			const writeTool = this.#tool as { session?: { xdev?: XdevMountedState } } | undefined;
-			const xdev = writeTool?.session?.xdev;
-			if (xdev) {
-				context.resolveXdevMounted = (name: string) =>
-					xdev.mountedNames.has(name) ? xdev.tools.get(name) : undefined;
+			const resolveXdevMounted = writeTool?.session?.xdev?.resolve;
+			if (resolveXdevMounted) {
+				context.resolveXdevMounted = resolveXdevMounted;
 			}
 		}
 

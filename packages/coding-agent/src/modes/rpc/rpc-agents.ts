@@ -14,6 +14,7 @@ import {
 	resolveAgentPrewalkPattern,
 	resolveModelOverride,
 } from "../../config/model-resolver";
+import { lookup as lookupSetting } from "../../config/registry";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
@@ -35,9 +36,9 @@ export async function buildRpcAgentDefinitions(session: AgentSession): Promise<R
 	const activeModelPattern = session.model ? formatModelString(session.model) : undefined;
 	const defaultModelPattern = session.settings.getModelRole("default");
 	const modelOverrides =
-		(session.settings.get("task.agentModelOverrides") as Record<string, string> | undefined) ?? {};
-	const prewalkOverrides = (session.settings.get("task.agentPrewalk") as Record<string, string> | undefined) ?? {};
-	const taskPrewalk = session.settings.get("task.prewalk") ?? false;
+		(lookupSetting("task.agentModelOverrides")?.get(session.settings) as Record<string, string> | undefined) ?? {};
+	const prewalkOverrides = (lookupSetting("task.agentPrewalk")?.get(session.settings) as Record<string, string> | undefined) ?? {};
+	const taskPrewalk = (lookupSetting("task.prewalk")?.get(session.settings) as boolean | undefined) ?? false;
 	const resolve = (patterns: string[]): { model?: string; thinkingLevel?: string } => {
 		const result = resolveModelOverride(patterns, session.modelRegistry, session.settings);
 		return {

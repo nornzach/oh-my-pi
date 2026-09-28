@@ -11,6 +11,7 @@ import {
 	shareSnapshot,
 	fitShareSnapshot,
 } from "../../export/share";
+import { lookup as lookupSetting } from "../../config/registry";
 import type { AgentSession } from "../../session/agent-session";
 import { isMCPToolName } from "../../tools/builtin-names";
 import type {
@@ -73,10 +74,10 @@ export function buildRpcActiveTools(session: AgentSession): RpcActiveToolsResult
 
 function shareOptions(session: AgentSession): ShareSessionOptions {
 	return {
-		serverUrl: session.settings.get("share.serverUrl"),
-		store: session.settings.get("share.store"),
+		serverUrl: lookupSetting("share.serverUrl")?.get(session.settings) as string | undefined,
+		store: lookupSetting("share.store")?.get(session.settings) as string | undefined,
 		state: session.state,
-		obfuscator: session.settings.get("share.redactSecrets") ? session.obfuscator : undefined,
+		obfuscator: lookupSetting("share.redactSecrets")?.get(session.settings) ? session.obfuscator : undefined,
 	};
 }
 
@@ -87,7 +88,7 @@ export function previewRpcShareSession(session: AgentSession): RpcShareSessionPr
 	const preview = JSON.stringify(fitted.data, null, 2);
 	const serverUrl = normalizeShareServerUrl(options.serverUrl);
 	const store = options.store ?? "blob";
-	const redactionEnabled = session.settings.get("share.redactSecrets") === true;
+	const redactionEnabled = lookupSetting("share.redactSecrets")?.get(session.settings) === true;
 	const snapshotId = new Bun.CryptoHasher("sha256")
 		.update(JSON.stringify({ preview, serverUrl, store, redactionEnabled }))
 		.digest("hex");
