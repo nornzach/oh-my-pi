@@ -225,7 +225,6 @@ describe("RPC subagent registry", () => {
 		registry.dispose();
 		AgentRegistry.resetGlobalForTests();
 	});
-
 	test("clears stale snapshots after successful RPC session changes", async () => {
 		const cases: Array<{
 			command: RpcSessionChangeCommand;

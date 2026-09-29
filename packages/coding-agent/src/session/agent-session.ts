@@ -359,8 +359,9 @@ import {
 	type CodexResetAction,
 	type CodexResetPlan,
 	type CodexResetTrigger,
+	type ResetRecoveryResult,
 	ATTEMPT_COOLDOWN_MS,
-	codexResetLockKey,
+	resetAccountLockKey,
 	defaultCodexAutoRedeemCoordinator,
 	isTerminalRedeemOutcome,
 	overlayLiveResetCredits,
@@ -573,6 +574,19 @@ class AgentStartPolicyChangedError extends Error {
 			"System prompt changed repeatedly during before_agent_start; original input was not delivered.",
 		);
 		this.name = "AgentStartPolicyChangedError";
+	}
+}
+
+/**
+ * Rejection from {@link AgentSession.prompt} with `throwOnDrop: true` when the
+ * prompt was dropped before reaching the agent (an abort, session transition,
+ * or usage preflight denial won the race with turn setup). The prompt was not
+ * persisted, so resubmitting it is safe. Headless drivers use this to retry.
+ */
+export class PromptDroppedError extends Error {
+	constructor() {
+		super("Prompt dropped before provider dispatch.");
+		this.name = "PromptDroppedError";
 	}
 }
 
@@ -981,6 +995,8 @@ export class AgentSession implements SettingsScope {
 	#modelDiscoveryAbortController = new AbortController();
 	/** Process-wide by default (double-spend safety across sessions); injectable for tests. */
 	#resetCoordinator: CodexAutoRedeemCoordinator;
+	/** Each turn stream may adopt a peer's confirmed reset once, not retry on it indefinitely. */
+	#adoptedResetMarkers = new Map<string, number>();
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#getEvalPreludes: (() => readonly EvalPreludeDefinition[]) | undefined;
@@ -1729,6 +1745,7 @@ export class AgentSession implements SettingsScope {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			scopedModels: () => this.scopedModels.map((s) => s.model),
+			inheritedAgents: config.inheritedSessionAgents,
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#asyncJobManager =
@@ -7707,6 +7724,10 @@ export class AgentSession implements SettingsScope {
 	 * the prompt was forwarded to the agent — either directly or queued as a
 	 * steer/follow-up. Callers that render a UI or manage turn lifecycle (e.g.
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
+	 *
+	 * A prompt dropped before dispatch also resolves `true` (RPC reports it as
+	 * aborted once no run started); pass `throwOnDrop: true` to reject with
+	 * {@link PromptDroppedError} instead.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		return this.#admitSubmission(() => this.#prompt(text, options));
@@ -7751,18 +7772,20 @@ export class AgentSession implements SettingsScope {
 		const typedText = text;
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
-			const handled = await this.#tryExecuteExtensionCommand(text);
-			if (handled) {
-				return false;
-			}
-
-			// Try custom commands (TypeScript slash commands)
-			const customResult = await this.#tryExecuteCustomCommand(text);
-			if (customResult !== null) {
-				if (customResult === "") {
+			if (options?.runCommands !== false) {
+				const handled = await this.#tryExecuteExtensionCommand(text);
+				if (handled) {
 					return false;
 				}
-				text = customResult;
+
+				// Try custom commands (TypeScript slash commands)
+				const customResult = await this.#tryExecuteCustomCommand(text);
+				if (customResult !== null) {
+					if (customResult === "") {
+						return false;
+					}
+					text = customResult;
+				}
 			}
 
 			// Try file-based slash commands (markdown files from commands/ directories)
@@ -7981,6 +8004,7 @@ export class AgentSession implements SettingsScope {
 			// a message that was never persisted).
 			this.#promptDropped?.({ text: typedText, images: options?.images });
 		}
+		if (!dispatched && options?.throwOnDrop) throw new PromptDroppedError();
 		return true;
 	}
 
@@ -13412,11 +13436,11 @@ maybeStartTitleGeneration(
 		return plan;
 	}
 
-	#codexResetLockPath(lockKey: string, coordinator: CodexAutoRedeemCoordinator): string {
+	#resetLockPath(lockKey: string, coordinator: CodexAutoRedeemCoordinator): string {
 		return `${coordinator.resetLockPath ?? getAgentDbPath()}.reset-${Bun.hash(lockKey).toString(16)}`;
 	}
 
-	async #readCodexResetMarker(lockPath: string): Promise<{ state: string; atMs: number }> {
+	async #readResetMarker(lockPath: string): Promise<{ state: string; atMs: number }> {
 		let text: string;
 		try {
 			text = await Bun.file(lockPath).text();
@@ -13428,23 +13452,40 @@ maybeStartTitleGeneration(
 		return { state, atMs: Number(timestamp) };
 	}
 
-	async #adoptRecentCodexReset(
+	#adoptResetMarker(lockKey: string, marker: { state: string; atMs: number }): boolean {
+		if (
+			marker.state !== "reset" ||
+			!Number.isFinite(marker.atMs) ||
+			Date.now() - marker.atMs >= ATTEMPT_COOLDOWN_MS ||
+			marker.atMs <= (this.#adoptedResetMarkers.get(lockKey) ?? 0)
+		) {
+			return false;
+		}
+		this.#adoptedResetMarkers.set(lockKey, marker.atMs);
+		return true;
+	}
+
+	async #adoptRecentReset(
 		statuses: readonly ResetCreditAccountStatus[],
 		coordinator: CodexAutoRedeemCoordinator,
 	): Promise<boolean> {
-		const active = statuses.find(status => status.active && status.provider === "openai-codex");
-		const lockKey = active && codexResetLockKey(active);
-		if (!lockKey) return false;
-		const lockPath = this.#codexResetLockPath(lockKey, coordinator);
-		await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
-		return withFileLock(
-			lockPath,
-			async () => {
-				const marker = await this.#readCodexResetMarker(lockPath);
-				return marker.state === "reset" && Date.now() - marker.atMs < ATTEMPT_COOLDOWN_MS;
-			},
-			{ retries: 300, retryDelayMs: 100 },
-		);
+		for (const status of statuses) {
+			if (status.provider !== this.model?.provider) continue;
+			const lockKey = resetAccountLockKey(status);
+			if (!lockKey) continue;
+			const lockPath = this.#resetLockPath(lockKey, coordinator);
+			await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
+			const adopted = await withFileLock(
+				lockPath,
+				async () => this.#adoptResetMarker(lockKey, await this.#readResetMarker(lockPath)),
+				{ retries: 300, retryDelayMs: 100 },
+			);
+			if (adopted) {
+				await this.#modelRegistry.authStorage.credentials.revalidate();
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -13475,43 +13516,52 @@ maybeStartTitleGeneration(
 					// Caller cancellation must not leave an ambiguous consume in flight.
 					signal: AbortSignal.timeout(15_000),
 				};
-				const lockKey = provider === "openai-codex" ? codexResetLockKey(action.target) : undefined;
+				const lockKey = resetAccountLockKey(action.target);
 				if (!lockKey) {
-					// Claude, or a Codex account with no upstream identity to fence on.
+					// An account without an upstream identity cannot share a cross-process fence.
 					outcome = await authStorage.resets.redeem(redeemOptions);
 				} else {
 					// The coordinator is process-local. Fence concurrent processes and
 					// remember a recent attempt so a late 429 cannot spend again.
-					const lockPath = this.#codexResetLockPath(lockKey, coordinator);
+					const lockPath = this.#resetLockPath(lockKey, coordinator);
 					await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
 					outcome = await withFileLock(
 						lockPath,
 						async () => {
-							const marker = await this.#readCodexResetMarker(lockPath);
+							const marker = await this.#readResetMarker(lockPath);
 							if (Date.now() - marker.atMs < ATTEMPT_COOLDOWN_MS) {
-								sharedReset = marker.state === "reset";
+								sharedReset = this.#adoptResetMarker(lockKey, marker);
+								if (sharedReset) await authStorage.credentials.revalidate();
 								return undefined;
 							}
-							const statuses = await this.listResetCredits(AbortSignal.timeout(10_000), provider);
-							const live = statuses.find(
-								status => status.credentialId === action.target.credentialId && !status.error,
-							);
-							if (!live) {
-								return { ok: false, code: "credit_list_failed", provider } satisfies ResetCreditRedeemOutcome;
-							}
-							if (action.availableCount !== undefined && live.availableCount < action.availableCount) {
-								// The offer changed while waiting; only a confirmed reset
-								// marker can authorize this caller's immediate retry.
-								return undefined;
-							}
-							if (live.availableCount < 1) {
-								return { ok: false, code: "no_credit", provider } satisfies ResetCreditRedeemOutcome;
+							// Claude's redeem revalidates its exact offer. Codex needs its
+							// balance rechecked after acquiring the cross-process fence.
+							if (provider === "openai-codex") {
+								const statuses = await this.listResetCredits(AbortSignal.timeout(10_000), provider);
+								const live = statuses.find(
+									status => status.credentialId === action.target.credentialId && !status.error,
+								);
+								if (!live) {
+									return {
+										ok: false,
+										code: "credit_list_failed",
+										provider,
+									} satisfies ResetCreditRedeemOutcome;
+								}
+								if (action.availableCount !== undefined && live.availableCount < action.availableCount) {
+									return undefined;
+								}
+								if (live.availableCount < 1) {
+									return { ok: false, code: "no_credit", provider } satisfies ResetCreditRedeemOutcome;
+								}
 							}
 							const attemptedAt = Date.now();
 							await Bun.write(lockPath, `pending:${attemptedAt}`);
 							const result = await authStorage.resets.redeem(redeemOptions);
-							if (result.code === "reset") await Bun.write(lockPath, `reset:${attemptedAt}`);
-							else if (result.code === "no_credit" || result.code === "nothing_to_reset") {
+							if (result.code === "reset") {
+								await Bun.write(lockPath, `reset:${attemptedAt}`);
+								this.#adoptedResetMarkers.set(lockKey, attemptedAt);
+							} else if (result.code === "no_credit" || result.code === "nothing_to_reset") {
 								await Bun.write(lockPath, "");
 							}
 							return result;
@@ -13607,35 +13657,29 @@ maybeStartTitleGeneration(
 		return redeemed;
 	}
 
-	async #maybeAutoRedeemReset(
-		activeBlockUnblockAtMs?: number,
-	): Promise<boolean> {
+	async #maybeAutoRedeemReset(activeBlockUnblockAtMs?: number): Promise<ResetRecoveryResult> {
 		const provider = this.model?.provider;
-		if (provider !== "anthropic" && provider !== "openai-codex") return false;
+		if (provider !== "anthropic" && provider !== "openai-codex") return { restored: false };
 		const cfg = (provider === "anthropic" ? cfgClaudeResets : cfgCodexResets).get(this.settings);
-		if (!shouldEvaluateCodexAutoRedeem(cfg.autoRedeem)) return false;
+		if (!shouldEvaluateCodexAutoRedeem(cfg.autoRedeem)) return { restored: false };
 		const coordinator = this.#resetCoordinator;
 		const authStorage = this.#modelRegistry.authStorage;
 		const identity = authStorage.oauth.identity(provider, this.sessionId);
-		const identityValue = (
-			identity?.accountId ??
-			identity?.email ??
-			identity?.orgId
-		)
-			?.trim()
-			.toLowerCase();
-		if (!identityValue) return false;
+		const identityValue = (identity?.accountId ?? identity?.email ?? identity?.orgId)?.trim().toLowerCase();
+		if (!identityValue) return { restored: false };
 		const accountKey = `${provider}|${identity?.orgId?.trim().toLowerCase() ?? "-"}|${identityValue}`;
 		const existing = coordinator.inFlightByAccount.get(accountKey);
 		if (existing) return existing;
 
-		const run = (async (): Promise<boolean> => {
-			await authStorage.usage.invalidate(provider);
-			const reports = await this.fetchUsageReports();
-			const statuses = await this.listResetCredits(
-				AbortSignal.timeout(10_000),
-				provider,
-			);
+		const run = (async (): Promise<ResetRecoveryResult> => {
+			let reports: UsageReport[] | null = null;
+			if (provider === "openai-codex") {
+				await authStorage.usage.invalidate(provider);
+				reports = await this.fetchUsageReports();
+			}
+			// Claude's live reset listing includes the same response's quota
+			// windows; a second broker usage poll adds no evidence and can 429.
+			const statuses = await this.listResetCredits(AbortSignal.timeout(10_000), provider);
 			const plan =
 				provider === "anthropic"
 					? this.#planClaudeResets(
@@ -13656,26 +13700,29 @@ maybeStartTitleGeneration(
 							activeBlockUnblockAtMs,
 						);
 			if (plan.actions.length === 0) {
-				return provider === "openai-codex" && (await this.#adoptRecentCodexReset(statuses, coordinator));
+				if (await this.#adoptRecentReset(statuses, coordinator)) return { restored: true };
+				let retryAfterMs: number | undefined;
+				if (provider === "anthropic" && cfg.autoRedeem === "yes") {
+					for (const status of statuses) {
+						if (!status.error || status.retryAfterMs === undefined || !Number.isFinite(status.retryAfterMs))
+							continue;
+						const delay = Math.max(0, status.retryAfterMs);
+						retryAfterMs = retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
+					}
+				}
+				return { restored: false, retryAfterMs };
 			}
 			if (
 				shouldPromptCodexAutoRedeem(cfg.autoRedeem) &&
 				!(await this.#confirmAutoRedeem(provider, plan.actions, coordinator))
 			) {
-				return false;
+				return { restored: false };
 			}
-			return (
-				(await this.#executeResetActions(provider, plan.actions, coordinator)) >
-				0
-			);
+			return { restored: (await this.#executeResetActions(provider, plan.actions, coordinator)) > 0 };
 		})()
-			.catch((error) => {
-				logger.warn("auto-reset: blocked pass failed", {
-					provider,
-					account: accountKey,
-					error: String(error),
-				});
-				return false;
+			.catch((error): ResetRecoveryResult => {
+				logger.warn("auto-reset: blocked pass failed", { provider, account: accountKey, error: String(error) });
+				return { restored: false };
 			})
 			.finally(() => coordinator.inFlightByAccount.delete(accountKey));
 		coordinator.inFlightByAccount.set(accountKey, run);

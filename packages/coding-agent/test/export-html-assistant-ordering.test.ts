@@ -343,7 +343,6 @@ describe("HTML export assistant content ordering", () => {
 			"last",
 		]);
 	});
-
 	test("projects interleaved assistant blocks into pi-style sidebar timeline rows", () => {
 		const rendered = renderAssistant(
 			[

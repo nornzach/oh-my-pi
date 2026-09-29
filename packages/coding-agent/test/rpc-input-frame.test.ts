@@ -191,7 +191,6 @@ describe("dispatchRpcInputFrame", () => {
 		await flushMicrotasks();
 		expect(outputs.map(frame => (frame as RpcResponse).command)).toEqual(["prompt", "synthesize_speech"]);
 	});
-
 	test("bash handler errors surface as an error response on the background frame", async () => {
 		const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
 			if (command.type === "bash") throw new Error("kaboom");

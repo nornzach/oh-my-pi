@@ -6,6 +6,10 @@
 
 - Request history can be paged beyond 200 entries without duplicate or skipped rows when timestamps match or new data arrives.
 - Included cache-write tokens in the cache hit-rate denominator so the metric reflects all prompt tokens.
+- Ensure synchronization of session statistics is atomic, preventing duplicate entries during interrupted syncs
+- Sped up initial imports and repeat syncs in `omp stats`, including histories with tens of thousands of session files.
+- Fixed prolonged `omp stats` full replays on large, already-indexed session histories.
+
 ## [18.2.9] - 2026-09-22
 
 ### Fixed
