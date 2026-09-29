@@ -2356,6 +2356,62 @@ describe("ExtensionRunner", () => {
 			]);
 			delete globalState.__approvalEvents;
 		});
+		it("runs bridged preflight before approval and cancels denied state", async () => {
+			const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
+			const order: string[] = [];
+			initializeRunner(runner, async () => {
+				order.push("ui_select");
+				return "Approve";
+			});
+			runner.setToolCallPreflight({
+				before: async () => {
+					order.push("preflight");
+					return { block: true, reason: "rule blocked" };
+				},
+			});
+			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
+			await expect(
+				(wrapper as ExtensionToolWrapper<any>).execute("call-preflight-order", {}, undefined, undefined, {
+					sessionManager,
+					modelRegistry,
+					model: undefined,
+					isIdle: () => true,
+					hasQueuedMessages: () => false,
+					abort: () => {},
+					settings: Settings.isolated({ "tools.approvalMode": "always-ask" }),
+				}),
+			).rejects.toThrow("rule blocked");
+			expect(order).toEqual(["preflight"]);
+
+			const deniedRunner = new ExtensionRunner(
+				[],
+				new ExtensionRuntime(),
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			initializeRunner(deniedRunner, async () => "Deny");
+			let cancelled = 0;
+			deniedRunner.setToolCallPreflight({
+				before: async () => undefined,
+				cancel: () => {
+					cancelled++;
+				},
+			});
+			const deniedWrapper = new ExtensionToolWrapper(approvalTool, deniedRunner);
+			await expect(
+				(deniedWrapper as ExtensionToolWrapper<any>).execute("call-preflight-denied", {}, undefined, undefined, {
+					sessionManager,
+					modelRegistry,
+					model: undefined,
+					isIdle: () => true,
+					hasQueuedMessages: () => false,
+					abort: () => {},
+					settings: Settings.isolated({ "tools.approvalMode": "always-ask" }),
+				}),
+			).rejects.toThrow("denied by user");
+			expect(cancelled).toBe(1);
+		});
 
 		it("does not present approval before canonical or wire-aliased tool previews are ready", async () => {
 			const cases = [
@@ -3028,7 +3084,7 @@ describe("ExtensionRunner", () => {
 			expect(executed).toEqual([{ command: "echo second" }]);
 		});
 
-		it("preserves additional context from every non-blocking handler in registration order", async () => {
+		it("preserves distinct additional context from every non-blocking handler in registration order", async () => {
 			const first = `
 				export default function(pi) {
 					pi.on("tool_call", async () => ({
@@ -3041,6 +3097,7 @@ describe("ExtensionRunner", () => {
 			const second = `
 				export default function(pi) {
 					pi.on("tool_call", async () => ({ additionalContext: "second context" }));
+					pi.on("tool_call", async () => ({ additionalContext: "first context" }));
 				}
 			`;
 			fs.writeFileSync(path.join(extensionsDir, "tool-call-context-a.ts"), first);

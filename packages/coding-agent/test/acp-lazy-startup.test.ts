@@ -22,10 +22,12 @@ import {
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgAsyncEnabled, cfgAsyncMaxJobs } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgAdvisorEnabled } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 import {
 	cfgBashAutoBackgroundEnabled,
 	cfgBashAutoBackgroundThresholdMs,
 } from "@oh-my-pi/pi-coding-agent/exec/settings";
+import { cfgTodoEager, cfgTodoEnabled, cfgTodoReminders } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
 const TEST_MODEL: Model = buildModel({
 	id: "claude-sonnet-4-20250514",
@@ -198,6 +200,7 @@ describe("ACP lazy startup", () => {
 						fileArgs: [],
 						unknownFlags: new Map(),
 						unrecognizedFlags: [],
+						invalidFlagValues: [],
 						noSkills: true,
 						noRules: true,
 						noTools: true,
@@ -303,6 +306,7 @@ describe("ACP lazy startup", () => {
 						fileArgs: [],
 						unknownFlags: new Map(),
 						unrecognizedFlags: [],
+						invalidFlagValues: [],
 						noSkills: true,
 						noRules: true,
 						noTools: true,
@@ -348,9 +352,9 @@ describe("ACP lazy startup", () => {
 		const observe = () => {
 			// advisor.subagents was removed in 17.3.0; advisor.enabled exercises
 			// the same contract: a schema-defaulted setting must be editable.
-			const before = settings.get("advisor.enabled");
-			settings.set("advisor.enabled", true);
-			observed = { before, after: settings.get("advisor.enabled") };
+			const before = cfgAdvisorEnabled.get(settings);
+			cfgAdvisorEnabled.set(settings, true);
+			observed = { before, after: cfgAdvisorEnabled.get(settings) };
 			throw new Error(stopMessage);
 		};
 
@@ -362,6 +366,7 @@ describe("ACP lazy startup", () => {
 					fileArgs: [],
 					unknownFlags: new Map(),
 					unrecognizedFlags: [],
+					invalidFlagValues: [],
 					noSkills: true,
 					noRules: true,
 					noTools: true,
@@ -407,9 +412,9 @@ describe("ACP lazy startup", () => {
 			const stopMessage = "stop test protocol todo settings";
 			const observe = () => {
 				observed = {
-					enabled: settings.get("todo.enabled"),
-					reminders: settings.get("todo.reminders"),
-					eager: settings.get("todo.eager"),
+					enabled: cfgTodoEnabled.get(settings),
+					reminders: cfgTodoReminders.get(settings),
+					eager: cfgTodoEager.get(settings),
 				};
 				throw new Error(stopMessage);
 			};
@@ -422,6 +427,7 @@ describe("ACP lazy startup", () => {
 						fileArgs: [],
 						unknownFlags: new Map(),
 						unrecognizedFlags: [],
+						invalidFlagValues: [],
 						noSkills: true,
 						noRules: true,
 						noTools: true,
@@ -558,6 +564,7 @@ describe("ACP lazy startup", () => {
 					fileArgs: [],
 					unknownFlags: new Map(),
 					unrecognizedFlags: [],
+					invalidFlagValues: [],
 					noSkills: true,
 					noRules: true,
 					noTools: true,

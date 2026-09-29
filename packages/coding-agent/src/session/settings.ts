@@ -1403,18 +1403,43 @@ export const cfgProviderAppendOnlyContext = register({
 	},
 });
 
-export const cfgThinkingBudgetsMinimal = register({ id: "thinkingBudgets.minimal", restartRequired: true, type: "number", default: 1024 });
+export const cfgThinkingBudgetsMinimal = register({
+	id: "thinkingBudgets.minimal",
+	restartRequired: true,
+	type: "number",
+	default: 1024,
+});
 
-export const cfgThinkingBudgetsLow = register({ id: "thinkingBudgets.low", restartRequired: true, type: "number", default: 2048 });
+export const cfgThinkingBudgetsLow = register({
+	id: "thinkingBudgets.low",
+	restartRequired: true,
+	type: "number",
+	default: 2048,
+});
 
-export const cfgThinkingBudgetsMedium = register({ id: "thinkingBudgets.medium", restartRequired: true, type: "number", default: 8192 });
+export const cfgThinkingBudgetsMedium = register({
+	id: "thinkingBudgets.medium",
+	restartRequired: true,
+	type: "number",
+	default: 8192,
+});
 
-export const cfgThinkingBudgetsHigh = register({ id: "thinkingBudgets.high", restartRequired: true, type: "number", default: 16384 });
+export const cfgThinkingBudgetsHigh = register({
+	id: "thinkingBudgets.high",
+	restartRequired: true,
+	type: "number",
+	default: 16384,
+});
 
-export const cfgThinkingBudgetsXhigh = register({ id: "thinkingBudgets.xhigh", restartRequired: true, type: "number", default: 32768 });
+export const cfgThinkingBudgetsXhigh = register({
+	id: "thinkingBudgets.xhigh",
+	restartRequired: true,
+	type: "number",
+	default: 32768,
+});
 
-export const cfgThinkingBudgetsMax = register({ id: "thinkingBudgets.max", restartRequired: true, type: "number", default: 32768 });
-/** Token budget per thinking level (`thinkingBudgets.*`), passed to providers on every request. */
+export const cfgThinkingBudgetsMax = register({ id: "thinkingBudgets.max", type: "number", default: 32768 });
+/** Token budget per thinking level (`thinkingBudgets.*`) on transports that accept reasoning token budgets. */
 export const cfgThinkingBudgets = combine({
 	minimal: cfgThinkingBudgetsMinimal,
 	low: cfgThinkingBudgetsLow,

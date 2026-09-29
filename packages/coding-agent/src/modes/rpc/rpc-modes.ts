@@ -17,12 +17,7 @@ import type { GoalModeState } from "../../goals/state";
 import guidedGoalInterviewPrompt from "../../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { type VibeOwnerScope, type VibeParentSession, VibeSessionRegistry } from "../../vibe/runtime";
-import {
-	consumeLoopLimitIteration,
-	createLoopLimitRuntime,
-	isLoopDurationExpired,
-	parseLoopArgs,
-} from "../loop-limit";
+import { consumeLoopLimitIteration, createLoopLimitRuntime, isLoopDurationExpired, parseLoopArgs } from "../loop-limit";
 import type { RpcGoalState, RpcLoopModeState, RpcLoopModeUpdateFrame, RpcVibeModeState } from "./rpc-types";
 
 // ============================================================================
@@ -358,7 +353,12 @@ export class RpcGoalModeController {
 	#scheduleContinuation(): void {
 		this.#cancelContinuation();
 		const session = this.#deps.session;
-		if (!((lookupSetting("goal.continuationModes")?.get(session.settings) as string[] | undefined) ?? []).includes("rpc")) return;
+		if (
+			!((lookupSetting("goal.continuationModes")?.get(session.settings) as string[] | undefined) ?? []).includes(
+				"rpc",
+			)
+		)
+			return;
 		if (session.getPlanModeState()?.enabled) return;
 		if (this.#suppressNextContinuation) return;
 		const state = session.getGoalModeState();

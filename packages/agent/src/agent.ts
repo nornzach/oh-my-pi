@@ -346,6 +346,8 @@ export interface AgentOptions {
 	 * tool-call arguments). See {@link AgentLoopConfig.transformAssistantMessage}.
 	 */
 	transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
+	/** See {@link AgentLoopConfig.transformAssistantMessagePreservesToolCalls}. */
+	transformAssistantMessagePreservesToolCalls?: boolean;
 
 	/**
 	 * Opt-in OpenTelemetry instrumentation. Passing `{}` enables the loop's
@@ -525,6 +527,8 @@ export class Agent {
 	 * UI emission, and tool dispatch. Reassign at any time to swap the implementation.
 	 */
 	transformAssistantMessage?: AgentLoopConfig["transformAssistantMessage"];
+	/** Declares {@link transformAssistantMessage} never rewrites streamed tool calls; reassign alongside it. */
+	transformAssistantMessagePreservesToolCalls?: boolean;
 	/**
 	 * Hook that peeks whether interrupting IRC asides are queued for the next boundary.
 	 */
@@ -590,6 +594,7 @@ export class Agent {
 		this.beforeToolCall = opts.beforeToolCall;
 		this.afterToolCall = opts.afterToolCall;
 		this.transformAssistantMessage = opts.transformAssistantMessage;
+		this.transformAssistantMessagePreservesToolCalls = opts.transformAssistantMessagePreservesToolCalls;
 		this.#telemetry = opts.telemetry;
 		this.#appendOnlyContext = opts.appendOnlyContext;
 		this.#transformProviderContext = opts.transformProviderContext;
@@ -1352,7 +1357,7 @@ export class Agent {
 	}
 
 	#notifyQueueChange(): void {
-		for (const listener of [...this.#queueListeners]) listener();
+		for (const listener of this.#queueListeners) listener();
 	}
 
 	/**
@@ -1887,6 +1892,7 @@ export class Agent {
 			transformAssistantMessage: this.transformAssistantMessage
 				? (message, signal) => this.transformAssistantMessage?.(message, signal)
 				: undefined,
+			transformAssistantMessagePreservesToolCalls: this.transformAssistantMessagePreservesToolCalls,
 			onAssistantMessageEvent: this.#onAssistantMessageEvent,
 			onHarmonyLeak: this.#onHarmonyLeak,
 			onTurnEnd: (messages, signal, context) => this.#onTurnEnd?.(messages, signal, context),

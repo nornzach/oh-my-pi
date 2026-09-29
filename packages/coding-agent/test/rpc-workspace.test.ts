@@ -17,7 +17,14 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-workspace";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getConfigRootDir, getProjectAgentDir, getProjectDir, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	getConfigRootDir,
+	getProjectAgentDir,
+	getProjectDir,
+	setAgentDir,
+	setProjectDir,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 /**
@@ -268,7 +275,7 @@ describe("RPC workspace directories", () => {
 				}
 				const settings = await Settings.loadIsolated({ cwd, agentDir: tempDir.path() });
 				const manager = createManager(cwd);
-				authStorage.setRuntimeApiKey("openai", "test-key");
+				authStorage.keys.setRuntime("openai", "test-key");
 				({ session } = await createAgentSession({
 					cwd,
 					agentDir: tempDir.path(),
@@ -343,42 +350,45 @@ describe("RPC workspace directories", () => {
 			},
 		);
 
-		it.each([false, true])("recovers a failed memory rebind without a stale active backend (rollback failure: %s)", async rollbackFails => {
-			await using fixture = await memoryFixture("hindsight");
-			const { session, manager, cwd, dest } = fixture;
-			await session.prompt("Remember the source project.");
-			await manager.ensureOnDisk();
-			const sourceFile = manager.getSessionFile()!;
-			const sourceState = session.getHindsightSessionState()!;
-			const flush = sourceState.flushRetainQueue.bind(sourceState);
-			vi.spyOn(sourceState, "flushRetainQueue").mockImplementation(async () => {
-				if (manager.getCwd() === dest) throw new Error("source memory drain failed");
-				await flush();
-			});
-			if (rollbackFails) vi.spyOn(manager, "rollbackMove").mockRejectedValue(new Error("rollback disk failure"));
-			const failure = await applyRpcMoveSession(session, dest, {
-				applyCwdChange: newCwd => rebindRpcSessionCwd(session, newCwd, async () => {}),
-			}).catch((error: unknown) => error);
-			expect(failure).toBeInstanceOf(Error);
-			expect((failure as Error).message).toContain("source memory drain failed");
-			if (rollbackFails) {
-				expect(failure).toBeInstanceOf(RpcWorkspaceRestoreError);
-				expect((failure as Error).message).toContain(dest);
-				expect((failure as Error).message).toContain("session closed");
-				expect(manager.getCwd()).toBe(dest);
-				expect(await Bun.file(sourceFile).exists()).toBe(false);
-				expect(session.getHindsightSessionState()).toBeUndefined();
-			} else {
-				expect((failure as Error).message).toContain(`workspace restored to ${cwd}`);
-				expect(manager.getCwd()).toBe(cwd);
-				expect(getProjectDir()).toBe(cwd);
-				expect(manager.getSessionFile()).toBe(sourceFile);
-				expect(await Bun.file(sourceFile).exists()).toBe(true);
-				await session.prompt("Summarize the restored project.");
-				expect(fixture.recalledBanks).not.toContain("destination");
-				expect(session.getHindsightSessionState()?.bankId).toBe("source");
-			}
-		});
+		it.each([false, true])(
+			"recovers a failed memory rebind without a stale active backend (rollback failure: %s)",
+			async rollbackFails => {
+				await using fixture = await memoryFixture("hindsight");
+				const { session, manager, cwd, dest } = fixture;
+				await session.prompt("Remember the source project.");
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile()!;
+				const sourceState = session.getHindsightSessionState()!;
+				const flush = sourceState.flushRetainQueue.bind(sourceState);
+				vi.spyOn(sourceState, "flushRetainQueue").mockImplementation(async () => {
+					if (manager.getCwd() === dest) throw new Error("source memory drain failed");
+					await flush();
+				});
+				if (rollbackFails) vi.spyOn(manager, "rollbackMove").mockRejectedValue(new Error("rollback disk failure"));
+				const failure = await applyRpcMoveSession(session, dest, {
+					applyCwdChange: newCwd => rebindRpcSessionCwd(session, newCwd, async () => {}),
+				}).catch((error: unknown) => error);
+				expect(failure).toBeInstanceOf(Error);
+				expect((failure as Error).message).toContain("source memory drain failed");
+				if (rollbackFails) {
+					expect(failure).toBeInstanceOf(RpcWorkspaceRestoreError);
+					expect((failure as Error).message).toContain(dest);
+					expect((failure as Error).message).toContain("session closed");
+					expect(manager.getCwd()).toBe(dest);
+					expect(await Bun.file(sourceFile).exists()).toBe(false);
+					expect(session.getHindsightSessionState()).toBeUndefined();
+				} else {
+					expect((failure as Error).message).toContain(`workspace restored to ${cwd}`);
+					expect(manager.getCwd()).toBe(cwd);
+					expect(getProjectDir()).toBe(cwd);
+					expect(manager.getSessionFile()).toBe(sourceFile);
+					expect(await Bun.file(sourceFile).exists()).toBe(true);
+					await session.prompt("Summarize the restored project.");
+					expect(fixture.recalledBanks).not.toContain("destination");
+					expect(session.getHindsightSessionState()?.bankId).toBe("source");
+				}
+			},
+		);
 
 		it("relocates the session file to the destination's session dir and rewrites the header cwd", async () => {
 			const cwd = mkdir("project");

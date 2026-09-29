@@ -8,6 +8,7 @@ import {
 	buildShareSnapshot,
 	normalizeShareServerUrl,
 	type ShareSessionOptions,
+	type ShareStore,
 	shareSnapshot,
 	fitShareSnapshot,
 } from "../../export/share";
@@ -75,7 +76,7 @@ export function buildRpcActiveTools(session: AgentSession): RpcActiveToolsResult
 function shareOptions(session: AgentSession): ShareSessionOptions {
 	return {
 		serverUrl: lookupSetting("share.serverUrl")?.get(session.settings) as string | undefined,
-		store: lookupSetting("share.store")?.get(session.settings) as string | undefined,
+		store: lookupSetting("share.store")?.get(session.settings) as ShareStore | undefined,
 		state: session.state,
 		obfuscator: lookupSetting("share.redactSecrets")?.get(session.settings) ? session.obfuscator : undefined,
 	};

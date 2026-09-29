@@ -29,7 +29,7 @@ let session: AgentSession;
 beforeEach(async () => {
 	tempDir = TempDir.createSync("@pi-stranded-drain-");
 	authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 });
 
 afterEach(async () => {

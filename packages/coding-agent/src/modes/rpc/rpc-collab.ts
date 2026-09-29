@@ -91,10 +91,16 @@ export class RpcCollabController {
 		if (!this.isGuest) this.#guest = undefined;
 		if (this.#guest) throw new Error("Leave the current collab session before hosting");
 		if (this.#host) return this.state;
-		const configured = relayUrl?.trim() || (lookupSetting("collab.relayUrl")?.get(this.#options.session.settings) as string | undefined) || "";
+		const configured =
+			relayUrl?.trim() ||
+			(lookupSetting("collab.relayUrl")?.get(this.#options.session.settings) as string | undefined) ||
+			"";
 		if (!configured) throw new Error("No relay configured. Set collab.relayUrl or provide a relay URL.");
 		const host = new CollabHost(this.#ctx);
-		await host.start(normalizeRelayUrl(configured), (lookupSetting("collab.webUrl")?.get(this.#options.session.settings) as string | undefined) || "");
+		await host.start(
+			normalizeRelayUrl(configured),
+			(lookupSetting("collab.webUrl")?.get(this.#options.session.settings) as string | undefined) || "",
+		);
 		this.#host = host;
 		this.#ctx.collabHost = host;
 		this.#publishState();

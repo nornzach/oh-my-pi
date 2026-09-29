@@ -233,7 +233,11 @@ describe("RPC model catalog freshness", () => {
 
 			const writer = await discoverAuthStorage(agentDir.path());
 			try {
-				await writer.set("shared-provider", { type: "api_key", key: "sk-shared-test", source: "login" });
+				await writer.credentials.set("shared-provider", {
+					type: "api_key",
+					key: "sk-shared-test",
+					source: "login",
+				});
 			} finally {
 				writer.close();
 			}

@@ -223,7 +223,6 @@ export class PrewalkCoordinator {
 		});
 	}
 
-
 	/** Arms a prewalk immediately for an explicit slash-command request. */
 	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
 		const active = this.#prewalk;

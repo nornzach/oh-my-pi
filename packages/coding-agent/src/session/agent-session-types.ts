@@ -23,11 +23,7 @@ import type { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buff
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { postmortem } from "@oh-my-pi/pi-utils";
-import type {
-	AsyncJob,
-	AsyncJobDeliveryState,
-	AsyncJobManager,
-} from "../async";
+import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { AgentDefinition } from "../task/types";
 import type { ModelRegistry } from "../config/model-registry";
@@ -39,10 +35,7 @@ import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import type {
-	ExtensionRunner,
-	PreparedExtension,
-} from "../extensibility/extensions";
+import type { ExtensionRunner, PreparedExtension } from "../extensibility/extensions";
 import type { CacheWarmer } from "./cache-warmer";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
@@ -82,14 +75,7 @@ export type CommandMetadataChangedListener = () => void | Promise<void>;
 /** Public summary of an asynchronous job. */
 export type AsyncJobSnapshotItem = Pick<
 	AsyncJob,
-	| "id"
-	| "type"
-	| "status"
-	| "label"
-	| "startTime"
-	| "endTime"
-	| "endedAt"
-	| "agentId"
+	"id" | "type" | "status" | "label" | "startTime" | "endTime" | "endedAt" | "agentId"
 > & {
 	cancellationPending?: boolean;
 	resultPreview?: string;
@@ -137,10 +123,7 @@ export interface UsageFallbackConfirmation {
  * Interactive callers use the confirmation details to present the pending
  * route change; aborting `signal` cancels that pending confirmation.
  */
-export type UsageFallbackConfirmer = (
-	confirmation: UsageFallbackConfirmation,
-	signal: AbortSignal,
-) => Promise<boolean>;
+export type UsageFallbackConfirmer = (confirmation: UsageFallbackConfirmation, signal: AbortSignal) => Promise<boolean>;
 
 /** Identifies a retry fallback chain already entered during startup model resolution. */
 export interface InitialRetryFallbackState {
@@ -206,6 +189,8 @@ export interface AgentSessionConfig {
 	thinkingLevelCeiling?: Effort;
 	/** Retry chain ownership when startup selected one of its fallback entries. */
 	initialRetryFallback?: InitialRetryFallbackState;
+	/** Skip retry.fallbackChains validation at construction; the host calls `validateRetryFallbackChains()` later. */
+	deferRetryFallbackValidation?: boolean;
 	/** Prewalk from the starting model to a fast/cheap target after implementation begins. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve, then switch to the target. */
@@ -278,15 +263,9 @@ export interface AgentSessionConfig {
 	/** Re-resolves settings-gated tools against live settings; driven by `SessionTools.reconcileBuiltinTools`. */
 	reconcileSettingsGatedTools?: (isBuiltIn: (name: string) => boolean) => Promise<SettingsGatedToolDelta>;
 	/** Current session pre-LLM message transform pipeline. */
-	transformContext?: (
-		messages: AgentMessage[],
-		signal?: AbortSignal,
-	) => AgentMessage[] | Promise<AgentMessage[]>;
+	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/** Provider request transform applied after message conversion. */
-	transformProviderContext?: (
-		context: Context,
-		model: Model,
-	) => Context | Promise<Context>;
+	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 	/** Stream wrapper for side-channel requests. */
 	sideStreamFn?: StreamFn;
 	/** Stream wrapper for advisor requests. */
@@ -323,8 +302,6 @@ export interface AgentSessionConfig {
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for provider and edit content. */
 	obfuscator?: SecretObfuscator;
-	/** Inherited eval executor session id from a parent agent. */
-	parentEvalSessionId?: string;
 	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
 	/** Async job manager owned and disposed by this session. */
@@ -346,10 +323,7 @@ export interface AgentSessionConfig {
 	 * match cap, against the advisor-scoped tool session. Without it an advisor
 	 * running on Cursor silently drops both fields.
 	 */
-	advisorCreateGrepTool?(options: {
-		context?: number;
-		totalMatchLimit?: number;
-	}): AgentTool | undefined;
+	advisorCreateGrepTool?(options: { context?: number; totalMatchLimit?: number }): AgentTool | undefined;
 	/**
 	 * Build the `replace`-mode `edit` a Cursor `pi_edit` frame needs, against the
 	 * advisor-scoped tool session. The advisor's ordinary instance follows the
@@ -565,8 +539,7 @@ export interface ResetSessionContextResult {
 export type RestoredQueuedMessage = { text: string; images?: ImageContent[] };
 
 /** Queued user content with its delivery lane and enqueue time intact. */
-export interface RestoredQueuedMessageWithDelivery
-	extends RestoredQueuedMessage {
+export interface RestoredQueuedMessageWithDelivery extends RestoredQueuedMessage {
 	mode: "steer" | "followUp";
 	timestamp: number;
 }

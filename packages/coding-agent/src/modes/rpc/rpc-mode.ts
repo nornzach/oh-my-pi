@@ -1575,8 +1575,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						cwd: session.sessionManager.getCwd(),
 						output: text => output({ type: "command_output", text }),
 						refreshCommands: emitAvailableCommandsUpdate,
-						reloadPlugins: reloadPluginState,
-						runCommandInBackground: task => shutdownCoordinator.track(task()),
+						reloadPlugins: async () => {
+							await reloadPluginState();
+						},
+						runCommandInBackground: task => {
+							void shutdownCoordinator.track(task());
+						},
 						notifyTitleChanged: async () => emitSessionInfoUpdate(),
 						notifyConfigChanged: async () => {
 							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
@@ -1597,7 +1601,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 							void session.waitForIdle().then(
 								() => promptResults.settle(ticket),
 								(idleError: unknown) =>
-									promptResults.fail(ticket, idleError instanceof Error ? idleError.message : String(idleError)),
+									promptResults.fail(
+										ticket,
+										idleError instanceof Error ? idleError.message : String(idleError),
+									),
 							);
 						} else {
 							promptResults.discard(ticket);
@@ -1624,7 +1631,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					promptResults.discard(ticket);
 					throw promptSetupError;
 				}
-
 			}
 
 			case "steer": {
@@ -2531,8 +2537,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				try {
 					const text = command.text.trim();
 					if (!text) return success(id, "synthesize_speech", { audioBase64: "", mimeType: "audio/wav" });
-					const voice = (lookupSetting("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
-					const modelKey = resolveLocalSpeechModelId({ settings: session.settings, registry: session.modelRegistry });
+					const voice =
+						(lookupSetting("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
+					const modelKey = resolveLocalSpeechModelId({
+						settings: session.settings,
+						registry: session.modelRegistry,
+					});
 					const audio = await ttsClient.synthesize(modelKey, text, { voice });
 					if (!audio) {
 						return error(
@@ -2554,7 +2564,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "live_start": {
 				try {
-					const voice = command.voice ?? (lookupSetting("live.voice")?.get(session.settings) as string | undefined);
+					const voice =
+						command.voice ?? (lookupSetting("live.voice")?.get(session.settings) as string | undefined);
 					const state = await liveController.start(voice);
 					return success(id, "live_start", state);
 				} catch (err: unknown) {
@@ -2765,17 +2776,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						// dialog is a cancel, not an empty answer — an empty string
 						// would silently take the prompt's default branch.
 						onPrompt: async prompt => {
-								if (prompt.options?.length) {
-									const picked = await uiCtx.select(prompt.message, prompt.options, { timeout: 600_000 });
-									if (picked === undefined) throw new LoginCancelledError();
-									return String(prompt.options.indexOf(picked) + 1);
-								}
-								if (prompt.secret) {
-									throw new Error(
-										`Provider '${command.providerId}' requires secret input, ` +
+							if (prompt.options?.length) {
+								const picked = await uiCtx.select(prompt.message, prompt.options, { timeout: 600_000 });
+								if (picked === undefined) throw new LoginCancelledError();
+								return String(prompt.options.indexOf(picked) + 1);
+							}
+							if (prompt.secret) {
+								throw new Error(
+									`Provider '${command.providerId}' requires secret input, ` +
 										"which is not supported in RPC mode. Use the terminal UI to log in.",
-									);
-								}
+								);
+							}
 							const value = await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 });
 							if (value === undefined) throw new LoginCancelledError();
 							return value;

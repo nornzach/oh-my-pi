@@ -118,7 +118,12 @@ export async function mcpFetch(
 	for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
 		const attachConfigured = new URL(currentUrl).origin === configuredOrigin;
 		const headers = mergeMCPHeaders(attachConfigured ? sources : { generated: sources.generated });
-		const response = await fetchWithoutSocketTimeout(currentUrl, { ...init, headers, redirect: "manual", timeout: false });
+		const response = await fetchWithoutSocketTimeout(currentUrl, {
+			...init,
+			headers,
+			redirect: "manual",
+			timeout: false,
+		});
 		if (!REDIRECT_STATUSES[response.status]) return response;
 
 		const location = response.headers.get("Location");

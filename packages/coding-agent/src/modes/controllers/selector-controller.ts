@@ -4,8 +4,8 @@ import type { Model, PASTE_CODE_LOGIN_PROVIDERS as PasteCodeLoginProviders, Usag
 import type { getOAuthProviders as GetOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import type { Component, OverlayHandle, ResizeScrollbackMode } from "@oh-my-pi/pi-tui";
-import { Loader, Spacer, setTuiTight, Text } from "@oh-my-pi/pi-tui";
+import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
+import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import {
@@ -33,7 +33,6 @@ import { settings } from "../../config/settings";
 import { createSettingsHost } from "../../config/settings-ui";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
-import type { disableProvider as DisableProvider, enableProvider as EnableProvider } from "../../discovery";
 import {
 	getInstalledPluginsRegistryPath,
 	getMarketplacesCacheDir,
@@ -41,16 +40,7 @@ import {
 	getPluginsCacheDir,
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
-import {
-	getAvailableThemes,
-	getSymbolTheme,
-	previewTheme,
-	setColorBlindMode,
-	setMarkdownMermaidRendering,
-	setSymbolPreset,
-	setTheme,
-	theme,
-} from "@oh-my-pi/pi-tui/theme";
+import { getAvailableThemes, getSymbolTheme, previewTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentHubOpenOptions, InteractiveModeContext } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
 import { AskReanswerChatRedirectError, runAskReanswer } from "../../session/ask-reanswer";
@@ -73,6 +63,12 @@ import { toLogoutAccounts } from "../../slash-commands/helpers/logout";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
+import {
+	accountIdentityLabel,
+	collectStoredAccounts,
+	collectUnreportedAccounts,
+	selectReportableAccounts,
+} from "../../slash-commands/helpers/usage-accounts";
 import { loadDailyActivity } from "../../stats/activity-client";
 import {
 	AUTO_THINKING,
@@ -85,13 +81,9 @@ import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { captureBrowserSession } from "../../utils/browser-session";
 import { copyToClipboard } from "../../utils/clipboard";
+import { getAssistantMessageLinkTargets } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { openPath } from "../../utils/open";
-import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
-import {
-	setSessionTerminalTitle,
-	setTerminalTitleSpinnerStyle,
-	setTerminalTitleStateEnabled,
-} from "../../utils/title-generator";
+import { setSessionTerminalTitle } from "../../utils/title-generator";
 import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -101,7 +93,6 @@ import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
@@ -118,13 +109,11 @@ import type { OAuthSelectorComponent as OAuthSelectorComponentType } from "@oh-m
 import { PluginSelectorComponent } from "@oh-my-pi/pi-tui/overlays/plugin-selector";
 import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
-import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { renderSegmentTrack } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
 import { renderUsageReports } from "./command-controller";
@@ -180,17 +169,6 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 			.LogoutAccountSelectorComponent,
 		OAuthSelectorComponent: require("@oh-my-pi/pi-tui/overlays/oauth-selector.js").OAuthSelectorComponent,
 	};
-}
-
-interface ProviderToggleUiModules {
-	disableProvider: typeof DisableProvider;
-	enableProvider: typeof EnableProvider;
-}
-
-/** Settings-only boundary for provider discovery mutations. */
-function loadProviderToggles(): ProviderToggleUiModules {
-	const discovery = require("../../discovery");
-	return { disableProvider: discovery.disableProvider, enableProvider: discovery.enableProvider };
 }
 
 export class SelectorController {
@@ -367,6 +345,19 @@ export class SelectorController {
 	 * classic full report one keypress away. Takes no transcript space.
 	 */
 	showUsageDashboard(reports: UsageReport[]): void {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		const accounts = selectReportableAccounts(
+			collectStoredAccounts(authStorage),
+			provider => authStorage.usage.providerFor(provider) !== undefined,
+		);
+		if (reports.length === 0 && accounts.length === 0) {
+			this.ctx.showWarning("No usage data available.");
+			return;
+		}
+		const unavailableAccounts = collectUnreportedAccounts(reports, accounts).map(account => ({
+			provider: account.provider,
+			label: accountIdentityLabel(account),
+		}));
 		const currentProvider = this.ctx.session.model?.provider;
 		const activeAccount = currentProvider
 			? this.ctx.session.modelRegistry.authStorage.oauth.identity(currentProvider, this.ctx.session.sessionId)
@@ -379,6 +370,7 @@ export class SelectorController {
 		};
 		const dashboard = new UsageDashboardComponent({
 			reports,
+			unavailableAccounts,
 			renderDetail: width =>
 				renderUsageReports(
 					reports,
@@ -387,6 +379,7 @@ export class SelectorController {
 					width,
 					provider => (provider === currentProvider ? activeAccount : undefined),
 					usageModelSelectors,
+					unavailableAccounts,
 				),
 			loadActivity: loadDailyActivity,
 			requestRender: () => this.ctx.ui.requestRender(),
@@ -613,245 +606,10 @@ export class SelectorController {
 	 * setting applies through handle listeners owned by the session and InteractiveMode.
 	 */
 	handleSettingChange(id: string, value: unknown): void {
-		// Discovery provider toggles
-		if (id.startsWith("discovery.")) {
-			const providerId = id.replace("discovery.", "");
-			const { disableProvider, enableProvider } = loadProviderToggles();
-			if (value) {
-				enableProvider(providerId);
-			} else {
-				disableProvider(providerId);
-			}
-			return;
-		}
-
-		switch (id) {
-			// Session-managed settings (not in SettingsManager)
-			case "autoCompact":
-				this.ctx.session.setAutoCompactionEnabled(value as boolean, true);
-				this.ctx.statusLine.setAutoCompactEnabled(value as boolean);
-				break;
-			case "composer.shape":
-				this.ctx.syncComposerShape();
-				break;
-			case "advisor.enabled":
-				this.ctx.statusLine.invalidate();
-				this.ctx.ui.requestRender();
-				break;
-			case "advisor.maxNotesPerUpdate":
-				if (this.ctx.session.isAdvisorEnabled()) {
-					this.ctx.session.setAdvisorEnabled(true);
-					this.ctx.ui.requestRender();
-				}
-				break;
-			case "externalThinking":
-				void this.ctx.session.setThinkToolEnabled(value as boolean).catch(err => {
-					this.ctx.showError(`Failed to apply external thinking: ${err}`);
-				});
-				break;
-			case "compaction.idleEnabled":
-			case "compaction.idleThresholdTokens":
-			case "compaction.idleTimeoutSeconds":
-				this.ctx.eventController.refreshIdleCompactionTimer();
-				break;
-
-			case "autocompleteMaxVisible":
-				this.ctx.editor.setAutocompleteMaxVisible(typeof value === "number" ? value : Number(value));
-				break;
-			case "spelling.typoDetection":
-			case "spelling.autocomplete":
-			case "spelling.autocorrect":
-				this.ctx.syncEditorSpelling();
-				this.ctx.ui.requestRender();
-				break;
-
-			case "tui.vimMode":
-			case "tui.vimModeDisplay":
-				this.ctx.applyVimModeSetting();
-				break;
-			case "display.pinnedAgents":
-				this.ctx.applyPinnedAgentsSetting();
-				break;
-
-			// Settings with UI side effects
-			case "display.hideToolActivity": {
-				const hidden = value as boolean;
-				this.ctx.hideToolActivity = hidden;
-				if (!hidden) this.ctx.toolOutputExpanded = false;
-				for (const child of this.ctx.chatContainer.children) {
-					if (!hidden && (child instanceof ToolExecutionComponent || child instanceof ReadToolGroupComponent)) {
-						child.setExpanded(false);
-					} else if (child instanceof AssistantMessageComponent) {
-						child.setToolResultImagesVisible(!hidden);
-					}
-				}
-				this.ctx.chatContainer.setToolActivityVisible(!hidden);
-				if (hidden) this.ctx.ui.clearInlineImages();
-				// Match the shortcut path: visibility changes must rebuild retired terminal history.
-				this.ctx.ui.resetDisplay();
-				break;
-			}
-			case "terminal.showImages":
-			case "showImages": {
-				const visible = value as boolean;
-				for (const child of this.ctx.chatContainer.children) {
-					if (child instanceof ToolExecutionComponent) {
-						child.setShowImages(visible);
-					} else if (child instanceof AssistantMessageComponent) {
-						child.setImagesVisible(visible);
-					}
-				}
-				if (!visible) this.ctx.ui.clearInlineImages();
-				this.ctx.ui.requestRender(true);
-				break;
-			}
-			case "hideThinkingBlock":
-				this.ctx.hideThinkingBlock = value as boolean;
-				for (const child of this.ctx.chatContainer.children) {
-					if (child instanceof AssistantMessageComponent) {
-						child.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
-					}
-				}
-				this.ctx.ui.requestRender(true);
-				break;
-			case "proseOnlyThinking":
-				this.ctx.proseOnlyThinking = value as boolean;
-				for (const child of this.ctx.chatContainer.children) {
-					if (child instanceof AssistantMessageComponent) {
-						child.setProseOnlyThinking(value as boolean);
-					}
-				}
-				this.ctx.ui.requestRender(true);
-				break;
-			case "display.cacheMissMarker": {
-				// Rebuild re-runs the usage-based detection under the new setting so
-				// markers appear/disappear; full reset retires any already committed
-				// to native scrollback (mirrors hideThinking).
-				this.ctx.rebuildChatFromMessages();
-				this.ctx.ui.resetDisplay();
-				break;
-			}
-			case "display.collapseCompacted":
-				// Rebuild swaps between the collapsed tail and the full inline
-				// history; full reset retires blocks already committed to native
-				// scrollback (mirrors cacheMissMarker).
-				this.ctx.rebuildChatFromMessages();
-				this.ctx.ui.resetDisplay();
-				break;
-			case "display.showTokenUsage":
-				// Rebuild reruns usage-row detection under the new setting; resetDisplay
-				// retires rows already committed to native scrollback.
-				this.ctx.rebuildChatFromMessages();
-				this.ctx.ui.resetDisplay();
-				break;
-			case "display.showTurnTime":
-				// Same as showTokenUsage: the prompt→yield delta lives in the same
-				// usage row, so toggling it must rebuild and retire committed rows.
-				this.ctx.rebuildChatFromMessages();
-				this.ctx.ui.resetDisplay();
-				break;
-			case "tui.tight":
-				setTuiTight(value as boolean);
-				this.ctx.ui.invalidate();
-				this.ctx.ui.requestRender();
-				break;
-			case "tui.hyperlinks":
-				applyHyperlinkSetting();
-				this.ctx.statusLine.invalidate();
-				this.ctx.ui.invalidate();
-				this.ctx.ui.requestRender();
-				break;
-			case "tui.titleState":
-				setTerminalTitleStateEnabled(value as boolean);
-				break;
-			case "tui.titleSpinner":
-				setTerminalTitleSpinnerStyle(value as string);
-				break;
-			case "tui.resizeScrollback":
-				this.ctx.ui.setResizeScrollback(value as ResizeScrollbackMode);
-				break;
-
-			case "tui.renderMermaid":
-				setMarkdownMermaidRendering(value as boolean);
-				this.ctx.rebuildChatFromMessages();
-				this.ctx.ui.resetDisplay();
-				break;
-
-
-
-
-			case "theme": {
-				setTheme(value as string, true).then(result => {
-					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
-					this.ctx.ui.invalidate();
-					if (!result.success) {
-						this.ctx.showError(`Failed to load theme "${value}": ${result.error}\nFell back to dark theme.`);
-					}
-				});
-				break;
-			}
-			case "symbolPreset": {
-				setSymbolPreset(value as "unicode" | "nerd" | "ascii").then(() => {
-					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
-					this.ctx.ui.invalidate();
-				});
-				break;
-			}
-			case "colorBlindMode": {
-				setColorBlindMode(value === "true" || value === true).then(() => {
-					this.ctx.ui.invalidate();
-				});
-				break;
-			}
-			case "git.enabled":
-			case "statusLinePreset":
-			case "statusLine.preset":
-			case "statusLineSeparator":
-			case "statusLine.separator":
-			case "statusLineShowHooks":
-			case "statusLine.showHookStatus":
-			case "statusLine.sessionAccent":
-			case "statusLine.transparent":
-			case "statusLine.compactThinkingLevel":
-			case "statusLineSegments":
-			case "statusLineModelThinking":
-			case "statusLinePathAbbreviate":
-			case "statusLinePathMaxLength":
-			case "statusLinePathStripWorkPrefix":
-			case "statusLineGitShowBranch":
-			case "statusLineGitShowStaged":
-			case "statusLineGitShowUnstaged":
-			case "statusLineGitShowUntracked":
-			case "statusLineTimeFormat":
-			case "statusLineTimeShowSeconds": {
-				const statusLineSettings = {
-					preset: settings.get("statusLine.preset"),
-					leftSegments: settings.get("statusLine.leftSegments"),
-					rightSegments: settings.get("statusLine.rightSegments"),
-					separator: settings.get("statusLine.separator"),
-					showHookStatus: settings.get("statusLine.showHookStatus"),
-					sessionAccent: settings.get("statusLine.sessionAccent"),
-					transparent: settings.get("statusLine.transparent"),
-					segmentOptions: settings.get("statusLine.segmentOptions"),
-					compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-				};
-				this.ctx.statusLine.updateSettings(statusLineSettings);
-				this.ctx.ui.requestRender();
-				break;
-			}
-
-
-			// All other settings are handled by the definitions (get/set on SettingsManager)
-			// No additional side effects needed
-		}
 		if (id !== cfgDefaultThinkingLevel.id || typeof value !== "string") return;
 		const level = parseConfiguredThinkingLevel(value);
 		if (level === undefined || level === this.ctx.session.configuredThinkingLevel()) return;
 		this.ctx.session.setThinkingLevel(level);
-		this.ctx.statusLine.invalidate();
-		this.ctx.updateEditorBorderColor();
 	}
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
@@ -1197,13 +955,7 @@ export class SelectorController {
 				},
 				onFallbackChainChange: (role, chain) => {
 					try {
-						const chains = { ...cfgRetryFallbackChains.get(this.ctx.settings) };
-						if (chain.length === 0) {
-							delete chains[role];
-						} else {
-							chains[role] = chain;
-						}
-						cfgRetryFallbackChains.set(this.ctx.settings, chains);
+						cfgRetryFallbackChains.setEntry(this.ctx.settings, role, chain.length > 0 ? chain : undefined);
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
 							chain.length > 0

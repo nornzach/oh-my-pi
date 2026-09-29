@@ -59,7 +59,7 @@ import type {
 export async function buildRpcSkillsResult(session: AgentSession): Promise<RpcSkillsResult> {
 	const enabledNames = new Set(session.skills.map(skill => skill.name));
 	const discovered = await loadSkills({
-		...(session.skillsSettings ?? {}),
+		...session.skillsSettings,
 		cwd: session.sessionManager.getCwd(),
 		enabled: true,
 		enableCodexUser: true,
@@ -107,7 +107,8 @@ function hookKey(hook: Hook): string {
  */
 export async function buildRpcHooksResult(session: AgentSession): Promise<RpcHooksResult> {
 	const cwd = session.sessionManager.getCwd();
-	const disabledExtensions = (lookupSetting("disabledExtensions")?.get(session.settings) as string[] | undefined) ?? [];
+	const disabledExtensions =
+		(lookupSetting("disabledExtensions")?.get(session.settings) as string[] | undefined) ?? [];
 	const [enabledResult, allResult] = await Promise.all([
 		loadCapability<Hook>(hookCapability.id, { cwd, disabledExtensions: [...disabledExtensions] }),
 		loadCapability<Hook>(hookCapability.id, { cwd, includeDisabled: true }),

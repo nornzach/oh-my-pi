@@ -6,6 +6,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgAutoResume } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { buildSessionOptions, createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -189,7 +190,7 @@ describe("--chat + autoResume", () => {
 		await writeSessionFile(sessionDir, "prior-agent");
 
 		const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
-		settings.override("autoResume", true);
+		cfgAutoResume.override(settings, true);
 		const parsed = parseArgs(["--chat"]);
 		parsed.sessionDir = sessionDir;
 
@@ -209,7 +210,7 @@ describe("--no-auto-resume", () => {
 		await writeSessionFile(sessionDir, "prior-agent");
 
 		const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
-		settings.override("autoResume", true);
+		cfgAutoResume.override(settings, true);
 		const parsed = parseArgs(["--no-auto-resume"]);
 		parsed.sessionDir = sessionDir;
 

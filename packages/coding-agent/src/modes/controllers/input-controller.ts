@@ -65,6 +65,7 @@ import { resizeImage } from "../../utils/image-resize";
 
 import { cfgCycleOrder } from "../../config/model-settings";
 import {
+	cfgBareExitOnEmptySession,
 	cfgDisplayHideToolActivity,
 	cfgDoubleEscapeAction,
 	cfgEmojiAutocomplete,
@@ -73,6 +74,9 @@ import {
 	cfgTuiMouse,
 } from "../settings";
 import { cfgHideThinkingBlock } from "../../session/settings";
+
+/** Bare words that quit (as `/<word>`) when typed alone into a session with no messages. */
+const BARE_EXIT_WORDS: Record<string, true> = { exit: true, quit: true, q: true };
 
 /**
  * Slash commands that may carry secrets in their arguments should never be
@@ -712,7 +716,7 @@ export class InputController {
 	 */
 	#handleInlineMouse(data: string): { consume?: boolean; data?: string } | undefined {
 		if (!data.startsWith("\x1b[<")) return undefined;
-		if (!cfgTuiMouse.get(settings)) return undefined;
+		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
@@ -865,6 +869,7 @@ export class InputController {
 
 	setupEditorSubmitHandler(): void {
 		this.ctx.editor.onSubmit = async (text: string) => {
+			const submittedText = text;
 			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
 			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
@@ -972,6 +977,26 @@ export class InputController {
 					imageLinks: inputImageLinks,
 				});
 				return;
+			}
+
+			// Bare `exit`/`quit`/`q` on a session with no messages: nobody opens a
+			// fresh session to send that word to the model, so route it to the
+			// slash command (collab-guest gating applies there unchanged). The whole
+			// submitted input must be the word, case-insensitive — no surrounding
+			// whitespace, extra text, or extension rewrite. A first prompt still in
+			// flight (pending submission, preflight, or streaming) has not reached
+			// `messages` yet, so it must not count as an empty session.
+			const bareExitWord = text.toLowerCase();
+			if (
+				text === submittedText &&
+				Object.hasOwn(BARE_EXIT_WORDS, bareExitWord) &&
+				!hasInputImages &&
+				!this.ctx.session.isStreaming &&
+				this.ctx.locallySubmittedUserSignatures.size === 0 &&
+				this.ctx.session.messages.length === 0 &&
+				(!isSettingsInitialized() || cfgBareExitOnEmptySession.get(settings))
+			) {
+				text = `/${bareExitWord}`;
 			}
 
 			// Handle built-in slash commands
@@ -1127,7 +1152,8 @@ export class InputController {
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.ctx.session.isStreaming) {
 				this.ctx.editor.addToHistory(text);
-				this.ctx.editor.setText("");
+				// Enter already cleared the editor synchronously. A later clear here
+				// can erase the tail of an unbracketed paste arriving after Enter.
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.editor.pendingImages = [];
@@ -1191,12 +1217,15 @@ export class InputController {
 				// `submitInteractiveInput` dispatches it. Steering matches the
 				// streaming-branch Enter (above) and keeps the message from throwing
 				// AgentBusyError on that race.
-				const submission = this.ctx.startPendingSubmission({
-					text,
-					images,
-					imageLinks: inputImageLinks,
-					streamingBehavior: "steer",
-				});
+				const submission = this.ctx.startPendingSubmission(
+					{
+						text,
+						images,
+						imageLinks: inputImageLinks,
+						streamingBehavior: "steer",
+					},
+					{ clearEditor: false },
+				);
 				// Start titling only after the optimistic row painted, so the local
 				// tiny-title worker's subprocess spawn never blocks the first frame.
 				this.#maybeStartTitleGeneration(text);

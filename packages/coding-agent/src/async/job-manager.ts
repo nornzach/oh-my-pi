@@ -40,9 +40,7 @@ const RETAINED_ARTIFACTS_CLEANUP_GRACE_MS = 60_000;
 const RETAINED_ARTIFACTS_CLEANUP_MAX_WAIT_MS = DEFAULT_RETENTION_MS;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
 /** Abort reason used only when the owning session shuts down the entire manager. */
-export const ASYNC_JOB_MANAGER_SHUTDOWN_REASON = Symbol(
-	"AsyncJobManager shutdown",
-);
+export const ASYNC_JOB_MANAGER_SHUTDOWN_REASON = Symbol("AsyncJobManager shutdown");
 
 /** Kind of work a managed job runs; drives job-row badges and delivery labels. */
 export type AsyncJobType = "bash" | "task" | "eval";
@@ -136,11 +134,7 @@ export interface AsyncJob {
 }
 
 /** Delivery callback for a settled job's result text. */
-export type AsyncJobDeliverySink = (
-	jobId: string,
-	text: string,
-	job?: AsyncJob,
-) => void | Promise<void>;
+export type AsyncJobDeliverySink = (jobId: string, text: string, job?: AsyncJob) => void | Promise<void>;
 
 export interface AsyncJobManagerOptions {
 	/**
@@ -197,14 +191,7 @@ interface AsyncJobDelivery {
 	 */
 	jobSnapshot?: Pick<
 		AsyncJob,
-		| "type"
-		| "status"
-		| "startTime"
-		| "endTime"
-		| "label"
-		| "structured"
-		| "agentId"
-		| "latestDetails"
+		"type" | "status" | "startTime" | "endTime" | "label" | "structured" | "agentId" | "latestDetails"
 	>;
 }
 
@@ -227,10 +214,7 @@ export interface AsyncJobRegisterOptions {
 	ownerId?: string;
 	/** Registry id of the subagent this job runs; see {@link AsyncJob.agentId}. */
 	agentId?: string;
-	onProgress?: (
-		text: string,
-		details?: AsyncJobDetails,
-	) => void | Promise<void>;
+	onProgress?: (text: string, details?: AsyncJobDetails) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
 	/** Register the job as backing a foreground call; see {@link AsyncJob.foreground}. */
@@ -295,9 +279,7 @@ export class AsyncJobManager {
 	}
 
 	#visibleJobs(filter?: AsyncJobFilter): AsyncJob[] {
-		return this.#filterJobs(this.#jobs.values(), filter).filter(
-			(job) => !job.foreground,
-		);
+		return this.#filterJobs(this.#jobs.values(), filter).filter(job => !job.foreground);
 	}
 
 	constructor(options: AsyncJobManagerOptions) {
@@ -306,23 +288,15 @@ export class AsyncJobManager {
 		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
 		this.#retainedArtifactsCleanupGraceMs = Math.max(
 			0,
-			Math.floor(
-				options.retainedArtifactsCleanupGraceMs ??
-					RETAINED_ARTIFACTS_CLEANUP_GRACE_MS,
-			),
+			Math.floor(options.retainedArtifactsCleanupGraceMs ?? RETAINED_ARTIFACTS_CLEANUP_GRACE_MS),
 		);
 		this.#retainedArtifactsCleanupMaxWaitMs = Math.max(
 			0,
-			Math.floor(
-				options.retainedArtifactsCleanupMaxWaitMs ??
-					RETAINED_ARTIFACTS_CLEANUP_MAX_WAIT_MS,
-			),
+			Math.floor(options.retainedArtifactsCleanupMaxWaitMs ?? RETAINED_ARTIFACTS_CLEANUP_MAX_WAIT_MS),
 		);
 		this.#consumedResultEvictionMs = Math.max(
 			0,
-			Math.floor(
-				options.consumedResultEvictionMs ?? CONSUMED_RESULT_EVICTION_MS,
-			),
+			Math.floor(options.consumedResultEvictionMs ?? CONSUMED_RESULT_EVICTION_MS),
 		);
 	}
 
@@ -350,10 +324,7 @@ export class AsyncJobManager {
 		run: (ctx: {
 			jobId: string;
 			signal: AbortSignal;
-			reportProgress: (
-				text: string,
-				details?: AsyncJobDetails,
-			) => Promise<void>;
+			reportProgress: (text: string, details?: AsyncJobDetails) => Promise<void>;
 			/** Clear the queued flag once the job actually starts executing. */
 			markRunning: () => void;
 		}) => Promise<string | AsyncJobRunResult>,
@@ -397,10 +368,7 @@ export class AsyncJobManager {
 			...(options?.foreground ? { foreground: true } : {}),
 		};
 
-		const reportProgress = async (
-			text: string,
-			details?: AsyncJobDetails,
-		): Promise<void> => {
+		const reportProgress = async (text: string, details?: AsyncJobDetails): Promise<void> => {
 			if (details) job.latestDetails = details;
 			if (!options?.onProgress) return;
 			try {
@@ -424,8 +392,7 @@ export class AsyncJobManager {
 				});
 				job.endTime = Date.now();
 				const text = typeof outcome === "string" ? outcome : outcome.text;
-				const structured =
-					typeof outcome === "string" ? undefined : outcome.structured;
+				const structured = typeof outcome === "string" ? undefined : outcome.structured;
 				if (structured) job.structured = structured;
 				if (job.status === "cancelled") {
 					job.resultText = text;
@@ -436,10 +403,8 @@ export class AsyncJobManager {
 				}
 			} catch (error) {
 				job.endTime = Date.now();
-				if (error instanceof AsyncJobError && error.structured)
-					job.structured = error.structured;
-				const errorText =
-					error instanceof Error ? error.message : String(error);
+				if (error instanceof AsyncJobError && error.structured) job.structured = error.structured;
+				const errorText = error instanceof Error ? error.message : String(error);
 				job.errorText = errorText;
 				if (job.status !== "cancelled") {
 					job.status = "failed";
@@ -477,13 +442,13 @@ export class AsyncJobManager {
 
 	/** Running background jobs; foreground-backed jobs stay hidden until promoted. */
 	getRunningJobs(filter?: AsyncJobFilter): AsyncJob[] {
-		return this.#visibleJobs(filter).filter((job) => job.status === "running");
+		return this.#visibleJobs(filter).filter(job => job.status === "running");
 	}
 
 	/** Settled background jobs, newest first; foreground-backed jobs stay hidden. */
 	getRecentJobs(limit = 10, filter?: AsyncJobFilter): AsyncJob[] {
 		return this.#visibleJobs(filter)
-			.filter((job) => job.status !== "running")
+			.filter(job => job.status !== "running")
 			.sort((a, b) => b.startTime - a.startTime)
 			.slice(0, limit);
 	}
@@ -505,12 +470,7 @@ export class AsyncJobManager {
 		job.foreground = undefined;
 		this.#suppressedDeliveries.delete(jobId);
 		if (job.status === "completed" || job.status === "failed") {
-			this.#enqueueDelivery(
-				jobId,
-				job.status === "completed"
-					? (job.resultText ?? "")
-					: (job.errorText ?? ""),
-			);
+			this.#enqueueDelivery(jobId, job.status === "completed" ? (job.resultText ?? "") : (job.errorText ?? ""));
 		}
 		return true;
 	}
@@ -530,23 +490,16 @@ export class AsyncJobManager {
 	getDeliveryState(filter?: AsyncJobFilter): AsyncJobDeliveryState {
 		const deliveries = this.#filterDeliveries(filter);
 		const inFlightDeliveries = this.#filterInFlightDeliveries(filter);
-		const nextRetryAt = deliveries.reduce<number | undefined>(
-			(next, delivery) => {
-				if (next === undefined) return delivery.nextAttemptAt;
-				return Math.min(next, delivery.nextAttemptAt);
-			},
-			undefined,
-		);
+		const nextRetryAt = deliveries.reduce<number | undefined>((next, delivery) => {
+			if (next === undefined) return delivery.nextAttemptAt;
+			return Math.min(next, delivery.nextAttemptAt);
+		}, undefined);
 
 		return {
 			queued: deliveries.length + inFlightDeliveries.length,
-			delivering:
-				inFlightDeliveries.length > 0 ||
-				(this.#deliveryLoop !== undefined && deliveries.length > 0),
+			delivering: inFlightDeliveries.length > 0 || (this.#deliveryLoop !== undefined && deliveries.length > 0),
 			nextRetryAt,
-			pendingJobIds: deliveries
-				.concat(inFlightDeliveries)
-				.map((delivery) => delivery.jobId),
+			pendingJobIds: deliveries.concat(inFlightDeliveries).map(delivery => delivery.jobId),
 		};
 	}
 
@@ -555,9 +508,7 @@ export class AsyncJobManager {
 	}
 
 	watchJobs(jobIds: string[]): number {
-		const uniqueJobIds = Array.from(
-			new Set(jobIds.map((id) => id.trim()).filter((id) => id.length > 0)),
-		);
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
 		for (const jobId of uniqueJobIds) {
 			this.#watchedJobs.add(jobId);
 		}
@@ -570,40 +521,26 @@ export class AsyncJobManager {
 	 * and not consumed are re-enqueued.
 	 */
 	unwatchJobs(jobIds: string[]): number {
-		const uniqueJobIds = Array.from(
-			new Set(jobIds.map((id) => id.trim()).filter((id) => id.length > 0)),
-		);
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
 		let removed = 0;
 		for (const jobId of uniqueJobIds) {
 			if (!this.#watchedJobs.delete(jobId)) continue;
 			removed += 1;
 			const job = this.#jobs.get(jobId);
-			if (!job || (job.status !== "completed" && job.status !== "failed"))
-				continue;
-			if (
-				this.isDeliverySuppressed(jobId) ||
-				this.#consumedJobResults.has(jobId)
-			)
-				continue;
+			if (!job || (job.status !== "completed" && job.status !== "failed")) continue;
+			if (this.isDeliverySuppressed(jobId) || this.#consumedJobResults.has(jobId)) continue;
 			const queued =
-				this.#deliveries.some((delivery) => delivery.jobId === jobId) ||
-				this.#inFlightDeliveries.some((delivery) => delivery.jobId === jobId);
+				this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+				this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId);
 			if (!queued) {
-				this.#enqueueDelivery(
-					jobId,
-					job.status === "completed"
-						? (job.resultText ?? "")
-						: (job.errorText ?? ""),
-				);
+				this.#enqueueDelivery(jobId, job.status === "completed" ? (job.resultText ?? "") : (job.errorText ?? ""));
 			}
 		}
 		return removed;
 	}
 
 	acknowledgeDeliveries(jobIds: string[]): number {
-		const uniqueJobIds = Array.from(
-			new Set(jobIds.map((id) => id.trim()).filter((id) => id.length > 0)),
-		);
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
 		if (uniqueJobIds.length === 0) return 0;
 
 		for (const jobId of uniqueJobIds) {
@@ -614,9 +551,7 @@ export class AsyncJobManager {
 		this.#deliveries.splice(
 			0,
 			this.#deliveries.length,
-			...this.#deliveries.filter(
-				(delivery) => !this.isDeliverySuppressed(delivery.jobId),
-			),
+			...this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId)),
 		);
 		this.#notifyDeliveryQueueChanged();
 		return before - this.#deliveries.length;
@@ -629,9 +564,7 @@ export class AsyncJobManager {
 	 * snapshots report execution state without replaying the same result.
 	 */
 	consumeJobResults(jobIds: string[]): number {
-		const uniqueJobIds = Array.from(
-			new Set(jobIds.map((id) => id.trim()).filter((id) => id.length > 0)),
-		);
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
 		this.acknowledgeDeliveries(uniqueJobIds);
 		let consumed = 0;
 		for (const jobId of uniqueJobIds) {
@@ -688,9 +621,7 @@ export class AsyncJobManager {
 	}
 
 	async waitForAll(): Promise<void> {
-		await Promise.all(
-			Array.from(this.#jobs.values()).map((job) => job.promise),
-		);
+		await Promise.all(Array.from(this.#jobs.values()).map(job => job.promise));
 	}
 
 	/**
@@ -703,14 +634,10 @@ export class AsyncJobManager {
 	 * mapping only while it still points at `sink`, so a revived session's fresh
 	 * registration survives its parked predecessor's late cleanup.
 	 */
-	registerDeliverySink(
-		ownerId: string,
-		sink: AsyncJobDeliverySink,
-	): () => void {
+	registerDeliverySink(ownerId: string, sink: AsyncJobDeliverySink): () => void {
 		this.#deliverySinks.set(ownerId, sink);
 		return () => {
-			if (this.#deliverySinks.get(ownerId) === sink)
-				this.#deliverySinks.delete(ownerId);
+			if (this.#deliverySinks.get(ownerId) === sink) this.#deliverySinks.delete(ownerId);
 		};
 	}
 
@@ -730,21 +657,16 @@ export class AsyncJobManager {
 		options?: { timeoutMs?: number; excludeSuppressed?: boolean },
 	): Promise<boolean> {
 		const deadline =
-			options?.timeoutMs === undefined
-				? Number.POSITIVE_INFINITY
-				: Date.now() + Math.max(0, options.timeoutMs);
+			options?.timeoutMs === undefined ? Number.POSITIVE_INFINITY : Date.now() + Math.max(0, options.timeoutMs);
 		const awaited = new Set<string>();
 		for (;;) {
 			const pending = this.#filterJobs(this.#jobs.values(), { ownerId }).filter(
-				(job) =>
-					!awaited.has(job.id) &&
-					(options?.excludeSuppressed !== true ||
-						!this.isDeliverySuppressed(job.id)),
+				job => !awaited.has(job.id) && (options?.excludeSuppressed !== true || !this.isDeliverySuppressed(job.id)),
 			);
 			if (pending.length === 0) return true;
 			for (const job of pending) awaited.add(job.id);
 			const settled = await this.#waitForDeliveryPromise(
-				Promise.all(pending.map((job) => job.promise)).then(() => {}),
+				Promise.all(pending.map(job => job.promise)).then(() => {}),
 				deadline,
 			);
 			if (!settled) return false;
@@ -757,10 +679,7 @@ export class AsyncJobManager {
 	 * the deadline expires, so callers can move that cleanup out of the
 	 * user-visible Task wait without losing ownership of the live work.
 	 */
-	async cancelAndReapOwnerJobs(
-		ownerId: string,
-		deadlineAt: number,
-	): Promise<AsyncJobReapResult> {
+	async cancelAndReapOwnerJobs(ownerId: string, deadlineAt: number): Promise<AsyncJobReapResult> {
 		this.cancelAll({ ownerId });
 		const timeoutMs = Math.max(0, deadlineAt - Date.now());
 		const settled = await this.waitForOwnerJobs(ownerId, { timeoutMs });
@@ -772,14 +691,14 @@ export class AsyncJobManager {
 			};
 		}
 		const pendingJobIds = this.#filterJobs(this.#jobs.values(), { ownerId })
-			.filter((job) => job.status === "running" || job.status === "cancelled")
-			.map((job) => job.id);
+			.filter(job => job.status === "running" || job.status === "cancelled")
+			.map(job => job.id);
 		const completion = this.waitForOwnerJobs(ownerId).then(() => {});
 		return { settled: false, pendingJobIds, completion };
 	}
 
 	async #waitForAllUntil(deadline: number): Promise<boolean> {
-		const promises = Array.from(this.#jobs.values()).map((job) => job.promise);
+		const promises = Array.from(this.#jobs.values()).map(job => job.promise);
 		if (promises.length === 0) return true;
 		if (deadline === Number.POSITIVE_INFINITY) {
 			await Promise.all(promises);
@@ -792,26 +711,18 @@ export class AsyncJobManager {
 		const timer = setTimeout(() => timeout.resolve("timeout"), remainingMs);
 		timer.unref();
 		try {
-			const result = await Promise.race([
-				Promise.all(promises).then(() => "settled" as const),
-				timeout.promise,
-			]);
+			const result = await Promise.race([Promise.all(promises).then(() => "settled" as const), timeout.promise]);
 			return result === "settled";
 		} finally {
 			clearTimeout(timer);
 		}
 	}
 
-	async drainDeliveries(options?: {
-		timeoutMs?: number;
-		filter?: AsyncJobFilter;
-	}): Promise<boolean> {
+	async drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean> {
 		const timeoutMs = options?.timeoutMs;
 		const filter = options?.filter;
 		const hasDeadline = timeoutMs !== undefined;
-		const deadline = hasDeadline
-			? Date.now() + Math.max(timeoutMs, 0)
-			: Number.POSITIVE_INFINITY;
+		const deadline = hasDeadline ? Date.now() + Math.max(timeoutMs, 0) : Number.POSITIVE_INFINITY;
 
 		while (this.hasPendingDeliveries(filter)) {
 			if (filter) {
@@ -820,14 +731,8 @@ export class AsyncJobManager {
 				return false;
 			}
 			const inFlightDeliveries = this.#filterInFlightDeliveries();
-			if (
-				inFlightDeliveries.length > 0 &&
-				this.#filterDeliveries().length === 0
-			) {
-				const delivered = await this.#waitForDeliveryPromise(
-					inFlightDeliveries[0]?.promise,
-					deadline,
-				);
+			if (inFlightDeliveries.length > 0 && this.#filterDeliveries().length === 0) {
+				const delivered = await this.#waitForDeliveryPromise(inFlightDeliveries[0]?.promise, deadline);
 				if (delivered) continue;
 				return false;
 			}
@@ -873,8 +778,7 @@ export class AsyncJobManager {
 		// `agent://<id>` — sleeping the retention window here would only leak
 		// temp dirs for up to `retainedArtifactsCleanupGraceMs` (or past
 		// process exit, since dispose does not await these cleanups).
-		for (const job of this.#jobs.values())
-			this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
+		for (const job of this.#jobs.values()) this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
 		this.#jobs.clear();
 		this.#deliveries.length = 0;
 		this.#notifyDeliveryQueueChanged();
@@ -889,10 +793,8 @@ export class AsyncJobManager {
 
 	#consumeJobResult(jobId: string): boolean {
 		const job = this.#jobs.get(jobId);
-		if (!job || job.status === "running" || this.#consumedJobResults.has(jobId))
-			return false;
-		if (job.resultText === undefined && job.errorText === undefined)
-			return false;
+		if (!job || job.status === "running" || this.#consumedJobResults.has(jobId)) return false;
+		if (job.resultText === undefined && job.errorText === undefined) return false;
 		this.#consumedJobResults.add(jobId);
 		// The result reached its consumer (sink delivery or foreground snapshot):
 		// the row no longer needs to outlive the full retention window. Re-arm the
@@ -906,8 +808,8 @@ export class AsyncJobManager {
 		// the full retention window instead. Clamping inside #scheduleEviction
 		// keeps a shorter configured retention the effective cap.
 		const deliveryPending =
-			this.#deliveries.some((delivery) => delivery.jobId === jobId) ||
-			this.#inFlightDeliveries.some((delivery) => delivery.jobId === jobId);
+			this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+			this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId);
 		if (!deliveryPending) {
 			this.#scheduleEviction(jobId, this.#consumedResultEvictionMs);
 		}
@@ -969,10 +871,7 @@ export class AsyncJobManager {
 	 * Errors are logged, not thrown — a failed disposal must not block job
 	 * eviction or manager teardown.
 	 */
-	#runRetainedArtifactsCleanup(
-		job: AsyncJob,
-		options?: { bypassGrace?: boolean },
-	): void {
+	#runRetainedArtifactsCleanup(job: AsyncJob, options?: { bypassGrace?: boolean }): void {
 		const cleanup = job.retainedArtifactsCleanup;
 		if (!cleanup) return;
 		job.retainedArtifactsCleanup = undefined;
@@ -985,7 +884,7 @@ export class AsyncJobManager {
 					: undefined,
 			)
 			.then(cleanup)
-			.catch((error) => {
+			.catch(error => {
 				logger.warn("Async job retained artifacts cleanup failed", {
 					jobId,
 					error: error instanceof Error ? error.message : String(error),
@@ -1004,10 +903,7 @@ export class AsyncJobManager {
 	 */
 	async #waitForJobDeliverySettledBounded(jobId: string): Promise<void> {
 		const timedOut = Promise.withResolvers<true>();
-		const timer = setTimeout(
-			() => timedOut.resolve(true),
-			this.#retainedArtifactsCleanupMaxWaitMs,
-		);
+		const timer = setTimeout(() => timedOut.resolve(true), this.#retainedArtifactsCleanupMaxWaitMs);
 		timer.unref();
 		try {
 			const timedOutFirst = await Promise.race([
@@ -1036,21 +932,15 @@ export class AsyncJobManager {
 	 */
 	async #waitForJobDeliverySettled(jobId: string): Promise<void> {
 		for (;;) {
-			const inFlight = this.#inFlightDeliveries.find(
-				(delivery) => delivery.jobId === jobId,
-			);
+			const inFlight = this.#inFlightDeliveries.find(delivery => delivery.jobId === jobId);
 			if (inFlight) {
 				await inFlight.promise?.catch(() => {});
 				continue;
 			}
-			const queued = this.#deliveries.find(
-				(delivery) => delivery.jobId === jobId,
-			);
+			const queued = this.#deliveries.find(delivery => delivery.jobId === jobId);
 			if (!queued) return;
 			this.#ensureDeliveryLoop();
-			await this.#waitForDeliveryQueueChange(
-				Math.max(50, queued.nextAttemptAt - Date.now()),
-			);
+			await this.#waitForDeliveryQueueChange(Math.max(50, queued.nextAttemptAt - Date.now()));
 		}
 	}
 
@@ -1105,10 +995,7 @@ export class AsyncJobManager {
 		);
 	}
 
-	async #deliverNextFiltered(
-		filter: AsyncJobFilter,
-		deadline: number,
-	): Promise<boolean> {
+	async #deliverNextFiltered(filter: AsyncJobFilter, deadline: number): Promise<boolean> {
 		while (true) {
 			let selected: AsyncJobDelivery | undefined;
 			for (const delivery of this.#deliveries) {
@@ -1138,17 +1025,12 @@ export class AsyncJobManager {
 			this.#notifyDeliveryQueueChanged();
 			if (this.isDeliverySuppressed(selected.jobId)) continue;
 
-			return this.#waitForDeliveryPromise(
-				this.#deliverDelivery(selected),
-				deadline,
-			);
+			return this.#waitForDeliveryPromise(this.#deliverDelivery(selected), deadline);
 		}
 	}
 
 	isDeliverySuppressed(jobId: string): boolean {
-		return (
-			this.#suppressedDeliveries.has(jobId) || this.#watchedJobs.has(jobId)
-		);
+		return this.#suppressedDeliveries.has(jobId) || this.#watchedJobs.has(jobId);
 	}
 
 	#enqueueDelivery(jobId: string, text: string): void {
@@ -1185,7 +1067,7 @@ export class AsyncJobManager {
 		}
 
 		this.#deliveryLoop = this.#runDeliveryLoop()
-			.catch((error) => {
+			.catch(error => {
 				logger.error("Async job delivery loop crashed", {
 					error: String(error),
 				});
@@ -1231,9 +1113,7 @@ export class AsyncJobManager {
 	 * attempt so a sink registered between retries (e.g. a revived session)
 	 * picks up the retry.
 	 */
-	#resolveDeliverySink(
-		ownerId: string | undefined,
-	): AsyncJobDeliverySink | undefined {
+	#resolveDeliverySink(ownerId: string | undefined): AsyncJobDeliverySink | undefined {
 		if (ownerId !== undefined) return this.#deliverySinks.get(ownerId);
 		return this.#onJobComplete;
 	}
@@ -1259,32 +1139,20 @@ export class AsyncJobManager {
 				await sink(
 					delivery.jobId,
 					delivery.text,
-					this.#jobs.get(delivery.jobId) ??
-						this.#reconstructEvictedJob(delivery),
+					this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
 				);
 				delivered = true;
 				// A foreground snapshot may have consumed this result while the
 				// sink receipt was parked. The receipt has now settled, so the
 				// suppression tombstone no longer needs the full retention window.
-				if (
-					this.#consumedJobResults.has(delivery.jobId) &&
-					this.#jobs.has(delivery.jobId)
-				) {
-					this.#scheduleEviction(
-						delivery.jobId,
-						this.#consumedResultEvictionMs,
-					);
+				if (this.#consumedJobResults.has(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
+					this.#scheduleEviction(delivery.jobId, this.#consumedResultEvictionMs);
 				}
 			} catch (error) {
 				delivery.attempt += 1;
-				delivery.lastError =
-					error instanceof Error ? error.message : String(error);
-				delivery.nextAttemptAt =
-					Date.now() + this.#getRetryDelay(delivery.attempt);
-				if (
-					!this.isDeliverySuppressed(delivery.jobId) &&
-					this.#jobs.has(delivery.jobId)
-				) {
+				delivery.lastError = error instanceof Error ? error.message : String(error);
+				delivery.nextAttemptAt = Date.now() + this.#getRetryDelay(delivery.attempt);
+				if (!this.isDeliverySuppressed(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
 					this.#queueDelivery(delivery);
 				}
 				logger.warn("Async job completion delivery failed", {
@@ -1336,9 +1204,7 @@ export class AsyncJobManager {
 	}
 
 	#queueDelivery(delivery: AsyncJobDelivery): void {
-		const index = this.#deliveries.findIndex(
-			(candidate) => candidate.nextAttemptAt > delivery.nextAttemptAt,
-		);
+		const index = this.#deliveries.findIndex(candidate => candidate.nextAttemptAt > delivery.nextAttemptAt);
 		if (index === -1) this.#deliveries.push(delivery);
 		else this.#deliveries.splice(index, 0, delivery);
 		this.#notifyDeliveryQueueChanged();
@@ -1349,10 +1215,7 @@ export class AsyncJobManager {
 		const timer = setTimeout(timerElapsed.resolve, delayMs);
 		timer.unref();
 		try {
-			await Promise.race([
-				timerElapsed.promise,
-				this.#deliveryQueueChanged.promise,
-			]);
+			await Promise.race([timerElapsed.promise, this.#deliveryQueueChanged.promise]);
 		} finally {
 			clearTimeout(timer);
 		}
@@ -1363,10 +1226,7 @@ export class AsyncJobManager {
 		this.#deliveryQueueChanged = Promise.withResolvers<void>();
 	}
 
-	async #waitForDeliveryPromise(
-		promise: Promise<void> | undefined,
-		deadline: number,
-	): Promise<boolean> {
+	async #waitForDeliveryPromise(promise: Promise<void> | undefined, deadline: number): Promise<boolean> {
 		if (!promise) return true;
 		if (deadline === Number.POSITIVE_INFINITY) {
 			await promise;

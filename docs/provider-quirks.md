@@ -477,7 +477,7 @@ Cursor's integration in `packages/ai` operates over an HTTP/2 Connect RPC transp
   - For OAuth credentials with WorkOS user sessions (`WorkosCursorSessionToken=${userId}::${accessToken}`), fetches personal usage from `https://cursor.com/api/usage-summary` (`parseCursorIndividualUsage`) and user profile email from `https://cursor.com/api/auth/me`.
 - **Turn Usage Accounting (`packages/ai/src/providers/cursor.ts`)**:
   - `tokenDelta` frames accumulate a running output estimate; `TurnEndedUpdate` then reports the turn's final `input`/`output`/`cache_read`/`cache_write`/`reasoning` counters and every reported bucket replaces that estimate. A frame with no counters leaves the estimate in place.
-  - `conversationCheckpointUpdate.tokenDetails.usedTokens` is whole-conversation occupancy and lands on `usage.contextTokens`, independent of the output estimate — compaction and handoff size the context from it.
+  - `conversationCheckpointUpdate.tokenDetails.usedTokens` is whole-conversation occupancy and lands on `usage.contextTokens`, independent of the output estimate — compaction, handoff, and overflow detection size the context from it.
 
 ### Catalog model handling
 - **Descriptor Config (`packages/catalog/src/provider-models/descriptors.ts`)**:
@@ -1017,7 +1017,7 @@ LiteLLM is an open-source AI proxy and gateway that unifies access to multiple L
 - **Anthropic & Bedrock tool compatibility (`packages/ai/src/providers/openai-completions.ts`)**:
   - When `context.tools` is `undefined` but conversation history contains tool calls, `params.tools` is set to `[]` for Anthropic-via-LiteLLM compatibility.
   - When `context.tools` is explicitly empty (`[]`, e.g., `/btw` or background turns), `params.tools` and `tool_choice: "none"` are omitted so LiteLLM → Bedrock routes do not generate invalid, empty `toolConfig` blocks.
-- **Telemetry & gateway header detection (`packages/agent/src/telemetry.ts`, `packages/ai/src/auth-gateway/http.ts`)**: `detectGatewayFromHeaders` inspects `x-litellm-call-id` (falling back to `x-litellm-model-id` or `x-litellm-model-group`) to populate `pi.gen_ai.gateway.*` span attributes. Auth gateway HTTP endpoints expose `x-litellm-model-id`, `x-litellm-model-api-base`, `x-litellm-response-cost`, and `x-litellm-response-duration-ms`.
+- **Telemetry & gateway header detection (`packages/agent/src/telemetry.ts`, `packages/ai/src/auth-gateway/http.ts`)**: `detectGatewayFromHeaders` inspects `x-litellm-call-id` (falling back to `x-litellm-model-id` or `x-litellm-model-group`) to populate `omp.gen_ai.gateway.*` span attributes. Auth gateway HTTP endpoints expose `x-litellm-model-id`, `x-litellm-model-api-base`, `x-litellm-response-cost`, and `x-litellm-response-duration-ms`.
 
 ### Auth & usage
 - **Credentials & env (`packages/catalog/src/provider-models/descriptors.ts`, `packages/catalog/src/compat/rules/auth/litellm.kdl`)**: Authenticates via `LITELLM_API_KEY`.

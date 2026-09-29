@@ -213,9 +213,11 @@ export async function applyRpcMcpAction(
 					await manager.disconnectAll();
 					session.setMCPPromptCommands([]);
 					await manager.discoverAndConnect({
-						enableProjectConfig: (lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
+						enableProjectConfig:
+							(lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
 						filterExa: true,
-						filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
+						filterBrowser:
+							(lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
 					});
 				}
 				await session.refreshMCPTools(manager?.getTools() ?? []);

@@ -7,18 +7,11 @@ const [templateHtml, templateJs] = await Promise.all([
 	Bun.file(new URL("../src/export/html/template.html", import.meta.url)).text(),
 	Bun.file(new URL("../src/export/html/template.js", import.meta.url)).text(),
 ]);
-const originalScrollIntoView = Object.getOwnPropertyDescriptor(
-	Element.prototype,
-	"scrollIntoView",
-);
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
 
 afterEach(() => {
 	if (originalScrollIntoView) {
-		Object.defineProperty(
-			Element.prototype,
-			"scrollIntoView",
-			originalScrollIntoView,
-		);
+		Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
 	} else {
 		Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 	}
@@ -83,7 +76,7 @@ function renderSession(entries: unknown[], leafId: string): RenderedSession {
 		let themeValue = "auto";
 		Object.defineProperty(themeSelect, "value", {
 			get: () => themeValue,
-			set: (next) => {
+			set: next => {
 				themeValue = String(next);
 			},
 			configurable: true,
@@ -115,8 +108,7 @@ function renderSession(entries: unknown[], leafId: string): RenderedSession {
 	vm.runInContext(templateJs, context);
 
 	const assistant = document.querySelector(".assistant-message");
-	if (!assistant)
-		throw new Error("Export viewer did not render the assistant message");
+	if (!assistant) throw new Error("Export viewer did not render the assistant message");
 	return { assistant, document, context, lastScrolledId: () => lastScrolledId };
 }
 
@@ -127,8 +119,7 @@ function renderAssistant(
 	reverseToolResultChain = false,
 ): RenderedSession {
 	const toolCalls = content.filter(
-		(block): block is AssistantBlock & { id: string; name: string } =>
-			block.type === "toolCall",
+		(block): block is AssistantBlock & { id: string; name: string } => block.type === "toolCall",
 	);
 	const entries = [
 		{
@@ -167,25 +158,15 @@ function renderAssistant(
 				}))
 			: []),
 	];
-	const leafId = withToolResults
-		? `result-${toolCalls.at(reverseToolResultChain ? 0 : -1)?.id}`
-		: "assistant-1";
+	const leafId = withToolResults ? `result-${toolCalls.at(reverseToolResultChain ? 0 : -1)?.id}` : "assistant-1";
 	return renderSession(entries, leafId);
 }
 
 function toolName(element: Element, context: vm.Context): string {
 	const key = element.getAttribute("data-key");
 	if (!key) throw new Error("Rendered tool call is missing its data key");
-	const payload = vm.runInContext(
-		`globalThis.__OMP_TOOL_VIEW_DATA.get(${JSON.stringify(key)})`,
-		context,
-	) as unknown;
-	if (
-		!payload ||
-		typeof payload !== "object" ||
-		!("name" in payload) ||
-		typeof payload.name !== "string"
-	) {
+	const payload = vm.runInContext(`globalThis.__OMP_TOOL_VIEW_DATA.get(${JSON.stringify(key)})`, context) as unknown;
+	if (!payload || typeof payload !== "object" || !("name" in payload) || typeof payload.name !== "string") {
 		throw new Error(`Rendered tool call ${key} is missing its name`);
 	}
 	return payload.name;
@@ -197,9 +178,7 @@ function renderedBlockOrder({ assistant, context }: RenderedSession): string[] {
 		if (child.classList.contains("assistant-text")) {
 			order.push(child.textContent?.trim() ?? "");
 		} else if (child.classList.contains("thinking-block")) {
-			order.push(
-				child.querySelector(".thinking-text")?.textContent?.trim() ?? "",
-			);
+			order.push(child.querySelector(".thinking-text")?.textContent?.trim() ?? "");
 		} else if (child.classList.contains("message-images")) {
 			order.push("image");
 		} else if (child.tagName.toLowerCase() === "omp-tool-view") {
@@ -212,9 +191,9 @@ function renderedBlockOrder({ assistant, context }: RenderedSession): string[] {
 }
 
 function renderedSidebarOrder({ document }: RenderedSession): string[] {
-	return Array.from(
-		document.querySelectorAll("#tree-container .tree-content"),
-	).map((node) => node.textContent?.trim() ?? "");
+	return Array.from(document.querySelectorAll("#tree-container .tree-content")).map(
+		node => node.textContent?.trim() ?? "",
+	);
 }
 
 describe("HTML export assistant content ordering", () => {
@@ -262,14 +241,11 @@ describe("HTML export assistant content ordering", () => {
 			],
 			"answer",
 		);
-		expect(
-			rendered.document.querySelector(".tool-execution.success .tool-output")
-				?.textContent,
-		).toContain("<result>");
+		expect(rendered.document.querySelector(".tool-execution.success .tool-output")?.textContent).toContain(
+			"<result>",
+		);
 		expect(rendered.document.querySelector(".tool-output result")).toBeNull();
-		expect(
-			rendered.document.querySelector(".tool-execution.error")?.textContent,
-		).toContain("(exit 1)");
+		expect(rendered.document.querySelector(".tool-execution.error")?.textContent).toContain("(exit 1)");
 		expect(renderedSidebarOrder(rendered)).toEqual([
 			"[python]: print('<result>')",
 			"[js]: throw Error('legacy')",
@@ -335,13 +311,7 @@ describe("HTML export assistant content ordering", () => {
 			{ type: "text", text: "last" },
 		]);
 
-		expect(renderedBlockOrder(rendered)).toEqual([
-			"first",
-			"read",
-			"middle",
-			"grep",
-			"last",
-		]);
+		expect(renderedBlockOrder(rendered)).toEqual(["first", "read", "middle", "grep", "last"]);
 	});
 	test("projects interleaved assistant blocks into pi-style sidebar timeline rows", () => {
 		const rendered = renderAssistant(
@@ -378,13 +348,9 @@ describe("HTML export assistant content ordering", () => {
 			'[task: {"agent":"ExploreCompletion","prompt":"I...]',
 			"assistant: final-answer",
 		]);
-		expect(rendered.document.getElementById("tree-status")?.textContent).toBe(
-			"5 / 5 rows",
-		);
+		expect(rendered.document.getElementById("tree-status")?.textContent).toBe("5 / 5 rows");
 
-		const rows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
+		const rows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 		const expectedTargets = [
 			"entry-assistant-1-block-0",
 			"entry-assistant-1-block-1",
@@ -394,14 +360,12 @@ describe("HTML export assistant content ordering", () => {
 		];
 		rows[2]!.click();
 		expect(
-			Array.from(
-				rendered.document.querySelectorAll("#tree-container .tree-node"),
-			).map((row) => row.classList.contains("in-path")),
+			Array.from(rendered.document.querySelectorAll("#tree-container .tree-node")).map(row =>
+				row.classList.contains("in-path"),
+			),
 		).toEqual([true, true, true, false, false]);
 		for (let i = 0; i < rows.length; i++) {
-			const currentRows = Array.from(
-				rendered.document.querySelectorAll("#tree-container .tree-node"),
-			);
+			const currentRows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 			currentRows[i]!.click();
 			expect(rendered.lastScrolledId()).toBe(expectedTargets[i]);
 		}
@@ -441,16 +405,12 @@ describe("HTML export assistant content ordering", () => {
 			true,
 		);
 
-		const rows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
+		const rows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 		expect(rows).toHaveLength(2);
 		rows[1]!.click();
 		expect(rendered.lastScrolledId()).toBe("entry-assistant-1-block-1");
 		expect(
-			rendered.document
-				.getElementById("entry-assistant-1-block-1")
-				?.classList.contains("highlight"),
+			rendered.document.getElementById("entry-assistant-1-block-1")?.classList.contains("highlight"),
 		).toBeFalse();
 	});
 
@@ -471,13 +431,9 @@ describe("HTML export assistant content ordering", () => {
 			"[read: pending.ts]",
 			"assistant: after-tool",
 		]);
-		expect(rendered.document.getElementById("tree-status")?.textContent).toBe(
-			"3 / 3 rows",
-		);
+		expect(rendered.document.getElementById("tree-status")?.textContent).toBe("3 / 3 rows");
 
-		const rows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
+		const rows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 		rows[1]!.click();
 		expect(rendered.lastScrolledId()).toBe("entry-assistant-1-block-1");
 	});
@@ -498,20 +454,12 @@ describe("HTML export assistant content ordering", () => {
 			true,
 		);
 
-		const noToolsButton = rendered.document.querySelector(
-			'.filter-btn[data-filter="no-tools"]',
-		);
-		if (!noToolsButton)
-			throw new Error("Export template is missing the No-tools filter");
+		const noToolsButton = rendered.document.querySelector('.filter-btn[data-filter="no-tools"]');
+		if (!noToolsButton) throw new Error("Export template is missing the No-tools filter");
 		noToolsButton.click();
 
-		expect(renderedSidebarOrder(rendered)).toEqual([
-			"assistant: before-tool",
-			"assistant: after-tool",
-		]);
-		expect(rendered.document.getElementById("tree-status")?.textContent).toBe(
-			"2 / 3 rows",
-		);
+		expect(renderedSidebarOrder(rendered)).toEqual(["assistant: before-tool", "assistant: after-tool"]);
+		expect(rendered.document.getElementById("tree-status")?.textContent).toBe("2 / 3 rows");
 	});
 
 	test("uses projected timeline order when tool result ancestry is reversed", () => {
@@ -538,9 +486,7 @@ describe("HTML export assistant content ordering", () => {
 			true,
 		);
 
-		const rows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
+		const rows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 		rows[1]!.click();
 		expect(renderedSidebarOrder(rendered)).toEqual([
 			"assistant: before-read",
@@ -550,9 +496,9 @@ describe("HTML export assistant content ordering", () => {
 			"assistant: after-custom",
 		]);
 		expect(
-			Array.from(
-				rendered.document.querySelectorAll("#tree-container .tree-node"),
-			).map((row) => row.classList.contains("in-path")),
+			Array.from(rendered.document.querySelectorAll("#tree-container .tree-node")).map(row =>
+				row.classList.contains("in-path"),
+			),
 		).toEqual([true, true, false, false, false]);
 	});
 
@@ -589,26 +535,12 @@ describe("HTML export assistant content ordering", () => {
 			"branch-a",
 		);
 
-		expect(renderedSidebarOrder(rendered)).toEqual([
-			"assistant: root",
-			"user: branch-a",
-			"user: branch-b",
-		]);
-		const initialRows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
+		expect(renderedSidebarOrder(rendered)).toEqual(["assistant: root", "user: branch-a", "user: branch-b"]);
+		const initialRows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
 		initialRows[2]!.click();
 
-		expect(renderedSidebarOrder(rendered)).toEqual([
-			"assistant: root",
-			"user: branch-b",
-			"user: branch-a",
-		]);
-		const updatedRows = Array.from(
-			rendered.document.querySelectorAll("#tree-container .tree-node"),
-		);
-		expect(updatedRows.map((row) => row.classList.contains("in-path"))).toEqual(
-			[true, true, false],
-		);
+		expect(renderedSidebarOrder(rendered)).toEqual(["assistant: root", "user: branch-b", "user: branch-a"]);
+		const updatedRows = Array.from(rendered.document.querySelectorAll("#tree-container .tree-node"));
+		expect(updatedRows.map(row => row.classList.contains("in-path"))).toEqual([true, true, false]);
 	});
 });

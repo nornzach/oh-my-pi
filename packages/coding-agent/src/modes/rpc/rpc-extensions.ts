@@ -170,9 +170,7 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 	}
 
 	const disabledProvidersSetting = lookupSetting("disabledProviders");
-	const disabledProviders = new Set(
-		(disabledProvidersSetting?.get(session.settings) as string[] | undefined) ?? [],
-	);
+	const disabledProviders = new Set((disabledProvidersSetting?.get(session.settings) as string[] | undefined) ?? []);
 
 	const providers: RpcProviderInfo[] = [];
 	for (const id of providerIds) {

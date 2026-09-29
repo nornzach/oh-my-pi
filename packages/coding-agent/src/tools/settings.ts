@@ -558,7 +558,7 @@ export const cfgSpeechgenEnabled = register({
 		description: "Enable the tts tool for on-device (Kokoro) or xAI Grok Voice speech-file synthesis",
 	},
 });
- 
+
 export const cfgGenerateImageEnabled = register({
 	id: "generate_image.enabled",
 	restartRequired: true,
@@ -572,7 +572,6 @@ export const cfgGenerateImageEnabled = register({
 			"Enable the generate_image tool (text-to-image generation and editing). Exposed as an xd:// device when tools.xdev is on.",
 	},
 });
- 
 
 export const cfgComputerEnabled = register({
 	id: "computer.enabled",
@@ -781,7 +780,7 @@ export const cfgToolsIntentTracing = register({
 		description: "Ask the agent to describe the intent of each tool call before executing it",
 	},
 });
- 
+
 export const cfgToolsAbortOnFabricatedResult = register({
 	id: "tools.abortOnFabricatedResult",
 	restartRequired: true,
@@ -795,7 +794,6 @@ export const cfgToolsAbortOnFabricatedResult = register({
 			"With in-band tool calls, stop the model immediately when it starts hallucinating a tool result mid-turn. Disable to let the model finish generating and discard the fabricated continuation instead.",
 	},
 });
-
 
 export const cfgToolsSpeculativeExecutionEnabled = register({
 	id: "tools.speculativeExecution.enabled",

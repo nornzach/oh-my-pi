@@ -144,7 +144,8 @@ async function reloadRpcMcpServers(session: AgentSession): Promise<void> {
 			// removed/disabled servers cannot leave stale `/server:prompt` entries.
 			session.setMCPPromptCommands([]);
 			await manager.discoverAndConnect({
-				enableProjectConfig: (lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
+				enableProjectConfig:
+					(lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
 				filterExa: true,
 				filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
 			});

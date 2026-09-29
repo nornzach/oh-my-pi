@@ -37,7 +37,8 @@ export async function buildRpcAgentDefinitions(session: AgentSession): Promise<R
 	const defaultModelPattern = session.settings.getModelRole("default");
 	const modelOverrides =
 		(lookupSetting("task.agentModelOverrides")?.get(session.settings) as Record<string, string> | undefined) ?? {};
-	const prewalkOverrides = (lookupSetting("task.agentPrewalk")?.get(session.settings) as Record<string, string> | undefined) ?? {};
+	const prewalkOverrides =
+		(lookupSetting("task.agentPrewalk")?.get(session.settings) as Record<string, string> | undefined) ?? {};
 	const taskPrewalk = (lookupSetting("task.prewalk")?.get(session.settings) as boolean | undefined) ?? false;
 	const resolve = (patterns: string[]): { model?: string; thinkingLevel?: string } => {
 		const result = resolveModelOverride(patterns, session.modelRegistry, session.settings);
