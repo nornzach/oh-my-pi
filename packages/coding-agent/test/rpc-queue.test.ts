@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { SessionQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -340,8 +341,16 @@ describe("queue RPC input validation", () => {
 
 describe("queue_update session event", () => {
 	interface QueueSnapshot {
-		steering: Array<{ id: string; text: string; editable: boolean; timestamp: number }>;
-		followUp: Array<{ id: string; text: string; editable: boolean; timestamp: number }>;
+		steering: SessionQueuedMessage[];
+		followUp: SessionQueuedMessage[];
+	}
+
+	function comparable(snapshot: QueueSnapshot) {
+		const stripImages = ({ images: _images, ...message }: SessionQueuedMessage) => message;
+		return {
+			steering: snapshot.steering.map(stripImages),
+			followUp: snapshot.followUp.map(stripImages),
+		};
 	}
 
 	/** Subscribe and collect every queue_update payload, in emission order. */
@@ -381,13 +390,11 @@ describe("queue_update session event", () => {
 		session.agent.steer(advisorCard(3));
 		session.clearQueuedMessages();
 
-		// Every mutation publishes the complete visible queue. The advisor-card
-		// enqueue also fires, but the card itself remains filtered from the payload.
+		// Removal, edit, and clear change the visible snapshot. Moving the only
+		// remaining entry and adding an advisor card do not.
 		const edited = { id: "f2", text: "edited", editable: true, timestamp: 2 };
-		expect(updates).toEqual([
+		expect(updates.map(comparable)).toEqual([
 			{ steering: [], followUp: [{ id: "f2", text: "b", editable: true, timestamp: 2 }] },
-			{ steering: [], followUp: [edited] },
-			{ steering: [], followUp: [edited] },
 			{ steering: [], followUp: [edited] },
 			{ steering: [], followUp: [] },
 		]);

@@ -929,7 +929,6 @@ export class Agent {
 		return () => this.#listeners.delete(fn);
 	}
 
-
 	/** Register an independently removable hook that runs before queued messages are consumed. */
 	addBeforeQueuedMessageDequeueHook(hook: (signal?: AbortSignal) => Promise<void> | void): () => void {
 		const registration = (signal?: AbortSignal) => hook(signal);
@@ -1397,7 +1396,6 @@ export class Agent {
 		this.#queueListeners.add(listener);
 		return () => this.#queueListeners.delete(listener);
 	}
-
 
 	/**
 	 * Remove the queue entry carrying `queueId` from whichever lane holds it.

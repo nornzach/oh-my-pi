@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { SessionQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -25,6 +26,18 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 interface QueueSnapshot {
 	steering: readonly string[];
 	followUp: readonly string[];
+}
+
+interface QueueUpdateSnapshot {
+	steering: readonly SessionQueuedMessage[];
+	followUp: readonly SessionQueuedMessage[];
+}
+
+function queueTexts(snapshot: QueueUpdateSnapshot): QueueSnapshot {
+	return {
+		steering: snapshot.steering.map(message => message.text),
+		followUp: snapshot.followUp.map(message => message.text),
+	};
 }
 
 describe("AgentSession queue_update events", () => {
@@ -66,8 +79,8 @@ describe("AgentSession queue_update events", () => {
 		return session;
 	}
 
-	function collectQueueUpdates(target: AgentSession): QueueSnapshot[] {
-		const updates: QueueSnapshot[] = [];
+	function collectQueueUpdates(target: AgentSession): QueueUpdateSnapshot[] {
+		const updates: QueueUpdateSnapshot[] = [];
 		target.subscribe(event => {
 			if (event.type === "queue_update")
 				updates.push({ steering: [...event.steering], followUp: [...event.followUp] });
@@ -97,12 +110,16 @@ describe("AgentSession queue_update events", () => {
 		expect(removedFirst).toBe(true);
 		// Enqueue both, then the removal, then the forced continuation turn
 		// dequeuing "second" for delivery — each step is one distinct snapshot.
-		expect(updates.map(update => update.followUp)).toEqual([["first"], ["first", "second"], ["second"], []]);
+		expect(updates.map(queueTexts).map(update => update.followUp)).toEqual([
+			["first"],
+			["first", "second"],
+			["second"],
+			[],
+		]);
 		expect(updates.every(update => update.steering.length === 0)).toBe(true);
 
-		// get_state's RPC-facing snapshot is exactly the last emitted event.
-		expect(target.getQueuedMessages()).toEqual(updates.at(-1)!);
-
+		// get_state's RPC-facing text snapshot matches the last emitted event.
+		expect(target.getQueuedMessages()).toEqual(queueTexts(updates.at(-1)!));
 		// No duplicate identical consecutive events.
 		for (let i = 1; i < updates.length; i++) {
 			expect(updates[i]).not.toEqual(updates[i - 1]);
@@ -118,7 +135,7 @@ describe("AgentSession queue_update events", () => {
 		// displayable snapshot (steering still holds "kept"); it must not emit.
 		target.agent.clearFollowUpQueue();
 
-		expect(updates).toEqual([{ steering: ["kept"], followUp: [] }]);
+		expect(updates.map(queueTexts)).toEqual([{ steering: ["kept"], followUp: [] }]);
 	});
 
 	it("satisfies the snapshot-string-removal invariant for every queued chip", async () => {

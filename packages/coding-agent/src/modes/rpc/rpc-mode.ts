@@ -1305,7 +1305,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// A single shared instance routes all responses received on stdin to the
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
-	setToolUIContext?.(rpcUiContext, !headless);
+	setToolUIContext?.(rpcUiContext, true);
 	session.setPromptDropped(prompt => reportDroppedPrompt(output, prompt));
 	const liveController = new RpcLiveController(session, output);
 	const collabController = new RpcCollabController({

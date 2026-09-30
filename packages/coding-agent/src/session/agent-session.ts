@@ -94,7 +94,6 @@ import { skillPromptTitleInput } from "@oh-my-pi/pi-tui/chat/skill-title-input";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
-import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import type { ModelMention } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
 import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -8823,7 +8822,8 @@ export class AgentSession implements SettingsScope {
 		const snapshot = this.listQueuedMessages();
 		const last = this.#lastEmittedQueueSnapshot;
 		const sameMessage = (a: SessionQueuedMessage, b: SessionQueuedMessage): boolean => {
-			if (a.id !== b.id || a.text !== b.text || a.editable !== b.editable || a.timestamp !== b.timestamp) return false;
+			if (a.id !== b.id || a.text !== b.text || a.editable !== b.editable || a.timestamp !== b.timestamp)
+				return false;
 			const aImages = a.images;
 			const bImages = b.images;
 			if (aImages?.length !== bImages?.length) return false;

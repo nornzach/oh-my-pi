@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import type { SessionQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { removeWithRetries, withTimeout } from "@oh-my-pi/pi-utils";
 
 describe("RPC queued-message removal", () => {
@@ -67,7 +68,12 @@ describe("RPC queued-message removal", () => {
 	test("queue_update mirrors get_state.queuedMessages, matches the removal invariant, and never repeats", async () => {
 		await client.start();
 
-		const updates: Array<{ steering: string[]; followUp: string[] }> = [];
+		type QueueUpdate = { steering: SessionQueuedMessage[]; followUp: SessionQueuedMessage[] };
+		const queueTexts = (update: QueueUpdate) => ({
+			steering: update.steering.map(message => message.text),
+			followUp: update.followUp.map(message => message.text),
+		});
+		const updates: QueueUpdate[] = [];
 		const unsubscribe = client.onSessionEvent(event => {
 			if (event.type === "queue_update") updates.push({ steering: event.steering, followUp: event.followUp });
 		});
@@ -75,12 +81,12 @@ describe("RPC queued-message removal", () => {
 		try {
 			await client.followUp("first");
 			await client.followUp("second");
-			expect(updates.map(update => update.followUp)).toEqual([["first"], ["first", "second"]]);
+			expect(updates.map(queueTexts).map(update => update.followUp)).toEqual([["first"], ["first", "second"]]);
 			expect(updates.every(update => update.steering.length === 0)).toBe(true);
 
 			expect(await client.removeQueuedMessage("first", "followUp")).toEqual({ removed: true });
-			expect(updates.at(-1)?.followUp).toEqual(["second"]);
-			expect((await client.getState()).queuedMessages).toEqual(updates.at(-1)!);
+			expect(queueTexts(updates.at(-1)!)).toEqual({ steering: [], followUp: ["second"] });
+			expect((await client.getState()).queuedMessages).toEqual(queueTexts(updates.at(-1)!));
 
 			// Snapshot-string-removal invariant: every chip string in a snapshot,
 			// passed back verbatim to remove_queued_message with its queue, removes
@@ -97,7 +103,7 @@ describe("RPC queued-message removal", () => {
 
 			// Requeue and let delivery (the next turn dequeuing it) drain the queue.
 			await client.followUp("delivered");
-			expect(updates.at(-1)?.followUp).toEqual(["delivered"]);
+			expect(queueTexts(updates.at(-1)!)).toEqual({ steering: [], followUp: ["delivered"] });
 
 			const idle = Promise.withResolvers<void>();
 			const unsubscribeIdle = client.onEvent(event => {
