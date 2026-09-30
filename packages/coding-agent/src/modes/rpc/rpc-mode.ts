@@ -2729,6 +2729,35 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				}
 			}
 
+			case "get_transcript_page": {
+				if (session.isStreaming || session.isCompacting)
+					return error(id, "get_transcript_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
+				const transcript = session.buildTranscriptSessionContext();
+				const messages = attachRpcTranscriptEntryIds(transcript.messages, transcript.messageEntryIds ?? []);
+				try {
+					return success(
+						id,
+						"get_transcript_page",
+						pageRpcMessages(
+							messages,
+							{
+								sessionId: session.sessionId,
+								leafId: session.sessionManager.getLeafId(),
+								messageCount: messages.length,
+							},
+							{ cursor: command.cursor, limit: command.limit },
+						),
+					);
+				} catch (pageError) {
+					return error(
+						id,
+						"get_transcript_page",
+						pageError instanceof Error ? pageError.message : String(pageError),
+						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
+					);
+				}
+			}
+
 			// =================================================================
 			// Login
 			// =================================================================

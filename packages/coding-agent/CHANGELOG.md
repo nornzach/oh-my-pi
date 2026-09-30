@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed `computer.window(74)` matching every open window and `computer.window({ id: 74 })` matching none; a numeric id now resolves the same window as `"74"` ([#13649](https://github.com/can1357/oh-my-pi/pull/13649) by [@will-bogusz](https://github.com/will-bogusz))
+- RPC clients can page full display transcripts without exceeding the response frame limit.
 
 ## [18.4.3] - 2026-09-28
 

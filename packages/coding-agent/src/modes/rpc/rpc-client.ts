@@ -953,6 +953,11 @@ export class RpcClient {
 		const response = await this.#send({ type: "get_messages_page", ...options });
 		return this.#getData<RpcMessagesPage>(response);
 	}
+	/** Get one stable, byte-bounded full display transcript page. */
+	async getTranscriptPage(options: RpcMessagesPageOptions = {}): Promise<RpcMessagesPage> {
+		const response = await this.#send({ type: "get_transcript_page", ...options });
+		return this.#getData<RpcMessagesPage>(response);
+	}
 
 	/** Get all messages, draining stable pages when protocol v2 is available. */
 	async getMessages(): Promise<AgentMessage[]> {
