@@ -430,6 +430,7 @@ export class Agent {
 		next: number;
 	}>();
 	#steeringWaiters = new Set<() => void>();
+	#queuedMessageGrouping?: (previous: AgentMessage, next: AgentMessage) => boolean;
 
 	/** Stable per-entry queue ids, keyed by message identity. Array indices
 	 *  can never serve as ids (they drift under concurrent enqueue), so each
@@ -928,6 +929,7 @@ export class Agent {
 		return () => this.#listeners.delete(fn);
 	}
 
+
 	/** Register an independently removable hook that runs before queued messages are consumed. */
 	addBeforeQueuedMessageDequeueHook(hook: (signal?: AbortSignal) => Promise<void> | void): () => void {
 		const registration = (signal?: AbortSignal) => hook(signal);
@@ -1015,6 +1017,7 @@ export class Agent {
 			} else {
 				this.#followUpQueue = [...claim.messages, ...this.#followUpQueue];
 			}
+			this.#emitQueueChanged();
 		}
 		claim.controller.abort();
 	}
@@ -1040,6 +1043,7 @@ export class Agent {
 			this.#notifySteeringWaiters();
 		}
 		if (restored.followUp.length > 0) this.#followUpQueue = [...restored.followUp, ...this.#followUpQueue];
+		if (restored.steering.length > 0 || restored.followUp.length > 0) this.#emitQueueChanged();
 	}
 
 	/** Move steering live steering took out of the queue-delivery records into {@link #liveSteered}. */
@@ -1205,6 +1209,23 @@ export class Agent {
 		this.#state.messages = ms.slice();
 	}
 
+	/** Signal that the steering/follow-up queue contents may have changed. Every
+	 *  queue mutator below calls this once after mutating, so external layers
+	 *  (AgentSession's `queue_update` coalescing) have a single seam to observe
+	 *  enqueue, dequeue-on-delivery, clear, and restore without emits scattered
+	 *  across every call site that queues or dequeues a message. */
+	#emitQueueChanged(): void {
+		for (const listener of this.#queueListeners) {
+			try {
+				listener();
+			} catch (err) {
+				logger.warn("Agent queue listener threw", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+	}
+
 	replaceQueues(steering: AgentMessage[], followUp: AgentMessage[]) {
 		this.#steeringQueue = steering.slice();
 		this.#followUpQueue = followUp.slice();
@@ -1213,7 +1234,28 @@ export class Agent {
 		this.#cancelQueuedMessagePreparation("steering");
 		this.#cancelQueuedMessagePreparation("followUp");
 		this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
+	}
+
+	/**
+	 * Replace one pending queue without changing the other queue.
+	 *
+	 * The caller's snapshot comes from {@link peekSteeringQueue} /
+	 * {@link peekFollowUpQueue}, which prepend the live claimed batch. Installing
+	 * it while that claim is still live would commit a removed message anyway and
+	 * deliver the surviving claimed prefix twice, so the claim and its pending
+	 * delivery are dropped here exactly as {@link replaceQueues} does.
+	 */
+	replaceQueue(queue: "steering" | "followUp", messages: readonly AgentMessage[]): void {
+		if (queue === "steering") {
+			this.#steeringQueue = messages.slice();
+			this.#cancelQueuedMessagePreparation("steering");
+			this.#notifySteeringWaiters();
+		} else {
+			this.#followUpQueue = messages.slice();
+			this.#cancelQueuedMessagePreparation("followUp");
+		}
+		this.#emitQueueChanged();
 	}
 
 	appendMessage(m: AgentMessage) {
@@ -1246,7 +1288,7 @@ export class Agent {
 		this.#ensureQueueId(m, "steering");
 		this.#steeringQueue.push(m);
 		this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 	}
 
 	/**
@@ -1256,20 +1298,20 @@ export class Agent {
 	followUp(m: AgentMessage) {
 		this.#ensureQueueId(m, "followUp");
 		this.#followUpQueue.push(m);
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 	}
 
 	clearSteeringQueue() {
 		this.#steeringQueue = [];
 		this.#cancelQueuedMessagePreparation("steering");
 		this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 	}
 
 	clearFollowUpQueue() {
 		this.#followUpQueue = [];
 		this.#cancelQueuedMessagePreparation("followUp");
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 	}
 
 	/**
@@ -1288,7 +1330,7 @@ export class Agent {
 		this.#cancelQueuedMessagePreparation("steering");
 		this.#cancelQueuedMessagePreparation("followUp");
 		this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 		this.clearDeferredToolDirectives();
 	}
 
@@ -1356,9 +1398,6 @@ export class Agent {
 		return () => this.#queueListeners.delete(listener);
 	}
 
-	#notifyQueueChange(): void {
-		for (const listener of this.#queueListeners) listener();
-	}
 
 	/**
 	 * Remove the queue entry carrying `queueId` from whichever lane holds it.
@@ -1370,13 +1409,13 @@ export class Agent {
 		if (steeringIndex >= 0) {
 			const [message] = this.#steeringQueue.splice(steeringIndex, 1);
 			this.#notifySteeringWaiters();
-			this.#notifyQueueChange();
+			this.#emitQueueChanged();
 			return { lane: "steering", message };
 		}
 		const followUpIndex = this.#followUpQueue.findIndex(m => this.#queueIds.get(m) === queueId);
 		if (followUpIndex >= 0) {
 			const [message] = this.#followUpQueue.splice(followUpIndex, 1);
-			this.#notifyQueueChange();
+			this.#emitQueueChanged();
 			return { lane: "followUp", message };
 		}
 		return undefined;
@@ -1411,13 +1450,13 @@ export class Agent {
 		};
 		if (toLane === undefined) {
 			const moved = moveWithin(this.#steeringQueue, "steering") ?? moveWithin(this.#followUpQueue, "followUp");
-			if (moved !== undefined) this.#notifyQueueChange();
+			if (moved !== undefined) this.#emitQueueChanged();
 			return moved;
 		}
 		const target = toLane === "steering" ? this.#steeringQueue : this.#followUpQueue;
 		if (target.some(m => this.#queueIds.get(m) === queueId)) {
 			const moved = moveWithin(target, toLane);
-			if (moved !== undefined) this.#notifyQueueChange();
+			if (moved !== undefined) this.#emitQueueChanged();
 			return moved;
 		}
 		const source = toLane === "steering" ? this.#followUpQueue : this.#steeringQueue;
@@ -1427,7 +1466,7 @@ export class Agent {
 		const clamped = clampIndex(target);
 		target.splice(clamped, 0, message);
 		if (toLane === "steering") this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 		return { lane: toLane, index: clamped };
 	}
 
@@ -1442,36 +1481,34 @@ export class Agent {
 		return this.#abortController?.signal.aborted === true && this.#state.isStreaming;
 	}
 
+	/**
+	 * Join adjacent queued records into one delivery unit in one-at-a-time mode.
+	 * The predicate must be synchronous and side-effect-free. By default each
+	 * record is independent; all mode, queue inspection, and removal stay unchanged.
+	 */
+	setQueuedMessageGrouping(predicate: ((previous: AgentMessage, next: AgentMessage) => boolean) | undefined): void {
+		this.#queuedMessageGrouping = predicate;
+	}
+
+	#dequeueMessages(queue: readonly AgentMessage[], mode: "all" | "one-at-a-time"): AgentMessage[] {
+		if (mode === "all") return queue.slice();
+		let count = Math.min(1, queue.length);
+		while (count < queue.length && this.#queuedMessageGrouping?.(queue[count - 1], queue[count])) count++;
+		return queue.slice(0, count);
+	}
+
 	#dequeueSteeringMessages(): AgentMessage[] {
-		if (this.#steeringMode === "one-at-a-time") {
-			if (this.#steeringQueue.length > 0) {
-				const first = this.#steeringQueue[0];
-				this.#steeringQueue = this.#steeringQueue.slice(1);
-				this.#notifyQueueChange();
-				return [first];
-			}
-			return [];
-		}
-		const steering = this.#steeringQueue.slice();
-		this.#steeringQueue = [];
-		if (steering.length > 0) this.#notifyQueueChange();
-		return steering;
+		const messages = this.#dequeueMessages(this.#steeringQueue, this.#steeringMode);
+		this.#steeringQueue = this.#steeringQueue.slice(messages.length);
+		if (messages.length > 0) this.#emitQueueChanged();
+		return messages;
 	}
 
 	#dequeueFollowUpMessages(): AgentMessage[] {
-		if (this.#followUpMode === "one-at-a-time") {
-			if (this.#followUpQueue.length > 0) {
-				const first = this.#followUpQueue[0];
-				this.#followUpQueue = this.#followUpQueue.slice(1);
-				this.#notifyQueueChange();
-				return [first];
-			}
-			return [];
-		}
-		const followUp = this.#followUpQueue.slice();
-		this.#followUpQueue = [];
-		if (followUp.length > 0) this.#notifyQueueChange();
-		return followUp;
+		const messages = this.#dequeueMessages(this.#followUpQueue, this.#followUpMode);
+		this.#followUpQueue = this.#followUpQueue.slice(messages.length);
+		if (messages.length > 0) this.#emitQueueChanged();
+		return messages;
 	}
 
 	/**
@@ -1481,7 +1518,7 @@ export class Agent {
 	popLastSteer(): AgentMessage | undefined {
 		if (this.#steeringQueue.length === 0) this.#cancelQueuedMessagePreparation("steering", true);
 		const popped = this.#steeringQueue.pop();
-		if (popped !== undefined) this.#notifyQueueChange();
+		if (popped !== undefined) this.#emitQueueChanged();
 		return popped;
 	}
 
@@ -1492,7 +1529,7 @@ export class Agent {
 	popLastFollowUp(): AgentMessage | undefined {
 		if (this.#followUpQueue.length === 0) this.#cancelQueuedMessagePreparation("followUp", true);
 		const popped = this.#followUpQueue.pop();
-		if (popped !== undefined) this.#notifyQueueChange();
+		if (popped !== undefined) this.#emitQueueChanged();
 		return popped;
 	}
 
@@ -1547,7 +1584,7 @@ export class Agent {
 		this.#steeringQueue = [];
 		this.#followUpQueue = [];
 		this.#notifySteeringWaiters();
-		this.#notifyQueueChange();
+		this.#emitQueueChanged();
 		this.clearDeferredToolDirectives();
 	}
 

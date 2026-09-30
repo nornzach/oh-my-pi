@@ -9,6 +9,7 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import type { SessionQueuedMessage } from "./agent-session-types";
 import type { CustomMessage } from "./messages";
+import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-warmer";
 
 /** Session-specific events that extend the core AgentEvent. */
 export type AgentSessionEvent =
@@ -59,6 +60,8 @@ export type AgentSessionEvent =
 			finalError?: string;
 			retryErrors?: RetryErrorUpdate[];
 	  }
+	| ({ type: "cache_warming_start" } & CacheWarmingRefreshStart)
+	| ({ type: "cache_warming_end" } & CacheWarmingRefreshEnd)
 	| { type: "retry_fallback_applied"; from: string; to: string; role: string; reason?: string }
 	| { type: "retry_fallback_succeeded"; model: string; role: string }
 	| { type: "model_changed" }
@@ -80,10 +83,10 @@ export type AgentSessionEvent =
 	  }
 	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
 	/**
-	 * Authoritative snapshot of the user-restorable queue after EVERY queue
-	 * mutation (enqueue, drain/consume, remove, move, clear, dequeue restore).
-	 * Remote UIs subscribe instead of polling get_queue; advisor cards and
-	 * internal steers are deliberately absent (same filter as get_queue).
+	 * Coalesced authoritative snapshot of the user-restorable queue whenever its
+	 * displayable contents change. Remote UIs subscribe instead of polling
+	 * get_queue; advisor cards and internal steers are deliberately absent (same
+	 * filter as get_queue).
 	 */
 	| { type: "queue_update"; steering: SessionQueuedMessage[]; followUp: SessionQueuedMessage[] };
 
