@@ -88,7 +88,15 @@ export class BlobStore {
 			},
 		};
 
-		await Bun.write(blobPath, data);
+		// Content-addressed: a same-length file already holds these bytes. A
+		// shorter one is a torn write and is rewritten.
+		let stored = false;
+		try {
+			stored = (await fsp.stat(blobPath)).size === data.length;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+		if (!stored) await Bun.write(blobPath, data);
 		await ensureDisplayPath(blobPath, displayPath, data);
 		return result;
 	}
@@ -111,8 +119,15 @@ export class BlobStore {
 				return `${BLOB_PREFIX}${hash}`;
 			},
 		};
-		fs.mkdirSync(this.dir, { recursive: true });
-		fs.writeFileSync(blobPath, data);
+		if (this.sizeSync(hash) !== data.length) {
+			try {
+				fs.writeFileSync(blobPath, data);
+			} catch (err) {
+				if (!isEnoent(err)) throw err;
+				fs.mkdirSync(this.dir, { recursive: true });
+				fs.writeFileSync(blobPath, data);
+			}
+		}
 		ensureDisplayPathSync(blobPath, displayPath, data);
 		return result;
 	}
@@ -242,6 +257,19 @@ export async function resolveImageDataUrl(blobStore: BlobStore, data: string): P
 	if (!hash) return data;
 
 	const buffer = await blobStore.get(hash);
+	if (!buffer) {
+		logger.warn("Blob not found for persisted image data URL", { hash });
+		return data;
+	}
+	return buffer.toString("utf8");
+}
+
+/** Synchronous variant of {@link resolveImageDataUrl}. */
+export function resolveImageDataUrlSync(blobStore: BlobStore, data: string): string {
+	const hash = parseBlobRef(data);
+	if (!hash) return data;
+
+	const buffer = blobStore.getSync(hash);
 	if (!buffer) {
 		logger.warn("Blob not found for persisted image data URL", { hash });
 		return data;

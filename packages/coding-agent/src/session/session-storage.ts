@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { FileLock as NativeFileLock } from "@oh-my-pi/pi-natives";
-import { withFileLockSync } from "@oh-my-pi/pi-utils/file-lock";
-import { hasFsCode, isEnoent } from "@oh-my-pi/pi-utils/fs-error";
+import { type FileLockHandle, tryAcquireFileLock, withFileLockSync } from "@oh-my-pi/pi-utils/file-lock";
+import { type FsError, hasFsCode, isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import { openCloexecSync } from "@oh-my-pi/pi-utils/fs-open";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { peekFileEnds } from "@oh-my-pi/pi-utils/peek-file";
@@ -142,6 +142,12 @@ export interface SessionStorage {
 
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
+	/**
+	 * Synchronous {@link readText}. Optional: `SessionManager` reads the file
+	 * back to keep another writer's entries when a synchronous rewrite meets
+	 * them, and reports the conflict instead on backends without it.
+	 */
+	readTextSync?(path: string): string;
 	/** Read the requested UTF-8 byte windows from the head and tail of the file. */
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
 	/**
@@ -163,6 +169,14 @@ export interface SessionStorage {
 	 * participate in close-time draft GC.
 	 */
 	withSessionFileLockSync?<T>(sessionPath: string, operation: () => T): T;
+	/**
+	 * Claim this process's ownership of a session file it writes, until the
+	 * returned release callback runs. Returns `null` while another live process
+	 * holds the claim; `SessionManager` then moves its session to a sibling
+	 * instead of writing that file. Optional because only backends with a
+	 * process-owned lock can tell that another process writes a session.
+	 */
+	claimSessionFile?(sessionPath: string): (() => void) | null;
 	/**
 	 * Atomically delete a session and its artifacts only when `shouldDelete`
 	 * accepts the current session content. Optional because backends without a
@@ -413,6 +427,14 @@ function isPidAlive(pid: number): boolean {
 		return hasFsCode(err, "EPERM") || !hasFsCode(err, "ESRCH");
 	}
 }
+
+/**
+ * This process's ownership leases, shared by every `FileSessionStorage`
+ * instance: managers in one process share one lease per session file and only
+ * ever contend with other processes. The OS reclaims a lease when its process
+ * exits, so a crashed owner never blocks a later claim.
+ */
+const sessionFileLeases = new Map<string, { lease: FileLockHandle; holders: number }>();
 
 export class FileSessionStorage implements SessionStorage {
 	#assertExpectedSize(fpath: string, expectedSize: number | null | undefined): void {
@@ -708,6 +730,10 @@ export class FileSessionStorage implements SessionStorage {
 		return Bun.file(path).text();
 	}
 
+	readTextSync(path: string): string {
+		return fs.readFileSync(path, "utf8");
+	}
+
 	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		return peekFileEnds(path, prefixBytes, suffixBytes, (head, tail) => [
 			utf8Decoder.decode(head),
@@ -887,6 +913,41 @@ export class FileSessionStorage implements SessionStorage {
 	/** Run a synchronous session mutation under its cross-process lock. */
 	withSessionFileLockSync<T>(sessionPath: string, operation: () => T): T {
 		return withFileLockSync(sessionPath, operation);
+	}
+
+	/**
+	 * The lease is an OS lock (`flock` sidecar, abstract socket, or named mutex)
+	 * beside the session file, so the kernel drops a dead owner's claim. Never
+	 * throws: a lock that cannot be taken for another reason counts as owned,
+	 * so it never moves a session off its file.
+	 */
+	claimSessionFile(sessionPath: string): (() => void) | null {
+		const key = path.resolve(sessionPath);
+		let held = sessionFileLeases.get(key);
+		if (!held) {
+			let lease: FileLockHandle | null;
+			try {
+				// Like the publish lock: the directory may not exist before the first write.
+				this.ensureDirSync(path.dirname(key));
+				lease = tryAcquireFileLock(path.join(path.dirname(key), `.${path.basename(key)}.owner`));
+			} catch (err) {
+				logger.debug("Session ownership lease unavailable", { sessionFile: key, error: toError(err).message });
+				return () => {};
+			}
+			if (!lease) return null;
+			held = { lease, holders: 0 };
+			sessionFileLeases.set(key, held);
+		}
+		const claim = held;
+		claim.holders++;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			if (--claim.holders > 0) return;
+			sessionFileLeases.delete(key);
+			claim.lease.release();
+		};
 	}
 
 	/**
@@ -1151,6 +1212,11 @@ function sliceChunksTail(entry: MemoryFileEntry, maxBytes: number): string {
 	return chunkSuffix + joinChunkRange(entry.chunks, boundaryIndex + 1, entry.chunks.length);
 }
 
+/** A missing in-memory file, coded `ENOENT` like the file backend so callers' `isEnoent` checks agree. */
+function memoryFileNotFound(path: string): FsError {
+	return Object.assign(new Error(`File not found: ${path}`), { code: "ENOENT" });
+}
+
 export class MemorySessionStorage implements SessionStorage {
 	// Each path keeps appended string chunks plus cumulative UTF-8 byte offsets.
 	// Full reads materialize the chunks into one string chunk, so repeated reads
@@ -1161,7 +1227,7 @@ export class MemorySessionStorage implements SessionStorage {
 
 	#requireEntry(path: string): MemoryFileEntry {
 		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
+		if (!entry) throw memoryFileNotFound(path);
 		return entry;
 	}
 
@@ -1233,19 +1299,25 @@ export class MemorySessionStorage implements SessionStorage {
 
 	readText(path: string): Promise<string> {
 		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
+		if (!entry) return Promise.reject(memoryFileNotFound(path));
 		return Promise.resolve(materializeMemoryEntry(entry));
+	}
+
+	readTextSync(path: string): string {
+		const entry = this.#files.get(path);
+		if (!entry) throw memoryFileNotFound(path);
+		return materializeMemoryEntry(entry);
 	}
 
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
+		if (!entry) return Promise.reject(memoryFileNotFound(path));
 		return Promise.resolve([sliceChunksHead(entry, prefixBytes), sliceChunksTail(entry, suffixBytes)]);
 	}
 
 	async hasAssistantTurn(path: string): Promise<boolean> {
 		const entry = this.#files.get(path);
-		if (!entry) throw new Error(`File not found: ${path}`);
+		if (!entry) throw memoryFileNotFound(path);
 		for (const line of materializeMemoryEntry(entry).split("\n")) {
 			if (isAssistantMessageLine(line)) return true;
 		}
@@ -1265,7 +1337,7 @@ export class MemorySessionStorage implements SessionStorage {
 
 	rename(path: string, nextPath: string): Promise<void> {
 		const entry = this.#files.get(path);
-		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
+		if (!entry) return Promise.reject(memoryFileNotFound(path));
 		this.#files.set(nextPath, entry);
 		this.#files.delete(path);
 		return Promise.resolve();
