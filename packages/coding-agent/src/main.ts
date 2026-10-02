@@ -24,7 +24,14 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
-import { type Args, reportInvalidFlagValues, reportUnrecognizedFlags, validateToolNames } from "./cli/args";
+import {
+	type Args,
+	reportInvalidFlagValues,
+	reportUnrecognizedFlags,
+	validateGoalLaunch,
+	validateGoalStartup,
+	validateToolNames,
+} from "./cli/args";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
@@ -130,6 +137,8 @@ import {
 import { EventBus } from "./utils/event-bus";
 import { resolveFirstLaunchPythonEvalWarning } from "./eval/startup-warning";
 import { CliUsageError } from "./cli/usage-error";
+import { cfgGoalEnabled } from "./goals/settings";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgToolsApprovalMode } from "./tools/settings";
@@ -362,7 +371,10 @@ export function buildModelScopeNotification(
 			return `${scopedModel.model.id}${thinkingStr}`;
 		})
 		.join(", ");
-	return { kind: "info", message: `Model scope: ${modelList} (${formatKeyHint("ctrl+p")} to cycle)` };
+	return {
+		kind: "info",
+		message: `Model scope: ${modelList} (${formatKeyHint("ctrl+p")} to cycle)`,
+	};
 }
 export async function submitInteractiveInput(
 	mode: Pick<
@@ -446,7 +458,10 @@ export async function submitInteractiveInput(
 		} else {
 			let forwarded = false;
 			try {
-				forwarded = await session.prompt(input.text, { images: input.images, streamingBehavior });
+				forwarded = await session.prompt(input.text, {
+					images: input.images,
+					streamingBehavior,
+				});
 			} catch (error: unknown) {
 				mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
 			}
@@ -609,6 +624,7 @@ async function runInteractiveMode(
 	joinLink?: string,
 	startDeferredStartupWork?: () => void,
 	startupLease?: ComposerLease,
+	startupGoal?: string,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -730,11 +746,22 @@ async function runInteractiveMode(
 		try {
 			await mode.collabController.shutdown("startup failed");
 		} catch (cleanupError) {
-			logger.warn("Failed to stop collaboration after startup failure", { error: String(cleanupError) });
+			logger.warn("Failed to stop collaboration after startup failure", {
+				error: String(cleanupError),
+			});
 		} finally {
 			mode.stop();
 		}
 		throw error;
+	}
+
+	if (startupGoal !== undefined) {
+		session.maybeStartTitleGeneration(startupGoal);
+		try {
+			await mode.startGoalAtStartup(startupGoal);
+		} catch (error: unknown) {
+			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+		}
 	}
 
 	if (initialMessage !== undefined) {
@@ -745,7 +772,10 @@ async function runInteractiveMode(
 			// before this dispatch runs (the composer accepts input as soon as the
 			// first turn starts): the CLI message queues into that turn instead of
 			// dying with AgentBusyError.
-			await session.prompt(initialMessage, { images: initialImages, streamingBehavior: "steer" });
+			await session.prompt(initialMessage, {
+				images: initialImages,
+				streamingBehavior: "steer",
+			});
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 			mode.showError(errorMessage);
@@ -893,7 +923,10 @@ async function switchToResumedProject(
 	try {
 		setProjectDir(resumedCwd);
 	} catch (error) {
-		logger.warn("Could not switch to resumed project directory", { cwd: resumedCwd, error: String(error) });
+		logger.warn("Could not switch to resumed project directory", {
+			cwd: resumedCwd,
+			error: String(error),
+		});
 		sessionManager.setCwdWithoutRelocation(launchCwd);
 		return { cwd: launchCwd, chdirFailed: resumedCwd };
 	}
@@ -913,7 +946,10 @@ async function switchToResumedProject(
 		// The process cwd is already committed to the target. If rescoping the
 		// cwd-derived state fails, undo the whole transition instead of building
 		// the session with target-scoped cwd and launch-scoped settings.
-		logger.warn("Could not rescope to resumed project directory", { cwd, error: String(error) });
+		logger.warn("Could not rescope to resumed project directory", {
+			cwd,
+			error: String(error),
+		});
 		try {
 			setProjectDir(launchCwd);
 			sessionManager.setCwdWithoutRelocation(launchCwd);
@@ -1003,7 +1039,10 @@ function sameScopedModelSet(a: ReadonlyArray<{ model: Model }>, b: ReadonlyArray
 /** Minimal session surface the post-discovery scope rebuild mutates. */
 export interface ScopedModelSink {
 	readonly isDisposed: boolean;
-	readonly scopedModels: ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	readonly scopedModels: ReadonlyArray<{
+		model: Model;
+		thinkingLevel?: ThinkingLevel;
+	}>;
 	setScopedModels(scopedModels: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>): void;
 }
 
@@ -1043,7 +1082,10 @@ export async function rebuildScopedModelsAfterDiscovery(
 }
 
 /** Settings the scoped model list follows (see {@link watchScopedModelSettings}). */
-const cfgScopedModelInputs = combine({ enabledModels: cfgEnabledModels, disabledProviders: cfgDisabledProviders });
+const cfgScopedModelInputs = combine({
+	enabledModels: cfgEnabledModels,
+	disabledProviders: cfgDisabledProviders,
+});
 
 /**
  * Keep the Ctrl+P / scoped `/models` list in step with live settings: an
@@ -1234,7 +1276,8 @@ export async function createSessionManager(
 	// session exists. When a prior session is resumed, mark parsed.continue so
 	// buildSessionOptions restores the session's model/thinking instead of
 	// overriding them with CLI defaults.
-	if (!parsed.chat && !parsed.noAutoResume && cfgAutoResume.get(activeSettings)) {
+	// An explicit startup goal starts fresh even when implicit auto-resume is configured.
+	if (!parsed.chat && !parsed.noAutoResume && parsed.goal === undefined && cfgAutoResume.get(activeSettings)) {
 		const manager = await SessionManager.continueRecent(cwd, parsed.sessionDir);
 		if (manager.getEntries().length > 0) {
 			parsed.continue = true;
@@ -1242,7 +1285,9 @@ export async function createSessionManager(
 		return manager;
 	}
 	if (parsed.chat) {
-		return SessionManager.create(cwd, parsed.sessionDir, undefined, { kind: "chat" });
+		return SessionManager.create(cwd, parsed.sessionDir, undefined, {
+			kind: "chat",
+		});
 	}
 	// Default case (new session) returns undefined, SDK will create one
 	return undefined;
@@ -1535,7 +1580,11 @@ export async function buildSessionOptions(
 	}
 	if (parsed.planYolo) {
 		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
-		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
+		const resolved = resolveCliModel({
+			cliModel: rolePattern,
+			modelRegistry,
+			preferences: modelMatchPreferences,
+		});
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
@@ -1550,7 +1599,10 @@ export async function buildSessionOptions(
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
 			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
 		}
-		options.planYolo = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
+		options.planYolo = {
+			target: resolved.model,
+			thinkingLevel: resolved.thinkingLevel,
+		};
 	}
 
 	// Thinking level
@@ -1776,6 +1828,10 @@ export async function runRootCommand(
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// Before session resolution: resume, fork, and import act on these same
+		// startup-parse flags, so rejecting later would leave forked or imported
+		// transcripts (or an opened picker) behind a usage error.
+		validateGoalLaunch(parsedArgs, isInteractive);
 		// Without piped text the prompt must come from argv, which only the
 		// post-extension reparse can settle: an extension string flag's value
 		// (`--spawn-peer reviewer`) looks like a prompt here, and a boolean flag
@@ -1803,10 +1859,15 @@ export async function runRootCommand(
 		// main config file during auth discovery.
 		const settingsPromise = deps.settings
 			? Promise.resolve(deps.settings)
-			: logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config });
+			: logger.time("settings:init", Settings.init, {
+					cwd,
+					configFiles: parsedArgs.config,
+				});
 		settingsPromise.catch(() => {});
 		const authStoragePromise = logger.time("discoverAuthStorage", async () =>
-			(deps.discoverAuthStorage ?? discoverAuthStorage)(undefined, { settings: await settingsPromise }),
+			(deps.discoverAuthStorage ?? discoverAuthStorage)(undefined, {
+				settings: await settingsPromise,
+			}),
 		);
 		authStoragePromise.catch(() => {});
 		let authStorage: AuthStorage;
@@ -1839,7 +1900,10 @@ export async function runRootCommand(
 		// extended-context window caps, so it must receive the finalized settings.
 		const modelRegistry = logger.time(
 			"modelRegistry:init",
-			() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
+			() =>
+				new ModelRegistry(authStorage, undefined, {
+					settings: settingsInstance,
+				}),
 		);
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
@@ -2221,6 +2285,9 @@ export async function runRootCommand(
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
 			stopStartupWatchdog();
+			// Startup is over: stop recording spans, or every later session and subagent
+			// appends to the timing tree for the life of the server.
+			logger.endTiming();
 			await runAcpMode(createAcpSession);
 		} else {
 			// Resolve extension-registered CLI flags before creating the session so a
@@ -2281,6 +2348,14 @@ export async function runRootCommand(
 				process.exit(2);
 			}
 			rejectNoUiWithoutRpc(parsedArgs);
+			if (initialArgs.goal !== undefined) {
+				validateGoalStartup(
+					initialArgs,
+					cfgGoalEnabled.get(settingsInstance),
+					pipedInput,
+					cfgPlanDefaultOnStartup.get(settingsInstance) && cfgPlanEnabled.get(settingsInstance),
+				);
+			}
 			if (autoPrintNeedsArgPrompt && initialArgs.messages.length === 0 && initialArgs.fileArgs.length === 0) {
 				exitWithoutTerminal();
 			}
@@ -2411,7 +2486,10 @@ export async function runRootCommand(
 				if (configuredScope.length > 0) {
 					// Must follow refreshInBackground: it waits on the in-flight refresh.
 					void rebuildScopedModelsAfterDiscovery(session, parsedArgs, modelRegistry, settingsInstance).catch(
-						error => logger.warn("Scoped model rebuild after discovery failed", { error: String(error) }),
+						error =>
+							logger.warn("Scoped model rebuild after discovery failed", {
+								error: String(error),
+							}),
 					);
 				}
 				void startBackgroundModelDiscovery?.();
@@ -2472,6 +2550,7 @@ export async function runRootCommand(
 				// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
 				const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 				stopStartupWatchdog();
+				logger.endTiming();
 				await runRpcMode(session, {
 					setToolUIContext: mode === "rpc-ui" ? setToolUIContext : undefined,
 					headless: parsedArgs.noUi === true,
@@ -2528,6 +2607,7 @@ export async function runRootCommand(
 						parsedArgs.join,
 						startDeferredStartupWork,
 						startupLease,
+						initialArgs.goal,
 					);
 				} finally {
 					startupLease?.dispose();
@@ -2535,6 +2615,9 @@ export async function runRootCommand(
 			} else {
 				// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.
 				stopStartupWatchdog();
+				// PI_TIMING prints the tree after the run; otherwise stop recording now so a
+				// long `-p` run's subagents do not keep growing it.
+				if (!$env.PI_TIMING) logger.endTiming();
 				const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 				const exitCode = await runPrintMode(session, {
 					mode,

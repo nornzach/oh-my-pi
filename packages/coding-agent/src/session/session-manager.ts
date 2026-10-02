@@ -892,8 +892,8 @@ export class SessionManager {
 	 */
 	#sessionFileClaim: { sessionFile: string; release: (() => void) | undefined } | undefined;
 	/**
-	 * The background artifact copy a move to `sessionFile` started (see
-	 * {@link #moveOffSessionFile}). Never rejects.
+	 * The background artifact copy a move or branch to `sessionFile` started (see
+	 * {@link #moveOffSessionFile}, {@link createBranchedSession}). Never rejects.
 	 */
 	#pendingArtifactCopy: { sessionFile: string; done: Promise<void> } | undefined;
 
@@ -909,7 +909,10 @@ export class SessionManager {
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
 		this.#breadcrumbFresh = fresh;
-		if (!this.#suppressBreadcrumb) writeTerminalBreadcrumb(cwd, sessionFile, fresh);
+		if (this.#suppressBreadcrumb) return;
+		writeTerminalBreadcrumb(cwd, sessionFile, fresh, {
+			remoteStorage: !(this.#storage instanceof FileSessionStorage),
+		});
 	}
 
 	/**
@@ -3620,9 +3623,12 @@ export class SessionManager {
 
 	/**
 	 * Create a new session file containing only the path from root to `leafId`.
+	 * With `copyArtifacts`, the source artifact directory is copied in the background;
+	 * the new artifact manager waits for it before allocating ids or resolving
+	 * `artifact://`, so kept references stay valid and new ids cannot collide.
 	 * Returns the new file path, or undefined when not persisting.
 	 */
-	createBranchedSession(leafId: string): string | undefined {
+	createBranchedSession(leafId: string, options?: { copyArtifacts?: boolean }): string | undefined {
 		const sourceSessionFile = this.#sessionFile;
 		const branchPath = this.getBranch(leafId);
 		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
@@ -3687,6 +3693,12 @@ export class SessionManager {
 		}
 
 		this.#sessionFile = newSessionFile;
+		if (options?.copyArtifacts && sourceSessionFile) {
+			this.#pendingArtifactCopy = {
+				sessionFile: newSessionFile,
+				done: copySessionArtifacts(sourceSessionFile, newSessionFile),
+			};
+		}
 		this.#expectedDiskSize = null;
 		this.#rewriteSynchronously();
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);

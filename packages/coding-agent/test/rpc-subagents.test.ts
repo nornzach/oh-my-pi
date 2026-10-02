@@ -73,7 +73,11 @@ type SessionChangeStubOptions = {
 	newSession?: boolean;
 	switchSession?: boolean;
 	fork?: boolean;
-	branch?: { selectedText: string; selectedImages: ImageContent[]; cancelled: boolean };
+	branch?: {
+		selectedText: string;
+		selectedImages: ImageContent[];
+		cancelled: boolean;
+	};
 	isStreaming?: boolean;
 	isCompacting?: boolean;
 };
@@ -84,9 +88,13 @@ function createSessionChangeSession(options: SessionChangeStubOptions): RpcSessi
 		isCompacting: options.isCompacting ?? false,
 		newSession: async (_options?: unknown) => options.newSession ?? true,
 		switchSession: async (_sessionPath: string) => options.switchSession ?? true,
-		fork: async () => options.fork ?? true,
 		branch: async (_entryId: string) =>
-			options.branch ?? { selectedText: "branched text", selectedImages: [], cancelled: false },
+			options.branch ?? {
+				selectedText: "branched text",
+				selectedImages: [],
+				cancelled: false,
+			},
+		fork: async (_entryId?: string) => options.fork ?? true,
 	};
 }
 
@@ -249,12 +257,19 @@ describe("RPC subagent registry", () => {
 			{
 				command: { type: "branch", entryId: "entry-1" },
 				session: createSessionChangeSession({
-					branch: { selectedText: "Branch text", selectedImages: [], cancelled: false },
+					branch: {
+						selectedText: "Branch text",
+						selectedImages: [],
+						cancelled: false,
+					},
 				}),
-				expected: { type: "branch", data: { text: "Branch text", cancelled: false } },
+				expected: {
+					type: "branch",
+					data: { text: "Branch text", cancelled: false },
+				},
 			},
 			{
-				command: { type: "fork" },
+				command: { type: "fork", entryId: "entry-1" },
 				session: createSessionChangeSession({ fork: true }),
 				expected: { type: "fork", data: { cancelled: false } },
 			},
@@ -299,7 +314,9 @@ describe("RPC subagent registry", () => {
 			},
 			{
 				command: { type: "branch", entryId: "entry-1" },
-				session: createSessionChangeSession({ branch: { selectedText: "", selectedImages: [], cancelled: true } }),
+				session: createSessionChangeSession({
+					branch: { selectedText: "", selectedImages: [], cancelled: true },
+				}),
 				expected: { type: "branch", data: { text: "", cancelled: true } },
 			},
 			{
@@ -442,13 +459,23 @@ describe("RPC subagent registry", () => {
 				status: "idle",
 			});
 			expect(registry.getSubagents()).toMatchObject([
-				{ id: "SubagentA", status: "completed", assignment: "Implement work", progress: { durationMs: 19_800 } },
+				{
+					id: "SubagentA",
+					status: "completed",
+					assignment: "Implement work",
+					progress: { durationMs: 19_800 },
+				},
 			]);
 
 			// A resumable ref status (abort → park) legitimately takes over the card.
 			agents.setStatus("SubagentA", "parked", ref);
 			expect(registry.getSubagents()).toMatchObject([
-				{ id: "SubagentA", status: "parked", assignment: "Implement work", progress: { durationMs: 19_800 } },
+				{
+					id: "SubagentA",
+					status: "parked",
+					assignment: "Implement work",
+					progress: { durationMs: 19_800 },
+				},
 			]);
 
 			// Once the ref goes away the terminal snapshot remains.
@@ -495,8 +522,20 @@ describe("RPC subagent registry", () => {
 		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 
 		expect(frames).toHaveLength(1);
-		expect(frames[0]).toEqual({ type: "subagent_event", payload: eventPayload });
+		expect(frames[0]).toEqual({
+			type: "subagent_event",
+			payload: eventPayload,
+		});
+		registry.setSubscriptionLevel("progress");
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
+		expect(frames).toHaveLength(1);
+		registry.setSubscriptionLevel("events");
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
+		expect(frames).toHaveLength(2);
 		registry.dispose();
+		registry.setSubscriptionLevel("events");
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
+		expect(frames).toHaveLength(2);
 	});
 });
 

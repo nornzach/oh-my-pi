@@ -43,6 +43,8 @@ import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { GoalModeState } from "../../goals/state";
+import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -56,13 +58,29 @@ export type RpcCommand =
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
 
 	// Prompting
-	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
+	| {
+			id?: string;
+			type: "prompt";
+			message: string;
+			images?: ImageContent[];
+			streamingBehavior?: "steer" | "followUp";
+	  }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
-	| { id?: string; type: "remove_queued_message"; message: string; queue: "steering" | "followUp" }
+	| {
+			id?: string;
+			type: "remove_queued_message";
+			message: string;
+			queue: "steering" | "followUp";
+	  }
 	| { id?: string; type: "promote_queued_message"; message: string }
 	| { id?: string; type: "abort" }
-	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[] }
+	| {
+			id?: string;
+			type: "abort_and_prompt";
+			message: string;
+			images?: ImageContent[];
+	  }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "drop_session" }
 	| { id?: string; type: "open_session"; sessionDir: string }
@@ -70,17 +88,43 @@ export type RpcCommand =
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| {
+			id?: string;
+			type: "goal";
+			op: RpcGoalOp;
+			objective?: string;
+			token_budget?: number;
+	  }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
 	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
-	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
-	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
-	| { id?: string; type: "set_event_filter"; events: string[] | null; messageUpdates?: RpcMessageUpdates }
+	| {
+			id?: string;
+			type: "set_host_uri_schemes";
+			schemes: RpcHostUriSchemeDefinition[];
+	  }
+	| {
+			id?: string;
+			type: "set_subagent_subscription";
+			level: RpcSubagentSubscriptionLevel;
+	  }
+	| {
+			id?: string;
+			type: "set_event_filter";
+			events: string[] | null;
+			messageUpdates?: RpcMessageUpdates;
+	  }
 	| { id?: string; type: "get_subagents" }
-	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
+	| {
+			id?: string;
+			type: "get_subagent_messages";
+			subagentId?: string;
+			sessionFile?: string;
+			fromByte?: number;
+	  }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 
@@ -114,7 +158,13 @@ export type RpcCommand =
 	| { id?: string; type: "get_queue" }
 	| { id?: string; type: "queue_edit"; queueId: string; text: string }
 	| { id?: string; type: "queue_remove"; queueId: string }
-	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
+	| {
+			id?: string;
+			type: "queue_move";
+			queueId: string;
+			toIndex: number;
+			toLane?: "steering" | "followUp";
+	  }
 	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
 
 	// Compaction
@@ -133,27 +183,48 @@ export type RpcCommand =
 	| { id?: string; type: "abort_bash" }
 
 	// Eval (user-initiated `$`/`$$` execution; `excluded` is the `$$` exclude-from-context form)
-	| { id?: string; type: "eval"; language?: RpcEvalLanguage; code: string; excluded?: boolean }
+	| {
+			id?: string;
+			type: "eval";
+			language?: RpcEvalLanguage;
+			code: string;
+			excluded?: boolean;
+	  }
 	| { id?: string; type: "abort_eval" }
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
-	| { id?: string; type: "set_session_pinned"; sessionId: string; pinned: boolean }
+	| {
+			id?: string;
+			type: "set_session_pinned";
+			sessionId: string;
+			pinned: boolean;
+	  }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	| { id?: string; type: "branch"; entryId: string }
-	| { id?: string; type: "fork" }
+	| { id?: string; type: "fork"; entryId?: string }
 	| { id?: string; type: "get_branch_messages" }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "get_copy_targets" }
-	| { id?: string; type: "set_session_name"; name: string; sessionPath?: string }
+	| {
+			id?: string;
+			type: "set_session_name";
+			name: string;
+			sessionPath?: string;
+	  }
 	| { id?: string; type: "set_entry_label"; entryId: string; label?: string }
 	| { id?: string; type: "handoff"; customInstructions?: string }
 
 	// Messages
 	| { id?: string; type: "get_messages" }
 	| { id?: string; type: "get_messages_page"; cursor?: string; limit?: number }
-	| { id?: string; type: "get_transcript_page"; cursor?: string; limit?: number }
+	| {
+			id?: string;
+			type: "get_transcript_page";
+			cursor?: string;
+			limit?: number;
+	  }
 
 	// Login
 	| { id?: string; type: "get_login_providers" }
@@ -213,7 +284,12 @@ export type RpcCommand =
 
 	// Model roles
 	| { id?: string; type: "get_model_roles" }
-	| { id?: string; type: "set_model_role"; role: string; modelId: string | null }
+	| {
+			id?: string;
+			type: "set_model_role";
+			role: string;
+			modelId: string | null;
+	  }
 	| { id?: string; type: "get_model_role_metadata" }
 
 	// Domain inspection (read-only)
@@ -244,7 +320,11 @@ export type RpcCommand =
 	// force); fresh is refused with code "busy" while streaming.
 	| { id?: string; type: "set_prewalk"; enabled: boolean }
 	| { id?: string; type: "fresh" }
-	| { id?: string; type: "shake_context"; mode: "elide" | "images" | "thinking" }
+	| {
+			id?: string;
+			type: "shake_context";
+			mode: "elide" | "images" | "thinking";
+	  }
 	| { id?: string; type: "reload_plugins" }
 	| { id?: string; type: "set_force_tool"; tool?: string; clear?: boolean }
 	| { id?: string; type: "get_force_tool" }
@@ -261,7 +341,13 @@ export type RpcCommand =
 			body?: string;
 	  }
 	| { id?: string; type: "set_hook_enabled"; hookId: string; enabled: boolean }
-	| { id?: string; type: "set_plugin_enabled"; pluginId: string; enabled: boolean; scope?: "user" | "project" }
+	| {
+			id?: string;
+			type: "set_plugin_enabled";
+			pluginId: string;
+			enabled: boolean;
+			scope?: "user" | "project";
+	  }
 	| {
 			id?: string;
 			type: "mcp_action";
@@ -276,7 +362,12 @@ export type RpcCommand =
 			target: RpcSecurityTargetInput;
 	  }
 	| { id?: string; type: "security_cancel"; operationId: string }
-	| { id?: string; type: "security_validate"; scanId: string; findingId: string }
+	| {
+			id?: string;
+			type: "security_validate";
+			scanId: string;
+			findingId: string;
+	  }
 	| {
 			id?: string;
 			type: "security_set_disposition";
@@ -312,7 +403,12 @@ export type RpcCommand =
 	// Voice (speech in/out). `transcribe_audio.audioBase64` carries a canonical
 	// RIFF/WAVE buffer — PCM16, mono, 16 kHz (the STT pipeline's native rate);
 	// `mimeType` is informational ("audio/wav").
-	| { id?: string; type: "transcribe_audio"; audioBase64: string; mimeType: string }
+	| {
+			id?: string;
+			type: "transcribe_audio";
+			audioBase64: string;
+			mimeType: string;
+	  }
 	| { id?: string; type: "synthesize_speech"; text: string }
 
 	// Turn recovery (TUI /retry parity): retry the last failed assistant turn.
@@ -343,27 +439,49 @@ export type RpcCommand =
 	// source data is never modified). `foreignId` is the `id` from
 	// list_foreign_sessions; import re-lists to resolve it.
 	| { id?: string; type: "list_foreign_sessions"; source: "claude" | "codex" }
-	| { id?: string; type: "import_foreign_session"; source: "claude" | "codex"; foreignId: string }
+	| {
+			id?: string;
+			type: "import_foreign_session";
+			source: "claude" | "codex";
+			foreignId: string;
+	  }
 
 	// Session tree navigation. fork_from writes an INDEPENDENT new session
 	// file containing only the path from root to `entryId` and does not switch
 	// (Codex-style "new session from here"); switch_leaf moves the active leaf
 	// in place (TUI tree-selector Enter parity, navigateTree underneath).
 	| { id?: string; type: "fork_from"; entryId: string }
-	| { id?: string; type: "switch_leaf"; entryId: string; summarize?: boolean; customInstructions?: string }
+	| {
+			id?: string;
+			type: "switch_leaf";
+			entryId: string;
+			summarize?: boolean;
+			customInstructions?: string;
+	  }
 	| { id?: string; type: "resume_after_ask_reanswer" }
 
 	// Slash-command argument completions for a remote composer. Static
 	// subcommand data already rides RpcAvailableSlashCommand; this covers the
 	// dynamic candidates (MCP server names, /move directories).
-	| { id?: string; type: "get_command_arg_completions"; command: string; prefix: string }
+	| {
+			id?: string;
+			type: "get_command_arg_completions";
+			command: string;
+			prefix: string;
+	  }
 
 	// MCP server management (C1). mcp_test/mcp_reauth are background-dispatched
 	// (see dispatchRpcInputFrame) so a slow probe or a browser OAuth login never
 	// wedges the serial command queue — that is what lets mcp_reauth_cancel
 	// overtake an in-flight mcp_reauth. mcp_test takes exactly one of
 	// `name` (probe a configured server) or `config` (probe an inline definition).
-	| { id?: string; type: "mcp_add"; name: string; config: RpcMcpServerInput; scope?: "user" | "project" }
+	| {
+			id?: string;
+			type: "mcp_add";
+			name: string;
+			config: RpcMcpServerInput;
+			scope?: "user" | "project";
+	  }
 	| { id?: string; type: "mcp_test"; name?: string; config?: RpcMcpServerInput }
 	| { id?: string; type: "mcp_reauth"; name: string }
 	| { id?: string; type: "mcp_reauth_cancel"; name: string }
@@ -395,9 +513,25 @@ export type RpcCommand =
 	// Plugin detail and settings (C1). `pluginId` is the npm package name (the
 	// npm install channel backs settings/features; see rpc-plugins.ts).
 	| { id?: string; type: "get_plugin_detail"; pluginId: string }
-	| { id?: string; type: "set_plugin_features"; pluginId: string; features: string[] }
-	| { id?: string; type: "set_plugin_setting"; pluginId: string; key: string; value: unknown }
-	| { id?: string; type: "delete_plugin_setting"; pluginId: string; key: string }
+	| {
+			id?: string;
+			type: "set_plugin_features";
+			pluginId: string;
+			features: string[];
+	  }
+	| {
+			id?: string;
+			type: "set_plugin_setting";
+			pluginId: string;
+			key: string;
+			value: unknown;
+	  }
+	| {
+			id?: string;
+			type: "delete_plugin_setting";
+			pluginId: string;
+			key: string;
+	  }
 
 	// Workspace directories (TUI /dirs /add-dir /remove-dir /move parity).
 	// Paths may be absolute or cwd-relative and follow TUI `~` expansion.
@@ -418,7 +552,13 @@ export type RpcCommand =
 	| { id?: string; type: "get_git_status" }
 	| { id?: string; type: "get_git_changes" }
 	| { id?: string; type: "get_git_diff"; path: string }
-	| { id?: string; type: "worktree_create"; name: string; baseCwd?: string; baseRef?: "HEAD" | "default" }
+	| {
+			id?: string;
+			type: "worktree_create";
+			name: string;
+			baseCwd?: string;
+			baseRef?: "HEAD" | "default";
+	  }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
 
 	// Pull requests (GUI PR Center, plan/21). All resolve the GitHub repo from
@@ -426,11 +566,24 @@ export type RpcCommand =
 	// small, pr_draft is the one model call, pr_checkout lands the PR in a
 	// ~/.omp/wt worktree (plan/20 scheme).
 	| { id?: string; type: "pr_repo" }
-	| { id?: string; type: "pr_list"; state?: "open" | "closed" | "merged" | "all"; limit?: number }
+	| {
+			id?: string;
+			type: "pr_list";
+			state?: "open" | "closed" | "merged" | "all";
+			limit?: number;
+	  }
 	| { id?: string; type: "pr_get"; number: number }
 	| { id?: string; type: "pr_diff"; number: number; path: string }
 	| { id?: string; type: "pr_draft"; base?: string; head?: string }
-	| { id?: string; type: "pr_create"; title: string; body: string; base?: string; head?: string; draft?: boolean }
+	| {
+			id?: string;
+			type: "pr_create";
+			title: string;
+			body: string;
+			base?: string;
+			head?: string;
+			draft?: boolean;
+	  }
 	| { id?: string; type: "pr_checkout"; number: number }
 
 	// Word prediction (composer ghost text); `cursor` is a UTF-16 offset into `text`
@@ -483,7 +636,12 @@ export interface RpcSessionState {
 	todoPhases: TodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
+	dumpTools?: Array<{
+		name: string;
+		description: string;
+		parameters: unknown;
+		examples?: readonly ToolExample[];
+	}>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
 	/** Whether plan mode is currently enabled. */
@@ -495,6 +653,8 @@ export interface RpcSessionState {
 	agentsPausedAt?: number;
 	/** Session kind. Absent = "agent" (tools enabled); "chat" = tool-free conversation. Immutable per session. */
 	kind?: "chat";
+	/** Current goal-mode state; `null` when the session has no goal. */
+	goal: GoalModeState | null;
 }
 
 /** Authoritative selector/effective pair returned after set_thinking_level. */
@@ -1322,7 +1482,13 @@ export interface RpcSecurityFindingInfo {
 	disposition: RpcSecurityDispositionStatus;
 	validation: "unvalidated" | "validated" | "rejected" | "partial" | "error";
 	remediation?: string;
-	evidence: Array<{ label: string; explanation: string; excerpt?: string; path?: string; line?: number }>;
+	evidence: Array<{
+		label: string;
+		explanation: string;
+		excerpt?: string;
+		path?: string;
+		line?: number;
+	}>;
 }
 
 export interface RpcSecurityScanInfo {
@@ -1572,7 +1738,10 @@ export interface RpcWorktreeCreateResult {
 /** pr_repo: gh availability + the session cwd's GitHub repo, or the typed reason it's unusable. */
 export type RpcPrRepo =
 	| { available: true; repo: string; defaultBranch: string | null }
-	| { available: false; reason: "gh_missing" | "not_a_repo" | "no_github_remote" };
+	| {
+			available: false;
+			reason: "gh_missing" | "not_a_repo" | "no_github_remote";
+	  };
 
 /** pr_list row: one PR with rollup CI counts (success/failure/pending). */
 export interface RpcPrListItem {
@@ -1604,7 +1773,12 @@ export interface RpcPrDetail {
 	additions: number;
 	deletions: number;
 	reviewDecision: string | null;
-	files: Array<{ path: string; changeType: string; additions: number; deletions: number }>;
+	files: Array<{
+		path: string;
+		changeType: string;
+		additions: number;
+		deletions: number;
+	}>;
 	checks: Array<{ name: string; status: string; conclusion: string | null }>;
 }
 
@@ -1725,19 +1899,66 @@ export type RpcResponse =
 	  }
 
 	// Prompting (async - events follow)
-	| { id?: string; type: "response"; command: "prompt"; success: true; data?: { agentInvoked: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "prompt";
+			success: true;
+			data?: { agentInvoked: boolean };
+	  }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
-	| { id?: string; type: "response"; command: "remove_queued_message"; success: true; data: { removed: boolean } }
-	| { id?: string; type: "response"; command: "promote_queued_message"; success: true; data: { promoted: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "remove_queued_message";
+			success: true;
+			data: { removed: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "promote_queued_message";
+			success: true;
+			data: { promoted: boolean };
+	  }
 	| { id?: string; type: "response"; command: "abort"; success: true }
-	| { id?: string; type: "response"; command: "abort_and_prompt"; success: true }
-	| { id?: string; type: "response"; command: "new_session"; success: true; data: { cancelled: boolean } }
-	| { id?: string; type: "response"; command: "drop_session"; success: true; data: { cancelled: boolean } }
-	| { id?: string; type: "response"; command: "open_session"; success: true; data: RpcOpenSessionResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "abort_and_prompt";
+			success: true;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "new_session";
+			success: true;
+			data: { cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "drop_session";
+			success: true;
+			data: { cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "open_session";
+			success: true;
+			data: RpcOpenSessionResult;
+	  }
 
 	// State
-	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_state";
+			success: true;
+			data: RpcSessionState;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1745,7 +1966,20 @@ export type RpcResponse =
 			success: true;
 			data: { enabled: boolean; active: boolean };
 	  }
-	| { id?: string; type: "response"; command: "set_ask_dialog"; success: true; data: { enabled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "goal";
+			success: true;
+			data: RpcGoalResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_ask_dialog";
+			success: true;
+			data: { enabled: boolean };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1767,9 +2001,27 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
-	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
-	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
-	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_todos";
+			success: true;
+			data: { todoPhases: TodoPhase[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_host_tools";
+			success: true;
+			data: { toolNames: string[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_host_uri_schemes";
+			success: true;
+			data: { schemes: string[] };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1820,7 +2072,11 @@ export type RpcResponse =
 			type: "response";
 			command: "cycle_model";
 			success: true;
-			data: { model: Model; thinkingLevel: ThinkingLevel | undefined; isScoped: boolean } | null;
+			data: {
+				model: Model;
+				thinkingLevel: ThinkingLevel | undefined;
+				isScoped: boolean;
+			} | null;
 	  }
 	| {
 			id?: string;
@@ -1854,24 +2110,68 @@ export type RpcResponse =
 	  }
 
 	// Queue modes
-	| { id?: string; type: "response"; command: "set_steering_mode"; success: true }
-	| { id?: string; type: "response"; command: "set_follow_up_mode"; success: true }
-	| { id?: string; type: "response"; command: "set_interrupt_mode"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_steering_mode";
+			success: true;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_follow_up_mode";
+			success: true;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_interrupt_mode";
+			success: true;
+	  }
 
 	// Queue restore
-	| { id?: string; type: "response"; command: "dequeue"; success: true; data: RpcDequeueResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "dequeue";
+			success: true;
+			data: RpcDequeueResult;
+	  }
 
 	// Compaction
-	| { id?: string; type: "response"; command: "compact"; success: true; data: CompactionResult }
-	| { id?: string; type: "response"; command: "set_auto_compaction"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "compact";
+			success: true;
+			data: CompactionResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_auto_compaction";
+			success: true;
+	  }
 
 	// Cache warming
-	| { id?: string; type: "response"; command: "set_cache_warming"; success: true; data: { mode: CacheWarmingMode } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_cache_warming";
+			success: true;
+			data: { mode: CacheWarmingMode };
+	  }
 
 	// Retry
 	| { id?: string; type: "response"; command: "set_auto_retry"; success: true }
 	| { id?: string; type: "response"; command: "abort_retry"; success: true }
-	| { id?: string; type: "response"; command: "retry"; success: true; data: { retried: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "retry";
+			success: true;
+			data: { retried: boolean };
+	  }
 
 	// Context reset
 	| {
@@ -1899,7 +2199,13 @@ export type RpcResponse =
 	  }
 
 	// Session local:// paste write
-	| { id?: string; type: "response"; command: "write_local_paste"; success: true; data: { name: string; url: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "write_local_paste";
+			success: true;
+			data: { name: string; url: string };
+	  }
 
 	// Foreign sessions
 	| {
@@ -1923,24 +2229,79 @@ export type RpcResponse =
 			type: "response";
 			command: "get_command_arg_completions";
 			success: true;
-			data: { items: Array<{ value: string; label?: string; description?: string; hint?: string }> };
+			data: {
+				items: Array<{
+					value: string;
+					label?: string;
+					description?: string;
+					hint?: string;
+				}>;
+			};
 	  }
 
 	// Bash
-	| { id?: string; type: "response"; command: "bash"; success: true; data: BashResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "bash";
+			success: true;
+			data: BashResult;
+	  }
 	| { id?: string; type: "response"; command: "abort_bash"; success: true }
 
 	// Eval
-	| { id?: string; type: "response"; command: "eval"; success: true; data: RpcEvalResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "eval";
+			success: true;
+			data: RpcEvalResult;
+	  }
 	| { id?: string; type: "response"; command: "abort_eval"; success: true }
 
 	// Session
-	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
-	| { id?: string; type: "response"; command: "set_session_pinned"; success: true; data: { pinned: boolean } }
-	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
-	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
-	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }
-	| { id?: string; type: "response"; command: "fork"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_session_stats";
+			success: true;
+			data: SessionStats;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_session_pinned";
+			success: true;
+			data: { pinned: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "export_html";
+			success: true;
+			data: { path: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "switch_session";
+			success: true;
+			data: { cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "branch";
+			success: true;
+			data: { text: string; cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "fork";
+			success: true;
+			data: { cancelled: boolean };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1948,8 +2309,19 @@ export type RpcResponse =
 			success: true;
 			data: { sessionPath: string; sessionId: string };
 	  }
-	| { id?: string; type: "response"; command: "switch_leaf"; success: true; data: RpcSwitchLeafResult }
-	| { id?: string; type: "response"; command: "resume_after_ask_reanswer"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "switch_leaf";
+			success: true;
+			data: RpcSwitchLeafResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "resume_after_ask_reanswer";
+			success: true;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1964,8 +2336,20 @@ export type RpcResponse =
 			success: true;
 			data: { text: string | null };
 	  }
-	| { id?: string; type: "response"; command: "get_copy_targets"; success: true; data: { targets: CopyTarget[] } }
-	| { id?: string; type: "response"; command: "guided_goal"; success: true; data: { started: true } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_copy_targets";
+			success: true;
+			data: { targets: CopyTarget[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "guided_goal";
+			success: true;
+			data: { started: true };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1980,7 +2364,13 @@ export type RpcResponse =
 			success: true;
 			data: { cancelled: boolean; sessionFile?: string };
 	  }
-	| { id?: string; type: "response"; command: "tan"; success: true; data: { jobId: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "tan";
+			success: true;
+			data: { jobId: string };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -1995,14 +2385,43 @@ export type RpcResponse =
 			success: true;
 			data: { paused: boolean; pausedAt?: number; heldMs?: number };
 	  }
-	| { id?: string; type: "response"; command: "set_session_name"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_session_name";
+			success: true;
+	  }
 	| { id?: string; type: "response"; command: "set_entry_label"; success: true }
-	| { id?: string; type: "response"; command: "handoff"; success: true; data: RpcHandoffResult | null }
+	| {
+			id?: string;
+			type: "response";
+			command: "handoff";
+			success: true;
+			data: RpcHandoffResult | null;
+	  }
 
 	// Messages
-	| { id?: string; type: "response"; command: "get_messages"; success: true; data: { messages: AgentMessage[] } }
-	| { id?: string; type: "response"; command: "get_messages_page"; success: true; data: RpcMessagesPage }
-	| { id?: string; type: "response"; command: "get_transcript_page"; success: true; data: RpcMessagesPage }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_messages";
+			success: true;
+			data: { messages: AgentMessage[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_messages_page";
+			success: true;
+			data: RpcMessagesPage;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_transcript_page";
+			success: true;
+			data: RpcMessagesPage;
+	  }
 
 	// Login
 	| {
@@ -2010,16 +2429,47 @@ export type RpcResponse =
 			type: "response";
 			command: "get_login_providers";
 			success: true;
-			data: { providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }> };
+			data: {
+				providers: Array<{
+					id: string;
+					name: string;
+					available: boolean;
+					authenticated: boolean;
+				}>;
+			};
 	  }
-	| { id?: string; type: "response"; command: "login"; success: true; data: { providerId: string } }
-	| { id?: string; type: "response"; command: "logout"; success: true; data: { providerId: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "login";
+			success: true;
+			data: { providerId: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "logout";
+			success: true;
+			data: { providerId: string };
+	  }
 
 	// Usage
-	| { id?: string; type: "response"; command: "get_usage"; success: true; data: RpcUsageResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_usage";
+			success: true;
+			data: RpcUsageResult;
+	  }
 
 	// Settings
-	| { id?: string; type: "response"; command: "get_settings_schema"; success: true; data: RpcSettingsSchemaResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_settings_schema";
+			success: true;
+			data: RpcSettingsSchemaResult;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2048,23 +2498,89 @@ export type RpcResponse =
 	  }
 
 	// Providers
-	| { id?: string; type: "response"; command: "get_providers"; success: true; data: RpcProvidersResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_providers";
+			success: true;
+			data: RpcProvidersResult;
+	  }
 
 	// Plan mode
-	| { id?: string; type: "response"; command: "set_plan_mode"; success: true; data: RpcPlanModeState }
-	| { id?: string; type: "response"; command: "get_plan_mode"; success: true; data: RpcPlanModeState }
-	| { id?: string; type: "response"; command: "plan_approval"; success: true; data: RpcPlanApprovalResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_plan_mode";
+			success: true;
+			data: RpcPlanModeState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_plan_mode";
+			success: true;
+			data: RpcPlanModeState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "plan_approval";
+			success: true;
+			data: RpcPlanApprovalResult;
+	  }
 
 	// Session modes (vibe / goal / loop)
-	| { id?: string; type: "response"; command: "get_vibe_mode"; success: true; data: RpcVibeModeState }
-	| { id?: string; type: "response"; command: "set_vibe_mode"; success: true; data: RpcVibeModeState }
-	| { id?: string; type: "response"; command: "get_goal"; success: true; data: RpcGoalState }
-	| { id?: string; type: "response"; command: "set_goal"; success: true; data: RpcGoalState }
-	| { id?: string; type: "response"; command: "get_loop_mode"; success: true; data: RpcLoopModeState }
-	| { id?: string; type: "response"; command: "set_loop_mode"; success: true; data: RpcLoopModeState }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_vibe_mode";
+			success: true;
+			data: RpcVibeModeState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_vibe_mode";
+			success: true;
+			data: RpcVibeModeState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_goal";
+			success: true;
+			data: RpcGoalState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_goal";
+			success: true;
+			data: RpcGoalState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_loop_mode";
+			success: true;
+			data: RpcLoopModeState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_loop_mode";
+			success: true;
+			data: RpcLoopModeState;
+	  }
 
 	// Model roles
-	| { id?: string; type: "response"; command: "get_model_roles"; success: true; data: RpcModelRolesResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_model_roles";
+			success: true;
+			data: RpcModelRolesResult;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2081,14 +2597,62 @@ export type RpcResponse =
 	  }
 
 	// Domain inspection (read-only)
-	| { id?: string; type: "response"; command: "get_skills"; success: true; data: RpcSkillsResult }
-	| { id?: string; type: "response"; command: "get_skill_detail"; success: true; data: RpcSkillDetail }
-	| { id?: string; type: "response"; command: "get_agent_definitions"; success: true; data: RpcAgentDefinitionsResult }
-	| { id?: string; type: "response"; command: "get_hooks"; success: true; data: RpcHooksResult }
-	| { id?: string; type: "response"; command: "get_mcp_servers"; success: true; data: RpcMcpServersResult }
-	| { id?: string; type: "response"; command: "get_plugins"; success: true; data: RpcPluginsResult }
-	| { id?: string; type: "response"; command: "get_marketplaces"; success: true; data: RpcMarketplacesResult }
-	| { id?: string; type: "response"; command: "get_gui_themes"; success: true; data: RpcGuiThemesResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_skills";
+			success: true;
+			data: RpcSkillsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_skill_detail";
+			success: true;
+			data: RpcSkillDetail;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_agent_definitions";
+			success: true;
+			data: RpcAgentDefinitionsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_hooks";
+			success: true;
+			data: RpcHooksResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_mcp_servers";
+			success: true;
+			data: RpcMcpServersResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_plugins";
+			success: true;
+			data: RpcPluginsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_marketplaces";
+			success: true;
+			data: RpcMarketplacesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_gui_themes";
+			success: true;
+			data: RpcGuiThemesResult;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2096,7 +2660,13 @@ export type RpcResponse =
 			success: true;
 			data: RpcPromptTemplatesResult;
 	  }
-	| { id?: string; type: "response"; command: "get_memory_report"; success: true; data: RpcMemoryReport }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_memory_report";
+			success: true;
+			data: RpcMemoryReport;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2104,24 +2674,108 @@ export type RpcResponse =
 			success: true;
 			data: RpcSecurityDashboardResult;
 	  }
-	| { id?: string; type: "response"; command: "get_security_scan"; success: true; data: RpcSecurityScanResult }
-	| { id?: string; type: "response"; command: "get_ssh_hosts"; success: true; data: RpcSshHostsResult }
-	| { id?: string; type: "response"; command: "get_omp_update"; success: true; data: RpcOmpUpdateResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_security_scan";
+			success: true;
+			data: RpcSecurityScanResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_ssh_hosts";
+			success: true;
+			data: RpcSshHostsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_omp_update";
+			success: true;
+			data: RpcOmpUpdateResult;
+	  }
 
 	// Session reports (read-only)
-	| { id?: string; type: "response"; command: "get_context_report"; success: true; data: RpcContextReportResult }
-	| { id?: string; type: "response"; command: "get_active_tools"; success: true; data: RpcActiveToolsResult }
-	| { id?: string; type: "response"; command: "preview_share_session"; success: true; data: RpcShareSessionPreview }
-	| { id?: string; type: "response"; command: "share_session"; success: true; data: RpcShareSessionResult }
-	| { id?: string; type: "response"; command: "get_jobs"; success: true; data: RpcJobsResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_context_report";
+			success: true;
+			data: RpcContextReportResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_active_tools";
+			success: true;
+			data: RpcActiveToolsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "preview_share_session";
+			success: true;
+			data: RpcShareSessionPreview;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "share_session";
+			success: true;
+			data: RpcShareSessionResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_jobs";
+			success: true;
+			data: RpcJobsResult;
+	  }
 
 	// One-shot session actions
-	| { id?: string; type: "response"; command: "set_prewalk"; success: true; data: RpcPrewalkState }
-	| { id?: string; type: "response"; command: "fresh"; success: true; data: RpcFreshResult }
-	| { id?: string; type: "response"; command: "shake_context"; success: true; data: RpcShakeContextResult }
-	| { id?: string; type: "response"; command: "reload_plugins"; success: true; data: RpcReloadPluginsResult }
-	| { id?: string; type: "response"; command: "set_force_tool"; success: true; data: RpcForceToolState }
-	| { id?: string; type: "response"; command: "get_force_tool"; success: true; data: RpcForceToolState }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_prewalk";
+			success: true;
+			data: RpcPrewalkState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "fresh";
+			success: true;
+			data: RpcFreshResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "shake_context";
+			success: true;
+			data: RpcShakeContextResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "reload_plugins";
+			success: true;
+			data: RpcReloadPluginsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_force_tool";
+			success: true;
+			data: RpcForceToolState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_force_tool";
+			success: true;
+			data: RpcForceToolState;
+	  }
 
 	// Domain actions (mutating)
 	| {
@@ -2145,11 +2799,41 @@ export type RpcResponse =
 			success: true;
 			data: { id: string; enabled: boolean };
 	  }
-	| { id?: string; type: "response"; command: "set_plugin_enabled"; success: true; data: RpcPluginSetEnabledResult }
-	| { id?: string; type: "response"; command: "mcp_action"; success: true; data: RpcMcpActionResult }
-	| { id?: string; type: "response"; command: "security_start"; success: true; data: RpcSecurityOperationInfo }
-	| { id?: string; type: "response"; command: "security_cancel"; success: true; data: { cancelled: boolean } }
-	| { id?: string; type: "response"; command: "security_validate"; success: true; data: { accepted: true } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_plugin_enabled";
+			success: true;
+			data: RpcPluginSetEnabledResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "mcp_action";
+			success: true;
+			data: RpcMcpActionResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "security_start";
+			success: true;
+			data: RpcSecurityOperationInfo;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "security_cancel";
+			success: true;
+			data: { cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "security_validate";
+			success: true;
+			data: { accepted: true };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2157,16 +2841,58 @@ export type RpcResponse =
 			success: true;
 			data: RpcSecurityFindingInfo;
 	  }
-	| { id?: string; type: "response"; command: "ssh_manage"; success: true; data: RpcSshHostInfo | { deleted: true } }
-	| { id?: string; type: "response"; command: "ssh_test"; success: true; data: RpcSshTestResult }
-	| { id?: string; type: "response"; command: "get_session_tree"; success: true; data: RpcSessionTreeResult }
-	| { id?: string; type: "response"; command: "get_themes"; success: true; data: RpcThemesResult }
-	| { id?: string; type: "response"; command: "get_theme_colors"; success: true; data: RpcThemeColorsResult }
-	| { id?: string; type: "response"; command: "get_transcript"; success: true; data: { messages: AgentMessage[] } }
+	| {
+			id?: string;
+			type: "response";
+			command: "ssh_manage";
+			success: true;
+			data: RpcSshHostInfo | { deleted: true };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "ssh_test";
+			success: true;
+			data: RpcSshTestResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_session_tree";
+			success: true;
+			data: RpcSessionTreeResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_themes";
+			success: true;
+			data: RpcThemesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_theme_colors";
+			success: true;
+			data: RpcThemeColorsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_transcript";
+			success: true;
+			data: { messages: AgentMessage[] };
+	  }
 
 	// Voice (speech in/out). `synthesize_speech` returns the local TTS model's
 	// output as a base64 WAV (PCM16) buffer for host-side playback.
-	| { id?: string; type: "response"; command: "transcribe_audio"; success: true; data: { text: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "transcribe_audio";
+			success: true;
+			data: { text: string };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2176,10 +2902,34 @@ export type RpcResponse =
 	  }
 
 	// MCP server management (C1)
-	| { id?: string; type: "response"; command: "mcp_add"; success: true; data: RpcMcpAddResult }
-	| { id?: string; type: "response"; command: "mcp_test"; success: true; data: RpcMcpTestResult }
-	| { id?: string; type: "response"; command: "mcp_reauth"; success: true; data: RpcMcpReauthResult }
-	| { id?: string; type: "response"; command: "mcp_reauth_cancel"; success: true; data: RpcMcpReauthCancelResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "mcp_add";
+			success: true;
+			data: RpcMcpAddResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "mcp_test";
+			success: true;
+			data: RpcMcpTestResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "mcp_reauth";
+			success: true;
+			data: RpcMcpReauthResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "mcp_reauth_cancel";
+			success: true;
+			data: RpcMcpReauthCancelResult;
+	  }
 
 	// Marketplace management (C1)
 	| {
@@ -2191,9 +2941,27 @@ export type RpcResponse =
 	  }
 
 	// Plugin detail and settings (C1)
-	| { id?: string; type: "response"; command: "get_plugin_detail"; success: true; data: RpcPluginDetail }
-	| { id?: string; type: "response"; command: "set_plugin_features"; success: true; data: RpcPluginMutationResult }
-	| { id?: string; type: "response"; command: "set_plugin_setting"; success: true; data: RpcPluginMutationResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_plugin_detail";
+			success: true;
+			data: RpcPluginDetail;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_plugin_features";
+			success: true;
+			data: RpcPluginMutationResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_plugin_setting";
+			success: true;
+			data: RpcPluginMutationResult;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2203,10 +2971,34 @@ export type RpcResponse =
 	  }
 
 	// Long-lived interactive surfaces.
-	| { id?: string; type: "response"; command: "live_start"; success: true; data: RpcLiveState }
-	| { id?: string; type: "response"; command: "live_toggle_mute"; success: true; data: RpcLiveState }
-	| { id?: string; type: "response"; command: "live_stop"; success: true; data: RpcLiveState }
-	| { id?: string; type: "response"; command: "get_live_state"; success: true; data: RpcLiveState }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_start";
+			success: true;
+			data: RpcLiveState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_toggle_mute";
+			success: true;
+			data: RpcLiveState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_stop";
+			success: true;
+			data: RpcLiveState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_live_state";
+			success: true;
+			data: RpcLiveState;
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -2214,39 +3006,177 @@ export type RpcResponse =
 			success: true;
 			data: { content: unknown; details?: unknown };
 	  }
-	| { id?: string; type: "response"; command: "collab_start"; success: true; data: RpcCollabState }
-	| { id?: string; type: "response"; command: "collab_join"; success: true; data: RpcCollabState }
-	| { id?: string; type: "response"; command: "collab_leave"; success: true; data: RpcCollabState }
-	| { id?: string; type: "response"; command: "get_collab_state"; success: true; data: RpcCollabState }
+	| {
+			id?: string;
+			type: "response";
+			command: "collab_start";
+			success: true;
+			data: RpcCollabState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "collab_join";
+			success: true;
+			data: RpcCollabState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "collab_leave";
+			success: true;
+			data: RpcCollabState;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_collab_state";
+			success: true;
+			data: RpcCollabState;
+	  }
 
 	// Workspace directories
-	| { id?: string; type: "response"; command: "get_directories"; success: true; data: RpcWorkspaceDirectoriesResult }
-	| { id?: string; type: "response"; command: "add_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
-	| { id?: string; type: "response"; command: "remove_directory"; success: true; data: RpcWorkspaceDirectoriesResult }
-	| { id?: string; type: "response"; command: "move_session"; success: true; data: { cwd: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_directories";
+			success: true;
+			data: RpcWorkspaceDirectoriesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "add_directory";
+			success: true;
+			data: RpcWorkspaceDirectoriesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "remove_directory";
+			success: true;
+			data: RpcWorkspaceDirectoriesResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "move_session";
+			success: true;
+			data: { cwd: string };
+	  }
 
 	// Git worktrees
-	| { id?: string; type: "response"; command: "get_git_status"; success: true; data: RpcGitStatus }
-	| { id?: string; type: "response"; command: "get_git_changes"; success: true; data: RpcGitChanges }
-	| { id?: string; type: "response"; command: "get_git_diff"; success: true; data: RpcGitDiff }
-	| { id?: string; type: "response"; command: "worktree_create"; success: true; data: RpcWorktreeCreateResult }
-	| { id?: string; type: "response"; command: "worktree_remove"; success: true; data: { removed: true } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_git_status";
+			success: true;
+			data: RpcGitStatus;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_git_changes";
+			success: true;
+			data: RpcGitChanges;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_git_diff";
+			success: true;
+			data: RpcGitDiff;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "worktree_create";
+			success: true;
+			data: RpcWorktreeCreateResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "worktree_remove";
+			success: true;
+			data: { removed: true };
+	  }
 
 	// Pull requests
-	| { id?: string; type: "response"; command: "pr_repo"; success: true; data: RpcPrRepo }
-	| { id?: string; type: "response"; command: "pr_list"; success: true; data: RpcPrListItem[] }
-	| { id?: string; type: "response"; command: "pr_get"; success: true; data: RpcPrDetail }
-	| { id?: string; type: "response"; command: "pr_diff"; success: true; data: { diff: string } }
-	| { id?: string; type: "response"; command: "pr_draft"; success: true; data: RpcPrDraftResult }
-	| { id?: string; type: "response"; command: "pr_create"; success: true; data: RpcPrCreateResult }
-	| { id?: string; type: "response"; command: "pr_checkout"; success: true; data: { path: string; branch: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_repo";
+			success: true;
+			data: RpcPrRepo;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_list";
+			success: true;
+			data: RpcPrListItem[];
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_get";
+			success: true;
+			data: RpcPrDetail;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_diff";
+			success: true;
+			data: { diff: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_draft";
+			success: true;
+			data: RpcPrDraftResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_create";
+			success: true;
+			data: RpcPrCreateResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "pr_checkout";
+			success: true;
+			data: { path: string; branch: string };
+	  }
 
 	// Word prediction
-	| { id?: string; type: "response"; command: "predict_word"; success: true; data: { suffix: string | null } }
-	| { id?: string; type: "response"; command: "predict_word_feedback"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "predict_word";
+			success: true;
+			data: { suffix: string | null };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "predict_word_feedback";
+			success: true;
+	  }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
-	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };
+	| {
+			id?: string;
+			type: "response";
+			command: string;
+			success: false;
+			error: string;
+			code?: string;
+	  };
 
 // ============================================================================
 // Subagent Events (stdout)
@@ -2330,7 +3260,14 @@ export type RpcExtensionUIRequest =
 			optionDetails?: RpcExtensionUISelectOptionDetail[];
 			timeout?: number;
 	  }
-	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "confirm";
+			title: string;
+			message: string;
+			timeout?: number;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -2362,7 +3299,12 @@ export type RpcExtensionUIRequest =
 			questions: RpcAskDialogQuestion[];
 			timeout?: number;
 	  }
-	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "cancel";
+			targetId: string;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -2385,7 +3327,12 @@ export type RpcExtensionUIRequest =
 			widgetLines: string[] | undefined;
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
-	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "setTitle";
+			title: string;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -2518,13 +3465,26 @@ export interface RpcHostUriResult {
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; askDialog: ExtensionAskDialogResult }
-	| { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean }
+	| {
+			type: "extension_ui_response";
+			id: string;
+			askDialog: ExtensionAskDialogResult;
+	  }
+	| {
+			type: "extension_ui_response";
+			id: string;
+			cancelled: true;
+			timedOut?: boolean;
+	  }
 	/** Answers to an `ask` request, one per question in request order. */
 	| {
 			type: "extension_ui_response";
 			id: string;
-			answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
+			answers: Array<{
+				id: string;
+				selectedOptions: string[];
+				customInput?: string;
+			}>;
 	  };
 
 // ============================================================================

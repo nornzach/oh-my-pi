@@ -16,6 +16,7 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RPC_MESSAGES_PAGE_STALE_ERROR,
@@ -302,6 +303,8 @@ export class RpcClient {
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
+	/** Same-id failures that arrive after the success ack removed the pending request. */
+	#promptErrorWaiters = new Map<string, (error: Error) => void>();
 	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	#customTools: RpcClientCustomTool[] = [];
@@ -725,6 +728,7 @@ export class RpcClient {
 			...state,
 			fastModeEnabled: state.fastModeEnabled === true,
 			fastModeActive: state.fastModeActive === true,
+			goal: state.goal ?? null,
 			tokensPerSecond:
 				typeof state.tokensPerSecond === "number" && Number.isFinite(state.tokensPerSecond)
 					? state.tokensPerSecond
@@ -737,6 +741,20 @@ export class RpcClient {
 	 */
 	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
 		const response = await this.#send({ type: "set_fast_mode", enabled });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Read or change goal mode. `get` never mutates or starts a turn; `create`/`resume`
+	 * start a turn only when the server enables `goal.continuationModes: ["rpc"]`.
+	 */
+	async goal(op: RpcGoalOp, options?: { objective?: string; tokenBudget?: number }): Promise<RpcGoalResult> {
+		const response = await this.#send({
+			type: "goal",
+			op,
+			objective: options?.objective,
+			token_budget: options?.tokenBudget,
+		});
 		return this.#getData(response);
 	}
 
@@ -977,6 +995,16 @@ export class RpcClient {
 	 */
 	async branch(entryId: string): Promise<{ text: string; cancelled: boolean }> {
 		const response = await this.#send({ type: "branch", entryId });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Fork into a new session file and switch to it: history up to and including
+	 * `entryId`, or the whole session when omitted.
+	 * @returns Object with `cancelled: true` if an extension cancelled the fork
+	 */
+	async fork(entryId?: string): Promise<{ cancelled: boolean }> {
+		const response = await this.#send({ type: "fork", entryId });
 		return this.#getData(response);
 	}
 
@@ -1237,7 +1265,14 @@ export class RpcClient {
 		const events: AgentEvent[] = [];
 		const { promise, resolve, reject } = Promise.withResolvers<AgentEvent[]>();
 		const unsubscribe = this.onEvent(event => events.push(event));
-		this.#promptResultWaiters.set(id, () => resolve(events));
+		this.#promptResultWaiters.set(id, result => {
+			if (result.status === "error") {
+				reject(new Error(result.error?.message ?? "Prompt failed"));
+				return;
+			}
+			resolve(events);
+		});
+		this.#promptErrorWaiters.set(id, reject);
 		let timeoutId: NodeJS.Timeout | undefined;
 		try {
 			const response = await this.#send({ type: "prompt", message, images }, 30_000, id);
@@ -1251,6 +1286,7 @@ export class RpcClient {
 			unsubscribe();
 			clearTimeout(timeoutId);
 			this.#promptResultWaiters.delete(id);
+			this.#promptErrorWaiters.delete(id);
 		}
 	}
 
@@ -1267,6 +1303,14 @@ export class RpcClient {
 				this.#pendingRequests.delete(id);
 				pending.resolve(data);
 				return;
+			}
+			if (id && data.success === false) {
+				const rejectLate = this.#promptErrorWaiters.get(id);
+				if (rejectLate) {
+					this.#promptErrorWaiters.delete(id);
+					rejectLate(new RpcCommandError(data.error, data.command, data.code));
+					return;
+				}
 			}
 		}
 

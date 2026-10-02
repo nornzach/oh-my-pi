@@ -891,6 +891,7 @@ export async function discoverOpenAIModelsList(
 		context_length?: unknown;
 		max_input_tokens?: unknown;
 		max_tokens?: unknown;
+		limits?: unknown;
 		capabilities?: unknown;
 		input?: unknown;
 		input_modalities?: unknown;
@@ -981,9 +982,23 @@ export async function discoverOpenAIModelsList(
 		const input = nativeMetadataForModel?.input ??
 			extractOpenAIModelsListInputCapabilities(item) ??
 			reference?.input ?? ["text"];
+		const limits = isRecord(item.limits) ? item.limits : undefined;
+		const maxInputTokens = toPositiveNumberOrUndefined(limits?.max_input_tokens);
+		const maxOutputTokens = toPositiveNumberOrUndefined(limits?.max_output_tokens);
+		const reportedLimitsContextWindow =
+			maxInputTokens !== undefined &&
+			maxOutputTokens !== undefined &&
+			Number.isSafeInteger(maxInputTokens) &&
+			Number.isSafeInteger(maxOutputTokens) &&
+			Number.isSafeInteger(maxInputTokens + maxOutputTokens)
+				? maxInputTokens + maxOutputTokens
+				: undefined;
+		const reportedMaxTokens =
+			maxOutputTokens !== undefined && Number.isSafeInteger(maxOutputTokens) ? maxOutputTokens : undefined;
 		const reportedContextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
+			reportedLimitsContextWindow ??
 			toPositiveNumberOrUndefined(item.max_input_tokens) ??
 			nativeMetadataForModel?.contextWindow ??
 			reference?.contextWindow ??
@@ -1043,11 +1058,11 @@ export async function discoverOpenAIModelsList(
 				// when we successfully recover the upstream model identity.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow,
-				// Cap the reference's output limit at the discovered context
-				// window so an ID collision with a larger bundled model can
-				// never request more tokens than the local runtime advertises.
+				// Cap a provider-advertised output limit or the reference's output limit at
+				// the discovered context window so a larger limit can never request more
+				// tokens than the local runtime advertises.
 				maxTokens: Math.min(
-					advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
+					reportedMaxTokens ?? advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 					contextWindow,
 				),
 				headers,
