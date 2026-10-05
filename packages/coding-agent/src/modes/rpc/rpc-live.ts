@@ -1,98 +1,167 @@
+/**
+ * GPT live voice sessions for RPC mode: binds a {@link LiveSessionController} to the
+ * RPC AgentSession (so delegated work runs with the host's tools) and forwards its
+ * callbacks as unsolicited `live_*` frames.
+ */
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { LiveSessionController, type LiveTranscript } from "../../live/controller";
+import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
+import { cfgLiveVoice } from "../../live/settings";
+import { DEFAULT_LIVE_VOICE } from "../../live/voices";
 import type { AgentSession } from "../../session/agent-session";
-import type { RpcLiveState, RpcLiveUpdateFrame } from "./rpc-types";
+import type { RpcLiveFrame } from "./rpc-types";
 
-type RpcLiveOutput = (frame: RpcLiveUpdateFrame) => void;
+/** Minimum spacing between `live_levels` frames. */
+export const RPC_LIVE_LEVELS_INTERVAL_MS = 100;
 
-function assistantText(message: AssistantMessage): string {
-	return message.content
-		.filter(part => part.type === "text")
-		.map(part => part.text)
-		.join("");
+/** The controller surface the RPC bridge drives. */
+export type RpcLiveSession = Pick<LiveSessionController, "start" | "stop" | "toggleMute" | "muted">;
+
+/** Builds the controller for one live session; tests substitute a fake. */
+export type RpcLiveSessionFactory = (options: LiveSessionControllerOptions) => RpcLiveSession;
+
+/** `live_start` parameters. */
+export interface RpcLiveStartOptions {
+	voice?: string;
+	instructions?: string;
 }
 
-/** Owns the one realtime voice call available to an RPC-attached session. */
-export class RpcLiveController {
-	readonly #session: AgentSession;
-	readonly #output: RpcLiveOutput;
-	#controller: LiveSessionController | undefined;
-	#state: RpcLiveState = {
-		active: false,
-		phase: "connecting",
-		muted: false,
-		inputLevel: 0,
-		outputLevel: 0,
-	};
+/** Visible assistant text: text blocks only, no thinking or tool calls. Shared with interactive mode. */
+export function extractVisibleAssistantText(message: AssistantMessage): string {
+	let text = "";
+	for (const content of message.content) {
+		if (content.type === "text") text += content.text;
+	}
+	return text.trim();
+}
 
-	constructor(session: AgentSession, output: RpcLiveOutput) {
+/** Owns at most one live session for an RPC server. */
+export class RpcLiveBridge {
+	readonly #session: AgentSession;
+	readonly #output: (frame: RpcLiveFrame) => void;
+	readonly #createSession: RpcLiveSessionFactory;
+	readonly #levelsIntervalMs: number;
+
+	/** Set from construction until the controller has fully stopped (connecting, active, closing). */
+	#controller: RpcLiveSession | undefined;
+	#closing: Promise<void> | undefined;
+	#pendingLevels: { input: number; output: number } | undefined;
+	#levelsTimer: NodeJS.Timeout | undefined;
+	#lastLevelsAt = Number.NEGATIVE_INFINITY;
+
+	constructor(
+		session: AgentSession,
+		output: (frame: RpcLiveFrame) => void,
+		createSession: RpcLiveSessionFactory = options => new LiveSessionController(options),
+		levelsIntervalMs = RPC_LIVE_LEVELS_INTERVAL_MS,
+	) {
 		this.#session = session;
 		this.#output = output;
+		this.#createSession = createSession;
+		this.#levelsIntervalMs = levelsIntervalMs;
 	}
 
-	get state(): RpcLiveState {
-		return this.#state;
+	/** Whether a session is connecting, active, or closing. */
+	get active(): boolean {
+		return this.#controller !== undefined;
 	}
 
-	async start(voice?: string): Promise<RpcLiveState> {
-		if (this.#controller) return this.#state;
-		const controller = new LiveSessionController({
+	/** Connects a live session and resolves once it is recording. */
+	async start(options: RpcLiveStartOptions = {}): Promise<{ voice: string }> {
+		if (this.#controller) throw new Error("A live session is already active");
+		const voice = options.voice?.trim() || cfgLiveVoice.get(this.#session.settings) || DEFAULT_LIVE_VOICE;
+		let terminated = false;
+		const controller = this.#createSession({
 			session: this.#session,
-			extractAssistantText: assistantText,
+			extractAssistantText: extractVisibleAssistantText,
 			voice,
+			instructions: options.instructions,
 			callbacks: {
-				onPhase: phase => this.#update({ active: true, phase }),
-				onLevels: (inputLevel, outputLevel) => this.#update({ inputLevel, outputLevel }),
-				onTranscript: transcript => this.#update({ transcript }),
-				onTerminal: error => {
-					if (this.#controller !== controller) return;
-					this.#controller = undefined;
-					this.#update({
-						active: false,
-						phase: error ? "error" : this.#state.phase,
-						inputLevel: 0,
-						outputLevel: 0,
-						error: error?.message,
+				onPhase: phase => this.#output({ type: "live_phase", phase }),
+				onLevels: (input, output) => {
+					if (!terminated) this.#queueLevels(input, output);
+				},
+				onTranscript: transcript => {
+					if (!transcript) return;
+					this.#output({
+						type: "live_transcript",
+						role: transcript.role,
+						turn: transcript.turn,
+						text: transcript.text,
+						final: transcript.final,
 					});
+				},
+				onTerminal: error => {
+					if (terminated) return;
+					terminated = true;
+					this.#flushLevels();
+					this.#output(error ? { type: "live_end", error: error.message } : { type: "live_end" });
+					this.#retire(controller);
 				},
 			},
 		});
 		this.#controller = controller;
-		this.#update({ active: true, phase: "connecting", error: undefined, transcript: undefined });
 		try {
 			await controller.start();
 		} catch (cause) {
-			if (this.#controller === controller) this.#controller = undefined;
-			const error = cause instanceof Error ? cause.message : String(cause);
-			this.#update({ active: false, phase: "error", error, inputLevel: 0, outputLevel: 0 });
-			throw cause;
+			await this.#retire(controller);
+			throw cause instanceof Error ? cause : new Error(String(cause));
 		}
-		return this.#state;
+		return { voice };
 	}
 
-	toggleMute(): RpcLiveState {
+	/** Stops the active session; resolves once it has stopped. No-op without one. */
+	async stop(): Promise<void> {
 		const controller = this.#controller;
-		if (!controller) throw new Error("No live voice session is active");
-		controller.toggleMute();
-		this.#update({ muted: controller.muted });
-		return this.#state;
+		if (!controller) return;
+		await this.#retire(controller);
 	}
 
-	async stop(): Promise<RpcLiveState> {
+	/** Sets (or toggles when omitted) microphone mute. */
+	setMuted(muted?: boolean): { muted: boolean } {
 		const controller = this.#controller;
-		if (!controller) return this.#state;
-		this.#controller = undefined;
-		await controller.stop();
-		this.#update({ active: false, muted: false, inputLevel: 0, outputLevel: 0, transcript: undefined });
-		return this.#state;
+		if (!controller || this.#closing) throw new Error("No live session is active");
+		if (muted === undefined || muted !== controller.muted) controller.toggleMute();
+		return { muted: controller.muted };
 	}
 
-	async dispose(): Promise<void> {
-		await this.stop();
+	/** Stops `controller` and releases the slot once it has fully stopped. Idempotent. */
+	#retire(controller: RpcLiveSession): Promise<void> {
+		if (this.#controller !== controller) return Promise.resolve();
+		this.#closing ??= controller.stop().finally(() => {
+			if (this.#controller !== controller) return;
+			this.#controller = undefined;
+			this.#closing = undefined;
+			// Levels never follow `live_end`.
+			clearTimeout(this.#levelsTimer);
+			this.#levelsTimer = undefined;
+			this.#pendingLevels = undefined;
+		});
+		return this.#closing;
 	}
 
-	#update(patch: Partial<RpcLiveState> & { transcript?: LiveTranscript | undefined }): void {
-		this.#state = { ...this.#state, ...patch };
-		this.#output({ type: "live_update", state: this.#state });
+	#queueLevels(input: number, output: number): void {
+		this.#pendingLevels = { input, output };
+		if (this.#levelsTimer) return;
+		const wait = this.#lastLevelsAt + this.#levelsIntervalMs - Date.now();
+		if (wait <= 0) {
+			this.#flushLevels();
+			return;
+		}
+		this.#levelsTimer = setTimeout(() => {
+			this.#levelsTimer = undefined;
+			this.#flushLevels();
+		}, wait);
+	}
+
+	#flushLevels(): void {
+		if (this.#levelsTimer) {
+			clearTimeout(this.#levelsTimer);
+			this.#levelsTimer = undefined;
+		}
+		const levels = this.#pendingLevels;
+		if (!levels) return;
+		this.#pendingLevels = undefined;
+		this.#lastLevelsAt = Date.now();
+		this.#output({ type: "live_levels", input: levels.input, output: levels.output });
 	}
 }

@@ -23,8 +23,6 @@ import type {
 	ExtensionAskDialogResult,
 } from "../../extensibility/extensions/types";
 import type { GoalStatus } from "@oh-my-pi/pi-tui/tools/goal";
-import type { LiveTranscript } from "../../live/controller";
-import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { MemoryBackendId } from "../../memory-backend/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
@@ -42,6 +40,7 @@ import type { DebugParams } from "../../tools/debug";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
+import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { RpcMessagesPage } from "./rpc-messages";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -83,7 +82,7 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "drop_session" }
-	| { id?: string; type: "open_session"; sessionDir: string }
+	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
 
 	// State
 	| { id?: string; type: "get_state" }
@@ -127,6 +126,10 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+	// Live voice (GPT live bound to this session)
+	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
+	| { id?: string; type: "live_stop" }
+	| { id?: string; type: "live_mute"; muted?: boolean }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -201,7 +204,7 @@ export type RpcCommand =
 			pinned: boolean;
 	  }
 	| { id?: string; type: "export_html"; outputPath?: string }
-	| { id?: string; type: "switch_session"; sessionPath: string }
+	| { id?: string; type: "switch_session"; sessionPath: string; provider?: string; modelId?: string }
 	| { id?: string; type: "branch"; entryId: string }
 	| { id?: string; type: "fork"; entryId?: string }
 	| { id?: string; type: "get_branch_messages" }
@@ -498,12 +501,6 @@ export type RpcCommand =
 			plugin?: string;
 			source?: string;
 	  }
-
-	// Interactive surfaces that remain long-lived in the sidecar process.
-	| { id?: string; type: "live_start"; voice?: string }
-	| { id?: string; type: "live_toggle_mute" }
-	| { id?: string; type: "live_stop" }
-	| { id?: string; type: "get_live_state" }
 	| { id?: string; type: "debug"; params: DebugParams }
 	| { id?: string; type: "collab_start"; relayUrl?: string; view?: boolean }
 	| { id?: string; type: "collab_join"; link: string }
@@ -691,22 +688,6 @@ export interface RpcSwitchLeafResult {
 	askReanswerCommitted?: boolean;
 }
 
-/** Realtime voice state mirrored into the GUI while the sidecar owns audio I/O. */
-export interface RpcLiveState {
-	active: boolean;
-	phase: LivePhase;
-	muted: boolean;
-	inputLevel: number;
-	outputLevel: number;
-	transcript?: LiveTranscript;
-	error?: string;
-}
-
-export interface RpcLiveUpdateFrame {
-	type: "live_update";
-	state: RpcLiveState;
-}
-
 export interface RpcCollabParticipant {
 	name: string;
 	role: "host" | "guest";
@@ -785,6 +766,40 @@ export interface RpcPromptResultFrame {
 export interface RpcSessionSettledFrame {
 	type: "session_settled";
 }
+
+// ============================================================================
+// Live Voice Frames (stdout, unsolicited; not session events, so `set_event_filter` never drops them)
+// ============================================================================
+
+/** Live session phase change. */
+export interface RpcLivePhaseFrame {
+	type: "live_phase";
+	phase: LivePhase;
+}
+
+/** Microphone/speaker RMS in [0, 1], at most one frame per 100 ms carrying the latest values. */
+export interface RpcLiveLevelsFrame {
+	type: "live_levels";
+	input: number;
+	output: number;
+}
+
+/** Incremental (`final: false`) or final transcript of one realtime turn; coalesce on `role` + `turn`. */
+export interface RpcLiveTranscriptFrame {
+	type: "live_transcript";
+	role: "user" | "assistant";
+	turn: number;
+	text: string;
+	final: boolean;
+}
+
+/** Emitted exactly once per live session when it has ended; `error` carries the failure cause. */
+export interface RpcLiveEndFrame {
+	type: "live_end";
+	error?: string;
+}
+
+export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
 
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
@@ -2399,6 +2414,10 @@ export type RpcResponse =
 			success: true;
 			data: RpcHandoffResult | null;
 	  }
+	// Live voice
+	| { id?: string; type: "response"; command: "live_start"; success: true; data: { voice: string } }
+	| { id?: string; type: "response"; command: "live_stop"; success: true }
+	| { id?: string; type: "response"; command: "live_mute"; success: true; data: { muted: boolean } }
 
 	// Messages
 	| {
@@ -2968,36 +2987,6 @@ export type RpcResponse =
 			command: "delete_plugin_setting";
 			success: true;
 			data: RpcPluginMutationResult;
-	  }
-
-	// Long-lived interactive surfaces.
-	| {
-			id?: string;
-			type: "response";
-			command: "live_start";
-			success: true;
-			data: RpcLiveState;
-	  }
-	| {
-			id?: string;
-			type: "response";
-			command: "live_toggle_mute";
-			success: true;
-			data: RpcLiveState;
-	  }
-	| {
-			id?: string;
-			type: "response";
-			command: "live_stop";
-			success: true;
-			data: RpcLiveState;
-	  }
-	| {
-			id?: string;
-			type: "response";
-			command: "get_live_state";
-			success: true;
-			data: RpcLiveState;
 	  }
 	| {
 			id?: string;

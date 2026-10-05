@@ -162,6 +162,8 @@ export class RpcCollabController {
 	}
 
 	async dispose(): Promise<void> {
+		// Nothing to tear down (and no state change to publish) without a collab session.
+		if (!this.#guest && !this.#host) return;
 		await this.leave();
 	}
 
