@@ -60,10 +60,19 @@ const rustDir = path.join(repoRoot, "crates/pi-natives");
 const nativeDir = path.join(import.meta.dir, "../native");
 const packageJsonPath = path.join(import.meta.dir, "../package.json");
 
+// PI_NATIVE_VARIANT (the loader's own override) forces the x64 ISA variant —
+// e.g. building the baseline addon from an AVX2 CI host, or the modern addon
+// under Rosetta where sysctl reports no AVX2.
+const variantOverride = Bun.env.PI_NATIVE_VARIANT?.trim();
 const localAddon = resolveLocalHostAddon({
 	platform: process.platform,
 	arch: process.arch,
-	avx2: detectHostAvx2Support(),
+	avx2:
+		variantOverride === "modern"
+			? true
+			: variantOverride === "baseline"
+				? false
+				: detectHostAvx2Support(),
 });
 const effectiveVariant = localAddon.x64Variant;
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
