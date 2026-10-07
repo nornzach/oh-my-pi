@@ -1,24 +1,9 @@
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	describe,
-	expect,
-	it,
-	vi,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import {
-	Agent,
-	type AgentMessage,
-	type AgentTool,
-} from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, type Message, type Model } from "@oh-my-pi/pi-ai";
-import {
-	createMockModel,
-	type MockResponse,
-} from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -43,10 +28,7 @@ describe("AgentSession /prewalk off", () => {
 		tempDir = TempDir.createSync("@pi-prewalk-off-");
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(
-			authStorage,
-			path.join(tempDir.path(), "models.yml"),
-		);
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
 
 	afterEach(async () => {
@@ -70,8 +52,7 @@ describe("AgentSession /prewalk off", () => {
 	// comparing live and rebuilt copies of the same message.
 	const stripSymbols = (message: AgentMessage): AgentMessage => {
 		const copy = { ...message };
-		for (const key of Object.getOwnPropertySymbols(copy))
-			delete (copy as Record<symbol, unknown>)[key];
+		for (const key of Object.getOwnPropertySymbols(copy)) delete (copy as Record<symbol, unknown>)[key];
 		return copy;
 	};
 
@@ -116,10 +97,7 @@ describe("AgentSession /prewalk off", () => {
 			"compaction.enabled": false,
 			"prewalk.enabled": true,
 		});
-		settings.setModelRole(
-			"default",
-			`${primary.provider}/${primary.id}:medium`,
-		);
+		settings.setModelRole("default", `${primary.provider}/${primary.id}:medium`);
 		settings.setModelRole("smol", `${target.provider}/${target.id}:medium`);
 		const sessionManager = SessionManager.inMemory();
 		const mock = createMockModel({ responses });
@@ -148,9 +126,7 @@ describe("AgentSession /prewalk off", () => {
 			modelRegistry,
 			toolRegistry,
 			thinkingLevel: Effort.Medium,
-			prewalk: startupArm
-				? { target, thinkingLevel: Effort.Medium }
-				: undefined,
+			prewalk: startupArm ? { target, thinkingLevel: Effort.Medium } : undefined,
 		});
 		const ctx = {
 			session,
@@ -177,11 +153,7 @@ describe("AgentSession /prewalk off", () => {
 
 	it("cancels the startup arm so later todo and write turns keep the active model", async () => {
 		const fixture = createSession(
-			[
-				toolCall("todo", "todo"),
-				toolCall("write", "write"),
-				{ content: ["done"] },
-			],
+			[toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }],
 			true,
 		);
 
@@ -191,46 +163,31 @@ describe("AgentSession /prewalk off", () => {
 		expect(cfgPrewalkEnabled.get(fixture.settings)).toBe(true);
 
 		await fixture.session.prompt("do the task");
-		expect(fixture.requested).toEqual(
-			Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`),
-		);
+		expect(fixture.requested).toEqual(Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`));
 		expect(fixture.session.model?.id).toBe(fixture.primary.id);
 		expect(fixture.session.thinkingLevel).toBe(Effort.Medium);
 	});
 
 	it("removes an injected plan nudge from steering before the next provider request", async () => {
-		const fixture = createSession([
-			toolCall("todo", "todo"),
-			toolCall("write", "write"),
-			{ content: ["done"] },
-		]);
+		const fixture = createSession([toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }]);
 		await executeBuiltinSlashCommand("/prewalk", fixture.runtime);
 		expect(
 			fixture.agent
 				.peekSteeringQueue()
-				.some(
-					(message) =>
-						message.role === "custom" && message.customType === "prewalk-plan",
-				),
+				.some(message => message.role === "custom" && message.customType === "prewalk-plan"),
 		).toBe(true);
 
 		await executeBuiltinSlashCommand("/prewalk off", fixture.runtime);
 		expect(
 			fixture.agent
 				.peekSteeringQueue()
-				.some(
-					(message) =>
-						message.role === "custom" && message.customType === "prewalk-plan",
-				),
+				.some(message => message.role === "custom" && message.customType === "prewalk-plan"),
 		).toBe(false);
 		await fixture.session.prompt("do the task without prewalk");
-		expect(fixture.requested).toEqual(
-			Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`),
-		);
+		expect(fixture.requested).toEqual(Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`));
 		expect(
 			fixture.agent.state.messages.some(
-				(message) =>
-					message.role === "custom" && message.customType === "prewalk-plan",
+				message => message.role === "custom" && message.customType === "prewalk-plan",
 			),
 		).toBe(false);
 	});
@@ -249,9 +206,7 @@ describe("AgentSession /prewalk off", () => {
 
 		await executeBuiltinSlashCommand("/prewalk off", fixture.runtime);
 		await fixture.session.prompt("second task");
-		expect(fixture.requested.slice(3)).toEqual(
-			Array(2).fill(`${fixture.target.provider}/${fixture.target.id}`),
-		);
+		expect(fixture.requested.slice(3)).toEqual(Array(2).fill(`${fixture.target.provider}/${fixture.target.id}`));
 		expect(fixture.session.model?.id).toBe(fixture.target.id);
 	});
 
@@ -272,22 +227,14 @@ describe("AgentSession /prewalk off", () => {
 		await fixture.session.prompt("first task");
 		const delivered = fixture.agent.state.messages.filter(isContinuation);
 		expect(delivered).toHaveLength(1);
-		expect(
-			fixture.sessionManager
-				.buildSessionContext()
-				.messages.filter(isContinuation)
-				.map(stripSymbols),
-		).toEqual(delivered.map(stripSymbols));
+		expect(fixture.sessionManager.buildSessionContext().messages.filter(isContinuation).map(stripSymbols)).toEqual(
+			delivered.map(stripSymbols),
+		);
 		expect(fixture.session.model?.id).toBe(fixture.target.id);
 
-		fixture.settings.setModelRole(
-			"smol",
-			`${fixture.primary.provider}/${fixture.primary.id}:medium`,
-		);
+		fixture.settings.setModelRole("smol", `${fixture.primary.provider}/${fixture.primary.id}:medium`);
 		await executeBuiltinSlashCommand("/prewalk", fixture.runtime);
-		expect(fixture.session.getPrewalkState()?.target.id).toBe(
-			fixture.primary.id,
-		);
+		expect(fixture.session.getPrewalkState()?.target.id).toBe(fixture.primary.id);
 		const activeModel = fixture.session.model;
 		const thinkingLevel = fixture.session.thinkingLevel;
 		const defaultRole = fixture.settings.getModelRole("default");
@@ -309,34 +256,22 @@ describe("AgentSession /prewalk off", () => {
 		fixture.agent.steer(ordinarySteering);
 		const pendingPlan = fixture.agent
 			.peekSteeringQueue()
-			.find(
-				(message) =>
-					message.role === "custom" && message.customType === "prewalk-plan",
-			);
+			.find(message => message.role === "custom" && message.customType === "prewalk-plan");
 		expect(pendingPlan).toBeDefined();
-		expect(fixture.agent.peekSteeringQueue()).toContainEqual(
-			pendingContinuation,
-		);
+		expect(fixture.agent.peekSteeringQueue()).toContainEqual(pendingContinuation);
 
 		await executeBuiltinSlashCommand("/prewalk off", fixture.runtime);
 		expect(fixture.session.getPrewalkState()).toBeUndefined();
 		expect(fixture.agent.peekSteeringQueue()).toEqual([ordinarySteering]);
-		expect(fixture.agent.state.messages.filter(isContinuation)).toEqual(
-			delivered,
-		);
+		expect(fixture.agent.state.messages.filter(isContinuation)).toEqual(delivered);
 		expect(
 			fixture.agent.state.messages.some(
-				(message) =>
-					message.role === "custom" && message.customType === "prewalk-plan",
+				message => message.role === "custom" && message.customType === "prewalk-plan",
 			),
 		).toBe(false);
 		const rebuilt = fixture.sessionManager.buildSessionContext().messages;
-		expect(rebuilt.filter(isContinuation).map(stripSymbols)).toEqual(
-			delivered.map(stripSymbols),
-		);
-		expect(convertToLlm(fixture.agent.state.messages)).toEqual(
-			convertToLlm(rebuilt),
-		);
+		expect(rebuilt.filter(isContinuation).map(stripSymbols)).toEqual(delivered.map(stripSymbols));
+		expect(convertToLlm(fixture.agent.state.messages)).toEqual(convertToLlm(rebuilt));
 		expect(rebuilt).not.toContainEqual(pendingContinuation);
 		expect(fixture.session.model).toEqual(activeModel);
 		expect(fixture.session.thinkingLevel).toBe(thinkingLevel);
@@ -353,31 +288,20 @@ describe("AgentSession /prewalk off", () => {
 				expect(context).not.toContainEqual(message);
 			}
 		}
-		expect(subsequentContexts.at(-1)).toEqual(
-			expect.arrayContaining(convertToLlm([ordinarySteering])),
-		);
+		expect(subsequentContexts.at(-1)).toEqual(expect.arrayContaining(convertToLlm([ordinarySteering])));
 		expect(fixture.requested.slice(nextRequest)).toEqual(
-			Array(subsequentContexts.length).fill(
-				`${activeModel!.provider}/${activeModel!.id}`,
-			),
+			Array(subsequentContexts.length).fill(`${activeModel!.provider}/${activeModel!.id}`),
 		);
 		expect(fixture.session.model).toEqual(activeModel);
 		expect(fixture.session.thinkingLevel).toBe(thinkingLevel);
-		expect(
-			fixture.sessionManager
-				.buildSessionContext()
-				.messages.filter(isContinuation)
-				.map(stripSymbols),
-		).toEqual(delivered.map(stripSymbols));
+		expect(fixture.sessionManager.buildSessionContext().messages.filter(isContinuation).map(stripSymbols)).toEqual(
+			delivered.map(stripSymbols),
+		);
 	});
 
 	it("cancels an existing arm even when @smol no longer resolves", async () => {
 		const fixture = createSession(
-			[
-				toolCall("todo", "todo"),
-				toolCall("write", "write"),
-				{ content: ["done"] },
-			],
+			[toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }],
 			true,
 		);
 		fixture.settings.setModelRole("smol", "anthropic/missing-prewalk-model");
@@ -385,25 +309,17 @@ describe("AgentSession /prewalk off", () => {
 		await executeBuiltinSlashCommand("/prewalk off", fixture.runtime);
 		expect(fixture.session.getPrewalkState()).toBeUndefined();
 		await fixture.session.prompt("do the task");
-		expect(fixture.requested).toEqual(
-			Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`),
-		);
+		expect(fixture.requested).toEqual(Array(3).fill(`${fixture.primary.provider}/${fixture.primary.id}`));
 	});
 
 	it("rejects an extra off argument without canceling the pending handoff", async () => {
 		const fixture = createSession(
-			[
-				toolCall("todo", "todo"),
-				toolCall("write", "write"),
-				{ content: ["done"] },
-			],
+			[toolCall("todo", "todo"), toolCall("write", "write"), { content: ["done"] }],
 			true,
 		);
 
 		await executeBuiltinSlashCommand("/prewalk off extra", fixture.runtime);
-		expect(fixture.session.getPrewalkState()?.target.id).toBe(
-			fixture.target.id,
-		);
+		expect(fixture.session.getPrewalkState()?.target.id).toBe(fixture.target.id);
 		await fixture.session.prompt("do the task");
 		expect(fixture.requested).toEqual([
 			`${fixture.primary.provider}/${fixture.primary.id}`,

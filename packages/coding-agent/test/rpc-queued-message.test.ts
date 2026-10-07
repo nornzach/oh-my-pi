@@ -8,19 +8,10 @@ import {
 	fitAbortAndRestoreQueueResponse,
 	fitRemoveQueuedMessageResponse,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
-import type {
-	RpcPromptResultFrame,
-	RpcResponse,
-	RpcSessionState,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { RpcPromptResultFrame, RpcResponse, RpcSessionState } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { SessionQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
-import {
-	isRecord,
-	readJsonl,
-	removeWithRetries,
-	withTimeout,
-} from "@oh-my-pi/pi-utils";
+import { isRecord, readJsonl, removeWithRetries, withTimeout } from "@oh-my-pi/pi-utils";
 import { rejectionOf } from "./helpers/rejection";
 
 describe("RPC queued-message editing", () => {
@@ -30,10 +21,7 @@ describe("RPC queued-message editing", () => {
 	/** `script` selects a scripted first model call; see the fixture's QUEUED_RPC_SCRIPT. */
 	function createClient(script?: "internal-steer" | "live-steer"): RpcClient {
 		return new RpcClient({
-			command: [
-				process.execPath,
-				path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts"),
-			],
+			command: [process.execPath, path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts")],
 			cwd: directory,
 			env: {
 				PI_CODING_AGENT_DIR: directory,
@@ -57,56 +45,32 @@ describe("RPC queued-message editing", () => {
 		await client.start();
 		await client.followUp("cancel this");
 		await client.followUp("keep this");
-		expect(
-			await rejectionOf(
-				client.removeQueuedMessage(null as unknown as string, "followUp"),
-			),
-		).toMatchObject({
+		expect(await rejectionOf(client.removeQueuedMessage(null as unknown as string, "followUp"))).toMatchObject({
 			command: "remove_queued_message",
 		});
 		expect(
-			await rejectionOf(
-				client.removeQueuedMessage(
-					"cancel this",
-					"steer" as unknown as "steering",
-				),
-			),
+			await rejectionOf(client.removeQueuedMessage("cancel this", "steer" as unknown as "steering")),
 		).toMatchObject({ command: "remove_queued_message" });
 		expect(
-			await rejectionOf(
-				client.removeQueuedMessage(
-					"cancel this",
-					undefined as unknown as "steering",
-				),
-			),
+			await rejectionOf(client.removeQueuedMessage("cancel this", undefined as unknown as "steering")),
 		).toMatchObject({ command: "remove_queued_message" });
-		expect(await client.removeQueuedMessage("cancel this", "steering")).toEqual(
-			{ removed: false },
-		);
+		expect(await client.removeQueuedMessage("cancel this", "steering")).toEqual({ removed: false });
 		expect(await client.removeQueuedMessage("absent", "followUp")).toEqual({
 			removed: false,
 		});
 		expect((await client.getState()).queuedMessageCount).toBe(2);
 
-		expect(await client.removeQueuedMessage("cancel this", "followUp")).toEqual(
-			{ removed: true },
-		);
-		expect(await client.removeQueuedMessage("cancel this", "followUp")).toEqual(
-			{ removed: false },
-		);
+		expect(await client.removeQueuedMessage("cancel this", "followUp")).toEqual({ removed: true });
+		expect(await client.removeQueuedMessage("cancel this", "followUp")).toEqual({ removed: false });
 		expect((await client.getState()).queuedMessageCount).toBe(1);
 
 		const idle = Promise.withResolvers<void>();
-		const unsubscribe = client.onEvent((event) => {
+		const unsubscribe = client.onEvent(event => {
 			if (event.type === "agent_end") idle.resolve();
 		});
 		try {
 			await client.prompt("resume");
-			await withTimeout(
-				idle.promise,
-				10_000,
-				"Surviving RPC message did not finish",
-			);
+			await withTimeout(idle.promise, 10_000, "Surviving RPC message did not finish");
 		} finally {
 			unsubscribe();
 		}
@@ -116,11 +80,7 @@ describe("RPC queued-message editing", () => {
 		});
 		expect((await client.getState()).queuedMessageCount).toBe(0);
 		const messages = await client.getMessages();
-		expect(
-			messages
-				.filter((message) => message.role === "user")
-				.map((message) => message.content),
-		).toEqual([
+		expect(messages.filter(message => message.role === "user").map(message => message.content)).toEqual([
 			[{ type: "text", text: "resume" }],
 			[{ type: "text", text: "keep this" }],
 		]);
@@ -146,19 +106,11 @@ describe("RPC queued-message editing", () => {
 			text: "draft",
 			images: [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }],
 		};
-		const full = fitRemoveQueuedMessageResponse(
-			"rm",
-			removed,
-			Number.MAX_SAFE_INTEGER,
-		);
+		const full = fitRemoveQueuedMessageResponse("rm", removed, Number.MAX_SAFE_INTEGER);
 		const fullBytes = Buffer.byteLength(JSON.stringify(full));
 		// Exactly the size of the full response still admits the images.
-		expect(fitRemoveQueuedMessageResponse("rm", removed, fullBytes)).toEqual(
-			full,
-		);
-		expect(
-			fitRemoveQueuedMessageResponse("rm", removed, fullBytes - 1),
-		).toEqual({
+		expect(fitRemoveQueuedMessageResponse("rm", removed, fullBytes)).toEqual(full);
+		expect(fitRemoveQueuedMessageResponse("rm", removed, fullBytes - 1)).toEqual({
 			id: "rm",
 			type: "response",
 			command: "remove_queued_message",
@@ -175,25 +127,19 @@ describe("RPC queued-message editing", () => {
 			followUp: SessionQueuedMessage[];
 		};
 		const queueTexts = (update: QueueUpdate) => ({
-			steering: update.steering.map((message) => message.text),
-			followUp: update.followUp.map((message) => message.text),
+			steering: update.steering.map(message => message.text),
+			followUp: update.followUp.map(message => message.text),
 		});
 		const updates: QueueUpdate[] = [];
-		const unsubscribe = client.onSessionEvent((event) => {
-			if (event.type === "queue_update")
-				updates.push({ steering: event.steering, followUp: event.followUp });
+		const unsubscribe = client.onSessionEvent(event => {
+			if (event.type === "queue_update") updates.push({ steering: event.steering, followUp: event.followUp });
 		});
 
 		try {
 			await client.followUp("first");
 			await client.followUp("second");
-			expect(updates.map(queueTexts).map((update) => update.followUp)).toEqual([
-				["first"],
-				["first", "second"],
-			]);
-			expect(updates.every((update) => update.steering.length === 0)).toBe(
-				true,
-			);
+			expect(updates.map(queueTexts).map(update => update.followUp)).toEqual([["first"], ["first", "second"]]);
+			expect(updates.every(update => update.steering.length === 0)).toBe(true);
 
 			expect(await client.removeQueuedMessage("first", "followUp")).toEqual({
 				removed: true,
@@ -202,9 +148,7 @@ describe("RPC queued-message editing", () => {
 				steering: [],
 				followUp: ["second"],
 			});
-			expect((await client.getState()).queuedMessages).toEqual(
-				queueTexts(updates.at(-1)!),
-			);
+			expect((await client.getState()).queuedMessages).toEqual(queueTexts(updates.at(-1)!));
 
 			// Snapshot-string-removal invariant: every chip string in a snapshot,
 			// passed back verbatim to remove_queued_message with its queue, removes
@@ -234,7 +178,7 @@ describe("RPC queued-message editing", () => {
 			});
 
 			const idle = Promise.withResolvers<void>();
-			const unsubscribeIdle = client.onEvent((event) => {
+			const unsubscribeIdle = client.onEvent(event => {
 				if (event.type === "agent_end") idle.resolve();
 			});
 			try {
@@ -262,9 +206,7 @@ describe("RPC queued-message editing", () => {
 	test("rejects malformed promotion, preserves missing targets, and promotes without duplicate delivery", async () => {
 		await client.start();
 		await client.followUp("queued request");
-		expect(
-			await rejectionOf(client.promoteQueuedMessage(null as unknown as string)),
-		).toMatchObject({
+		expect(await rejectionOf(client.promoteQueuedMessage(null as unknown as string))).toMatchObject({
 			command: "promote_queued_message",
 		});
 		expect(await client.promoteQueuedMessage("missing")).toEqual({
@@ -273,18 +215,14 @@ describe("RPC queued-message editing", () => {
 		expect((await client.getState()).queuedMessageCount).toBe(1);
 
 		const idle = Promise.withResolvers<void>();
-		const unsubscribe = client.onEvent((event) => {
+		const unsubscribe = client.onEvent(event => {
 			if (event.type === "agent_end") idle.resolve();
 		});
 		try {
 			expect(await client.promoteQueuedMessage("queued request")).toEqual({
 				promoted: true,
 			});
-			await withTimeout(
-				idle.promise,
-				10_000,
-				"Promoted RPC message did not finish",
-			);
+			await withTimeout(idle.promise, 10_000, "Promoted RPC message did not finish");
 		} finally {
 			unsubscribe();
 		}
@@ -294,11 +232,9 @@ describe("RPC queued-message editing", () => {
 		});
 		expect((await client.getState()).queuedMessageCount).toBe(0);
 		const messages = await client.getMessages();
-		expect(
-			messages
-				.filter((message) => message.role === "user")
-				.map((message) => message.content),
-		).toEqual([[{ type: "text", text: "queued request" }]]);
+		expect(messages.filter(message => message.role === "user").map(message => message.content)).toEqual([
+			[{ type: "text", text: "queued request" }],
+		]);
 	}, 30_000);
 
 	test("acknowledges a queued streaming prompt only once it is admitted, so an immediate promote succeeds", async () => {
@@ -314,43 +250,29 @@ describe("RPC queued-message editing", () => {
 		await client.start();
 
 		const agentStarted = Promise.withResolvers<void>();
-		const unsubscribe = client.onEvent((event) => {
+		const unsubscribe = client.onEvent(event => {
 			if (event.type === "agent_start") agentStarted.resolve();
 		});
 		const results: RpcPromptResultFrame[] = [];
 		const bothReported = Promise.withResolvers<void>();
-		const unsubscribeResults = client.onPromptResult((result) => {
+		const unsubscribeResults = client.onPromptResult(result => {
 			results.push(result);
 			if (results.length === 2) bothReported.resolve();
 		});
 		try {
 			const firstId = await client.prompt("start a long turn");
-			await withTimeout(
-				agentStarted.promise,
-				10_000,
-				"First turn never started streaming",
-			);
+			await withTimeout(agentStarted.promise, 10_000, "First turn never started streaming");
 
-			const queuedId = await client.prompt(
-				"queued with image",
-				[image],
-				"followUp",
-			);
+			const queuedId = await client.prompt("queued with image", [image], "followUp");
 			expect(await client.promoteQueuedMessage("queued with image")).toEqual({
 				promoted: true,
 			});
 
 			// Admission-gated acknowledgement does not change completion: each accepted
 			// prompt still gets exactly one prompt_result under its own id.
-			await withTimeout(
-				bothReported.promise,
-				10_000,
-				"Prompts never reported their results",
-			);
+			await withTimeout(bothReported.promise, 10_000, "Prompts never reported their results");
 			await client.getState();
-			expect(results.map((result) => result.id).sort()).toEqual(
-				[firstId, queuedId].sort(),
-			);
+			expect(results.map(result => result.id).sort()).toEqual([firstId, queuedId].sort());
 			for (const result of results) {
 				expect(result).toMatchObject({
 					type: "prompt_result",
@@ -366,22 +288,16 @@ describe("RPC queued-message editing", () => {
 
 	describe("abort_and_restore_queue", () => {
 		/** Starts the fixture under `script` with a first turn that is still streaming. */
-		async function startStreamingTurn(
-			script?: "internal-steer" | "live-steer",
-		): Promise<void> {
+		async function startStreamingTurn(script?: "internal-steer" | "live-steer"): Promise<void> {
 			if (script) client = createClient(script);
 			await client.start();
 			const agentStarted = Promise.withResolvers<void>();
-			const unsubscribe = client.onEvent((event) => {
+			const unsubscribe = client.onEvent(event => {
 				if (event.type === "agent_start") agentStarted.resolve();
 			});
 			try {
 				await client.prompt("start a long turn");
-				await withTimeout(
-					agentStarted.promise,
-					10_000,
-					"First turn never started streaming",
-				);
+				await withTimeout(agentStarted.promise, 10_000, "First turn never started streaming");
 			} finally {
 				unsubscribe();
 			}
@@ -389,10 +305,7 @@ describe("RPC queued-message editing", () => {
 
 		/** Re-reads session state until `check` holds. The fixture changes these queues inside
 		 *  the model call without emitting an event, so each `get_state` round trip is the wait. */
-		async function untilState(
-			check: (state: RpcSessionState) => boolean,
-			message: string,
-		): Promise<void> {
+		async function untilState(check: (state: RpcSessionState) => boolean, message: string): Promise<void> {
 			await withTimeout(
 				(async () => {
 					while (!check(await client.getState()));
@@ -408,18 +321,14 @@ describe("RPC queued-message editing", () => {
 			const reportedIds = new Set<string | undefined>();
 			const reported = Promise.withResolvers<void>();
 			let promptId: string | undefined;
-			const unsubscribe = client.onPromptResult((result) => {
+			const unsubscribe = client.onPromptResult(result => {
 				reportedIds.add(result.id);
 				if (result.id === promptId) reported.resolve();
 			});
 			try {
 				promptId = await client.prompt("after abort");
 				if (reportedIds.has(promptId)) reported.resolve();
-				await withTimeout(
-					reported.promise,
-					10_000,
-					"Post-abort prompt never reported its result",
-				);
+				await withTimeout(reported.promise, 10_000, "Post-abort prompt never reported its result");
 			} finally {
 				unsubscribe();
 			}
@@ -427,9 +336,7 @@ describe("RPC queued-message editing", () => {
 		}
 
 		function userTexts(messages: AgentMessage[]): unknown[] {
-			return messages
-				.filter((message) => message.role === "user")
-				.map((message) => message.content);
+			return messages.filter(message => message.role === "user").map(message => message.content);
 		}
 
 		const expectedUserTurns = [
@@ -451,19 +358,13 @@ describe("RPC queued-message editing", () => {
 			expect(userTexts(messages)).toEqual(expectedUserTurns);
 			// The transcript marks the stop as a deliberate user interrupt, as TUI Esc does.
 			expect(
-				messages.find(
-					(message) =>
-						message.role === "assistant" && message.stopReason === "aborted",
-				),
+				messages.find(message => message.role === "assistant" && message.stopReason === "aborted"),
 			).toMatchObject({ errorMessage: USER_INTERRUPT_LABEL });
 		}, 30_000);
 
 		test("drops a queued non-user steer without returning or running it", async () => {
 			await startStreamingTurn("internal-steer");
-			await untilState(
-				(state) => state.queuedMessageCount === 1,
-				"Internal steer was never queued",
-			);
+			await untilState(state => state.queuedMessageCount === 1, "Internal steer was never queued");
 			await client.steer("queued steer");
 
 			expect(await client.abortAndRestoreQueue()).toEqual({
@@ -472,9 +373,7 @@ describe("RPC queued-message editing", () => {
 			});
 			expect((await client.getState()).queuedMessageCount).toBe(0);
 			const messages = await transcriptAfterNextPrompt();
-			expect(messages.filter((message) => message.role === "custom")).toEqual(
-				[],
-			);
+			expect(messages.filter(message => message.role === "custom")).toEqual([]);
 			expect(userTexts(messages)).toEqual(expectedUserTurns);
 		}, 30_000);
 
@@ -483,9 +382,7 @@ describe("RPC queued-message editing", () => {
 			await client.steer("live steer");
 			// Claimed: it left the pending queue but stays listed until the transcript records it.
 			await untilState(
-				(state) =>
-					state.queuedMessageCount === 0 &&
-					state.queuedMessages.steering.includes("live steer"),
+				state => state.queuedMessageCount === 0 && state.queuedMessages.steering.includes("live steer"),
 				"Provider never claimed the steer",
 			);
 
@@ -493,18 +390,13 @@ describe("RPC queued-message editing", () => {
 				steering: [{ text: "live steer" }],
 				followUp: [],
 			});
-			expect(userTexts(await transcriptAfterNextPrompt())).toEqual(
-				expectedUserTurns,
-			);
+			expect(userTexts(await transcriptAfterNextPrompt())).toEqual(expectedUserTurns);
 		}, 30_000);
 
 		test("under protocol v1, a result over the frame limit drops images and still returns every text", async () => {
 			// RpcClient always negotiates v2, so speak raw v1 JSONL to the fixture.
 			const child = Bun.spawn(
-				[
-					process.execPath,
-					path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts"),
-				],
+				[process.execPath, path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts")],
 				{
 					cwd: directory,
 					env: {
@@ -519,10 +411,7 @@ describe("RPC queued-message editing", () => {
 				},
 			);
 			const frames = readJsonl<unknown>(child.stdout)[Symbol.asyncIterator]();
-			const next = (
-				match: (frame: Record<string, unknown>) => boolean,
-				message: string,
-			) =>
+			const next = (match: (frame: Record<string, unknown>) => boolean, message: string) =>
 				withTimeout(
 					(async () => {
 						for (;;) {
@@ -541,19 +430,13 @@ describe("RPC queued-message editing", () => {
 			const isResponse = (id: string) => (frame: Record<string, unknown>) =>
 				frame.type === "response" && frame.id === id;
 			try {
-				await next(
-					(frame) => frame.type === "ready",
-					"Fixture never became ready",
-				);
+				await next(frame => frame.type === "ready", "Fixture never became ready");
 				await send({
 					id: "start",
 					type: "prompt",
 					message: "start a long turn",
 				});
-				await next(
-					(frame) => frame.type === "agent_start",
-					"First turn never started streaming",
-				);
+				await next(frame => frame.type === "agent_start", "First turn never started streaming");
 				// Each steer fits one v1 frame; together they exceed it. Undecodable image bytes skip
 				// resizing, so the queued images keep their size.
 				const image = {
@@ -568,20 +451,13 @@ describe("RPC queued-message editing", () => {
 						message: `${id} steer`,
 						images: [image],
 					});
-					expect(
-						await next(isResponse(id), `Steer ${id} was never acknowledged`),
-					).toMatchObject({
+					expect(await next(isResponse(id), `Steer ${id} was never acknowledged`)).toMatchObject({
 						success: true,
 					});
 				}
 
 				await send({ id: "stop", type: "abort_and_restore_queue" });
-				expect(
-					await next(
-						isResponse("stop"),
-						"abort_and_restore_queue never responded",
-					),
-				).toEqual({
+				expect(await next(isResponse("stop"), "abort_and_restore_queue never responded")).toEqual({
 					id: "stop",
 					type: "response",
 					command: "abort_and_restore_queue",
@@ -604,9 +480,7 @@ describe("RPC queued-message editing", () => {
 				steering: [
 					{
 						...first,
-						images: [
-							{ type: "image" as const, mimeType: "image/png", data: "AAAA" },
-						],
+						images: [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }],
 					},
 				],
 				followUp: [{ text: "b".repeat(100) }, { text: "c" }],
@@ -625,9 +499,7 @@ describe("RPC queued-message editing", () => {
 			};
 			// Exactly the size of the expected response: the boundary must still admit `first`.
 			const maxBytes = Buffer.byteLength(JSON.stringify(expected));
-			expect(
-				fitAbortAndRestoreQueueResponse("stop", restored, maxBytes),
-			).toEqual(expected);
+			expect(fitAbortAndRestoreQueueResponse("stop", restored, maxBytes)).toEqual(expected);
 		});
 	});
 });

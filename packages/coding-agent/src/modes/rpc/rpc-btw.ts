@@ -17,11 +17,7 @@ import {
 	type BtwHistoryTurn,
 	getBtwLatestTurn,
 } from "../../session/btw-history";
-import {
-	beginBtwTurn,
-	patchLatestBtwTurn,
-	runBtwTurn,
-} from "../../session/btw-turn";
+import { beginBtwTurn, patchLatestBtwTurn, runBtwTurn } from "../../session/btw-turn";
 import type { RpcBtwDeltaFrame, RpcBtwRecordFrame } from "./rpc-types";
 
 type RpcBtwOutputFrame =
@@ -43,14 +39,10 @@ interface RunningBtw {
 	abort: AbortController;
 }
 
-const CANCELLED_WHILE_STARTING =
-	"The /btw question was cancelled before it started";
+const CANCELLED_WHILE_STARTING = "The /btw question was cancelled before it started";
 
 export class RpcBtwController {
-	readonly #session: Pick<
-		AgentSession,
-		"model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw"
-	>;
+	readonly #session: Pick<AgentSession, "model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw">;
 	readonly #output: (frame: RpcBtwOutputFrame) => void;
 	#store: BtwHistoryStore | undefined;
 	/** `sessionId \0 artifactsDir` the store was opened for. */
@@ -68,10 +60,7 @@ export class RpcBtwController {
 	readonly #unsaved = new Map<string, RunningBtw>();
 
 	constructor(
-		session: Pick<
-			AgentSession,
-			"model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw"
-		>,
+		session: Pick<AgentSession, "model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw">,
 		output: (frame: RpcBtwOutputFrame) => void,
 	) {
 		this.#session = session;
@@ -87,8 +76,7 @@ export class RpcBtwController {
 		sessionFile: string | undefined;
 	}> {
 		const completed = this.#completed;
-		if (!completed)
-			throw new Error("No completed /btw answer is available to branch.");
+		if (!completed) throw new Error("No completed /btw answer is available to branch.");
 		const result = await this.#session.branchFromBtw(
 			completed.question,
 			completed.assistantMessage,
@@ -116,29 +104,17 @@ export class RpcBtwController {
 			await this.#settleWrites();
 			const store = await this.#openStore(true);
 			if (epoch !== this.#epoch) throw new Error(CANCELLED_WHILE_STARTING);
-			const previous =
-				recordId === undefined
-					? undefined
-					: store.getRecords().find((r) => r.id === recordId);
-			if (recordId !== undefined && !previous)
-				throw new Error(`Unknown /btw topic: ${recordId}`);
-			if (!this.#session.model)
-				throw new Error("No active model available for /btw.");
+			const previous = recordId === undefined ? undefined : store.getRecords().find(r => r.id === recordId);
+			if (recordId !== undefined && !previous) throw new Error(`Unknown /btw topic: ${recordId}`);
+			if (!this.#session.model) throw new Error("No active model available for /btw.");
 			const manager = this.#session.sessionManager;
 			await manager.ensureOnDisk();
 			if (epoch !== this.#epoch) throw new Error(CANCELLED_WHILE_STARTING);
-			const { record, history, conversationKey } = beginBtwTurn(
-				trimmed,
-				manager.getLeafId(),
-				previous,
-			);
+			const { record, history, conversationKey } = beginBtwTurn(trimmed, manager.getLeafId(), previous);
 			try {
 				await store.upsert(record);
 			} catch (error) {
-				throw new Error(
-					`Could not save /btw history: ${toError(error).message}`,
-					{ cause: error },
-				);
+				throw new Error(`Could not save /btw history: ${toError(error).message}`, { cause: error });
 			}
 			const running: RunningBtw = {
 				record,
@@ -153,10 +129,7 @@ export class RpcBtwController {
 				throw new Error(CANCELLED_WHILE_STARTING);
 			}
 			// A macrotask: the `btw` response is written first, so it never trails this turn's frames.
-			setTimeout(
-				() => void this.#run(running, trimmed, history, conversationKey),
-				0,
-			);
+			setTimeout(() => void this.#run(running, trimmed, history, conversationKey), 0);
 			return record;
 		} finally {
 			this.#startingTopic = undefined;
@@ -167,41 +140,28 @@ export class RpcBtwController {
 	cancel(recordId?: string): boolean {
 		const running = this.#running;
 		if (running) {
-			if (recordId !== undefined && running.record.id !== recordId)
-				return false;
+			if (recordId !== undefined && running.record.id !== recordId) return false;
 			this.#epoch++;
 			this.#finish(running, { status: "cancelled", updatedAt: Date.now() });
 			running.abort.abort();
 			return true;
 		}
 		const starting = this.#startingTopic;
-		if (
-			starting === undefined ||
-			(recordId !== undefined && starting !== recordId)
-		)
-			return false;
+		if (starting === undefined || (recordId !== undefined && starting !== recordId)) return false;
 		this.#epoch++;
 		return true;
 	}
 
 	/** Newest first, re-read from disk when idle; a running topic carries its live partial answer. */
 	async history(): Promise<readonly BtwHistoryRecord[]> {
-		const store = await this.#openStore(
-			this.#running === undefined && this.#startingTopic === undefined,
-		);
+		const store = await this.#openStore(this.#running === undefined && this.#startingTopic === undefined);
 		const running = this.#running;
-		const records = new Map(
-			store.getRecords().map((record) => [record.id, record]),
-		);
+		const records = new Map(store.getRecords().map(record => [record.id, record]));
 		for (const unsaved of this.#unsaved.values()) {
-			if (unsaved.store === store)
-				records.set(unsaved.record.id, unsaved.record);
+			if (unsaved.store === store) records.set(unsaved.record.id, unsaved.record);
 		}
-		if (running?.store === store)
-			records.set(running.record.id, running.record);
-		return [...records.values()].sort(
-			(a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
-		);
+		if (running?.store === store) records.set(running.record.id, running.record);
+		return [...records.values()].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
 	}
 
 	/**
@@ -266,12 +226,7 @@ export class RpcBtwController {
 				if (!fresh || artifactsDir === undefined) return cached;
 			} catch {
 				// A failed checkpoint was already reported as a `notice`; re-read from disk below.
-				if (
-					[...this.#unsaved.values()].some(
-						(unsaved) => unsaved.store === cached,
-					)
-				)
-					return cached;
+				if ([...this.#unsaved.values()].some(unsaved => unsaved.store === cached)) return cached;
 			}
 		} else if (this.#running) {
 			// Replaced outside a host command (an extension switched sessions): the old
@@ -299,7 +254,7 @@ export class RpcBtwController {
 				history,
 				conversationKey,
 				signal: running.abort.signal,
-				onTextDelta: (delta) => {
+				onTextDelta: delta => {
 					if (this.#running !== running) return;
 					const latest = getBtwLatestTurn(running.record);
 					running.record = patchLatestBtwTurn(running.record, {
@@ -321,10 +276,7 @@ export class RpcBtwController {
 			const leafId = running.record.leafId;
 			const sessionId = this.#session.sessionManager?.getSessionId() ?? null;
 			// A null leaf (ephemeral start) can't be branched — branchFromBtw requires it.
-			this.#completed =
-				leafId && sessionId
-					? { question, assistantMessage, leafId, sessionId }
-					: undefined;
+			this.#completed = leafId && sessionId ? { question, assistantMessage, leafId, sessionId } : undefined;
 		} catch (error) {
 			this.#finish(running, {
 				status: "error",
@@ -344,7 +296,7 @@ export class RpcBtwController {
 			() => {
 				this.#unsaved.delete(running.record.id);
 			},
-			(error) => {
+			error => {
 				this.#unsaved.set(running.record.id, running);
 				const message = `Could not save /btw history: ${toError(error).message}`;
 				logger.error(message);

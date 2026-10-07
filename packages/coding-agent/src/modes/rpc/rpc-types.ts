@@ -11,20 +11,9 @@ export interface RpcSettingProvenance {
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type {
-	AgentMessage,
-	AgentToolResult,
-	ThinkingLevel,
-	ToolLoadMode,
-} from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type {
-	AssistantMessageEvent,
-	Effort,
-	ImageContent,
-	Model,
-	ToolExample,
-} from "@oh-my-pi/pi-ai";
+import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
@@ -43,10 +32,7 @@ import type {
 } from "../../extensibility/extensions/types";
 import type { GoalModeState } from "../../goals/state";
 import type { MemoryBackendId } from "../../memory-backend/types";
-import type {
-	AgentSessionEvent,
-	SessionStats,
-} from "../../session/agent-session";
+import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
 	AsyncJobSnapshotItem,
 	ContextUsageBreakdown,
@@ -55,18 +41,10 @@ import type {
 } from "../../session/agent-session-types";
 import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
-import type {
-	FileEntry,
-	SessionEntry,
-	SessionTreeNode,
-} from "../../session/session-entries";
+import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
-import type {
-	SubagentEventPayload,
-	SubagentLifecyclePayload,
-	SubagentProgressPayload,
-} from "../../task";
+import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { DebugParams } from "../../tools/debug";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { RpcMessagesPage } from "./rpc-messages";
@@ -536,14 +514,7 @@ export type RpcCommand =
 	| {
 			id?: string;
 			type: "marketplace_action";
-			action:
-				| "add"
-				| "remove"
-				| "update"
-				| "install"
-				| "uninstall"
-				| "upgrade"
-				| "list_available";
+			action: "add" | "remove" | "update" | "install" | "uninstall" | "upgrade" | "list_available";
 			marketplace?: string;
 			plugin?: string;
 			source?: string;
@@ -862,11 +833,7 @@ export interface RpcLiveEndFrame {
 	error?: string;
 }
 
-export type RpcLiveFrame =
-	| RpcLivePhaseFrame
-	| RpcLiveLevelsFrame
-	| RpcLiveTranscriptFrame
-	| RpcLiveEndFrame;
+export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
 
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
@@ -1146,11 +1113,7 @@ export interface RpcPlanModeState {
  * starting execution. The TUI's refine choice maps to
  * `plan_approval { approved: false, feedback }` instead of an option here.
  */
-export type RpcPlanApprovalOption =
-	| "execute"
-	| "compact"
-	| "keep_context"
-	| "save";
+export type RpcPlanApprovalOption = "execute" | "compact" | "keep_context" | "save";
 
 export interface RpcPlanApprovalResult {
 	approved: boolean;
@@ -1567,18 +1530,8 @@ export interface RpcMemoryReport {
 	diagnosis?: string;
 }
 
-export type RpcSecurityDispositionStatus =
-	| "open"
-	| "false_positive"
-	| "accepted_risk"
-	| "fixed"
-	| "wont_fix";
-export type RpcSecuritySeverityLevel =
-	| "critical"
-	| "high"
-	| "medium"
-	| "low"
-	| "informational";
+export type RpcSecurityDispositionStatus = "open" | "false_positive" | "accepted_risk" | "fixed" | "wont_fix";
+export type RpcSecuritySeverityLevel = "critical" | "high" | "medium" | "low" | "informational";
 
 export type RpcSecurityTargetInput =
 	| { kind: "repository" }
@@ -1608,24 +1561,13 @@ export interface RpcSecurityFindingInfo {
 
 export interface RpcSecurityScanInfo {
 	id: string;
-	status:
-		| "planned"
-		| "running"
-		| "completed"
-		| "partial"
-		| "cancelled"
-		| "failed";
+	status: "planned" | "running" | "completed" | "partial" | "cancelled" | "failed";
 	createdAt: string;
 	completedAt?: string;
 	producer: string;
 	findingCount: number;
 	target: {
-		kind:
-			| "repository"
-			| "scoped_path"
-			| "ref_diff"
-			| "working_tree"
-			| "imported";
+		kind: "repository" | "scoped_path" | "ref_diff" | "working_tree" | "imported";
 		displayName: string;
 		revision?: string;
 		baseRevision?: string;
@@ -1637,15 +1579,7 @@ export interface RpcSecurityOperationInfo {
 	operationId: string;
 	planId: string;
 	scanId: string;
-	phase:
-		| "queued"
-		| "preparing"
-		| "reviewing"
-		| "publishing"
-		| "completed"
-		| "partial"
-		| "cancelled"
-		| "failed";
+	phase: "queued" | "preparing" | "reviewing" | "publishing" | "completed" | "partial" | "cancelled" | "failed";
 	createdAt: string;
 	updatedAt: string;
 	findingCount: number;
@@ -3385,26 +3319,17 @@ export interface RpcSubagentEventFrame {
 	payload: SubagentEventPayload;
 }
 
-export type RpcSubagentFrame =
-	| RpcSubagentLifecycleFrame
-	| RpcSubagentProgressFrame
-	| RpcSubagentEventFrame;
+export type RpcSubagentFrame = RpcSubagentLifecycleFrame | RpcSubagentProgressFrame | RpcSubagentEventFrame;
 
 /** Message lifecycle event kinds that RPC mode stamps with a `messageId`. */
-export type RpcMessageEventType =
-	| "message_start"
-	| "message_update"
-	| "message_end";
+export type RpcMessageEventType = "message_start" | "message_update" | "message_end";
 
 /**
  * Message lifecycle frame as written by RPC mode. `messageId` is shared by the
  * `message_start`, every `message_update`, and the `message_end` of one message;
  * it is unique within the RPC process.
  */
-export type RpcMessageEventFrame = Extract<
-	AgentSessionEvent,
-	{ type: RpcMessageEventType }
-> & { messageId: string };
+export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
 
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
@@ -3423,9 +3348,7 @@ export type RpcAgentSessionEventFrame =
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame =
-	| RpcAgentSessionEventFrame
-	| RpcDeltaMessageUpdateFrame;
+export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame;
 
 export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame;
 
