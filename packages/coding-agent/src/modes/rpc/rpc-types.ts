@@ -11,10 +11,29 @@ export interface RpcSettingProvenance {
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentMessage,
+	AgentToolResult,
+	ThinkingLevel,
+	ToolLoadMode,
+} from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type {
+	AssistantMessageEvent,
+	Effort,
+	ImageContent,
+	Model,
+	ToolExample,
+} from "@oh-my-pi/pi-ai";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
+import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
+import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
+import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
+import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { GoalStatus } from "@oh-my-pi/pi-tui/tools/goal";
+import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { ProviderDiscoveryState } from "../../config/model-provider-discovery";
 import type { BashResult } from "../../exec/bash-executor";
 import type {
@@ -22,28 +41,35 @@ import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 } from "../../extensibility/extensions/types";
-import type { GoalStatus } from "@oh-my-pi/pi-tui/tools/goal";
+import type { GoalModeState } from "../../goals/state";
 import type { MemoryBackendId } from "../../memory-backend/types";
-import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
+import type {
+	AgentSessionEvent,
+	SessionStats,
+} from "../../session/agent-session";
 import type {
 	AsyncJobSnapshotItem,
 	ContextUsageBreakdown,
+	RestoredQueuedMessage,
 	RestoredQueuedMessageWithDelivery,
 } from "../../session/agent-session-types";
+import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
-import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
+import type {
+	FileEntry,
+	SessionEntry,
+	SessionTreeNode,
+} from "../../session/session-entries";
+import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
-import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type {
+	SubagentEventPayload,
+	SubagentLifecyclePayload,
+	SubagentProgressPayload,
+} from "../../task";
 import type { DebugParams } from "../../tools/debug";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
-import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
-import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
-import type { RpcMessagesPage } from "./rpc-messages";
-import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { RpcMessagesPage } from "./rpc-messages";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -80,13 +106,21 @@ export type RpcCommand =
 			message: string;
 			images?: ImageContent[];
 	  }
+	| { id?: string; type: "abort_and_restore_queue" }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "drop_session" }
-	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
+	| {
+			id?: string;
+			type: "open_session";
+			sessionDir: string;
+			provider?: string;
+			modelId?: string;
+	  }
 
 	// State
 	| { id?: string; type: "get_state" }
 	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
 			id?: string;
 			type: "goal";
@@ -204,7 +238,13 @@ export type RpcCommand =
 			pinned: boolean;
 	  }
 	| { id?: string; type: "export_html"; outputPath?: string }
-	| { id?: string; type: "switch_session"; sessionPath: string; provider?: string; modelId?: string }
+	| {
+			id?: string;
+			type: "switch_session";
+			sessionPath: string;
+			provider?: string;
+			modelId?: string;
+	  }
 	| { id?: string; type: "branch"; entryId: string }
 	| { id?: string; type: "fork"; entryId?: string }
 	| { id?: string; type: "get_branch_messages" }
@@ -232,7 +272,8 @@ export type RpcCommand =
 	// Login
 	| { id?: string; type: "get_login_providers" }
 	| { id?: string; type: "login"; providerId: string }
-	| { id?: string; type: "logout"; providerId: string }
+	| { id?: string; type: "get_logout_accounts"; providerId: string }
+	| { id?: string; type: "logout"; providerId: string; credentialId: number }
 
 	// Usage
 	| { id?: string; type: "get_usage" }
@@ -263,7 +304,6 @@ export type RpcCommand =
 	| { id?: string; type: "get_goal" }
 	| { id?: string; type: "guided_goal"; initial?: string }
 	| { id?: string; type: "set_agents_paused"; enabled: boolean }
-	| { id?: string; type: "btw"; question: string }
 	| { id?: string; type: "btw_branch" }
 	| { id?: string; type: "tan"; work: string }
 	| { id?: string; type: "omfg"; complaint: string }
@@ -496,7 +536,14 @@ export type RpcCommand =
 	| {
 			id?: string;
 			type: "marketplace_action";
-			action: "add" | "remove" | "update" | "install" | "uninstall" | "upgrade" | "list_available";
+			action:
+				| "add"
+				| "remove"
+				| "update"
+				| "install"
+				| "uninstall"
+				| "upgrade"
+				| "list_available";
 			marketplace?: string;
 			plugin?: string;
 			source?: string;
@@ -592,7 +639,12 @@ export type RpcCommand =
 			cursor: number;
 			suggestion: string;
 			accepted: boolean;
-	  };
+	  }
+
+	// Side questions (/btw); answers stream as `btw_delta` / `btw_record` frames
+	| { id?: string; type: "btw"; question: string; recordId?: string }
+	| { id?: string; type: "btw_cancel"; recordId?: string }
+	| { id?: string; type: "get_btw_history" };
 
 // ============================================================================
 // RPC State
@@ -619,6 +671,17 @@ export interface RpcSessionState {
 	autoRetryEnabled: boolean;
 	fastModeEnabled: boolean;
 	fastModeActive: boolean;
+	/** `/slow` applies to the active model (flex tier on OpenAI/Google, low priority on Claude subscriptions). */
+	slowModeSupported: boolean;
+	/** `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`. */
+	slowModeEnabled: boolean;
+	/**
+	 * Where the active model's `/slow` lives: `global` (persisted config shared by every
+	 * session, e.g. Claude low priority) or `session` (this session's flex tier). Absent when unsupported.
+	 */
+	slowModeScope?: "session" | "global";
+	/** Usage-limit stage of the active model's account; absent outside wrap-up and low priority. */
+	usageLimit?: UsageLimitState;
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
@@ -799,7 +862,11 @@ export interface RpcLiveEndFrame {
 	error?: string;
 }
 
-export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
+export type RpcLiveFrame =
+	| RpcLivePhaseFrame
+	| RpcLiveLevelsFrame
+	| RpcLiveTranscriptFrame
+	| RpcLiveEndFrame;
 
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
@@ -807,6 +874,25 @@ export interface RpcOpenSessionResult {
 	resumed: boolean;
 	sessionId: string;
 	sessionFile?: string;
+}
+
+/** `remove_queued_message` result. */
+export interface RpcRemoveQueuedMessageResult {
+	removed: boolean;
+	/** The removed message's images, so the client can restore them with its text. */
+	images?: ImageContent[];
+	/** Set when the images exceeded the transport limit and were omitted; the removal still happened. */
+	imagesDropped?: true;
+}
+
+/** `abort_and_restore_queue` result: the user-authored queued input withdrawn before the abort, oldest first. */
+export interface RpcAbortAndRestoreQueueResult {
+	steering: RestoredQueuedMessage[];
+	followUp: RestoredQueuedMessage[];
+	/** Set when the full result exceeded the transport limit and every entry's `images` was omitted. */
+	imagesDropped?: true;
+	/** Set when even the text-only result exceeded the limit: only an oldest-first prefix is listed. */
+	truncated?: true;
 }
 
 export interface RpcReadyFrame {
@@ -1060,7 +1146,11 @@ export interface RpcPlanModeState {
  * starting execution. The TUI's refine choice maps to
  * `plan_approval { approved: false, feedback }` instead of an option here.
  */
-export type RpcPlanApprovalOption = "execute" | "compact" | "keep_context" | "save";
+export type RpcPlanApprovalOption =
+	| "execute"
+	| "compact"
+	| "keep_context"
+	| "save";
 
 export interface RpcPlanApprovalResult {
 	approved: boolean;
@@ -1477,8 +1567,18 @@ export interface RpcMemoryReport {
 	diagnosis?: string;
 }
 
-export type RpcSecurityDispositionStatus = "open" | "false_positive" | "accepted_risk" | "fixed" | "wont_fix";
-export type RpcSecuritySeverityLevel = "critical" | "high" | "medium" | "low" | "informational";
+export type RpcSecurityDispositionStatus =
+	| "open"
+	| "false_positive"
+	| "accepted_risk"
+	| "fixed"
+	| "wont_fix";
+export type RpcSecuritySeverityLevel =
+	| "critical"
+	| "high"
+	| "medium"
+	| "low"
+	| "informational";
 
 export type RpcSecurityTargetInput =
 	| { kind: "repository" }
@@ -1508,13 +1608,24 @@ export interface RpcSecurityFindingInfo {
 
 export interface RpcSecurityScanInfo {
 	id: string;
-	status: "planned" | "running" | "completed" | "partial" | "cancelled" | "failed";
+	status:
+		| "planned"
+		| "running"
+		| "completed"
+		| "partial"
+		| "cancelled"
+		| "failed";
 	createdAt: string;
 	completedAt?: string;
 	producer: string;
 	findingCount: number;
 	target: {
-		kind: "repository" | "scoped_path" | "ref_diff" | "working_tree" | "imported";
+		kind:
+			| "repository"
+			| "scoped_path"
+			| "ref_diff"
+			| "working_tree"
+			| "imported";
 		displayName: string;
 		revision?: string;
 		baseRevision?: string;
@@ -1526,7 +1637,15 @@ export interface RpcSecurityOperationInfo {
 	operationId: string;
 	planId: string;
 	scanId: string;
-	phase: "queued" | "preparing" | "reviewing" | "publishing" | "completed" | "partial" | "cancelled" | "failed";
+	phase:
+		| "queued"
+		| "preparing"
+		| "reviewing"
+		| "publishing"
+		| "completed"
+		| "partial"
+		| "cancelled"
+		| "failed";
 	createdAt: string;
 	updatedAt: string;
 	findingCount: number;
@@ -1928,7 +2047,7 @@ export type RpcResponse =
 			type: "response";
 			command: "remove_queued_message";
 			success: true;
-			data: { removed: boolean };
+			data: RpcRemoveQueuedMessageResult;
 	  }
 	| {
 			id?: string;
@@ -1943,6 +2062,13 @@ export type RpcResponse =
 			type: "response";
 			command: "abort_and_prompt";
 			success: true;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "abort_and_restore_queue";
+			success: true;
+			data: RpcAbortAndRestoreQueueResult;
 	  }
 	| {
 			id?: string;
@@ -1980,6 +2106,13 @@ export type RpcResponse =
 			command: "set_fast_mode";
 			success: true;
 			data: { enabled: boolean; active: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_slow_mode";
+			success: true;
+			data: { enabled: boolean };
 	  }
 	| {
 			id?: string;
@@ -2368,13 +2501,6 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
-			command: "btw";
-			success: true;
-			data: { question: string; replyText: string; canBranch: boolean };
-	  }
-	| {
-			id?: string;
-			type: "response";
 			command: "btw_branch";
 			success: true;
 			data: { cancelled: boolean; sessionFile?: string };
@@ -2415,9 +2541,21 @@ export type RpcResponse =
 			data: RpcHandoffResult | null;
 	  }
 	// Live voice
-	| { id?: string; type: "response"; command: "live_start"; success: true; data: { voice: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_start";
+			success: true;
+			data: { voice: string };
+	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
-	| { id?: string; type: "response"; command: "live_mute"; success: true; data: { muted: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_mute";
+			success: true;
+			data: { muted: boolean };
+	  }
 
 	// Messages
 	| {
@@ -3141,6 +3279,27 @@ export type RpcResponse =
 			success: true;
 			data: { path: string; branch: string };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "login";
+			success: true;
+			data: { providerId: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_logout_accounts";
+			success: true;
+			data: { accounts: LogoutAccount[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "logout";
+			success: true;
+			data: { remainingSource?: string };
+	  }
 
 	// Word prediction
 	| {
@@ -3157,6 +3316,29 @@ export type RpcResponse =
 			success: true;
 	  }
 
+	// Side questions (/btw)
+	| {
+			id?: string;
+			type: "response";
+			command: "btw";
+			success: true;
+			data: { record: BtwHistoryRecord };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "btw_cancel";
+			success: true;
+			data: { cancelled: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_btw_history";
+			success: true;
+			data: { records: readonly BtwHistoryRecord[] };
+	  }
+
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| {
 			id?: string;
@@ -3166,6 +3348,23 @@ export type RpcResponse =
 			error: string;
 			code?: string;
 	  };
+
+// ============================================================================
+// Side question (/btw) frames (stdout)
+// ============================================================================
+
+/** Text appended to the running side question's latest answer. */
+export interface RpcBtwDeltaFrame {
+	type: "btw_delta";
+	recordId: string;
+	delta: string;
+}
+
+/** Full record snapshot on every lifecycle change: started, complete, cancelled, error. */
+export interface RpcBtwRecordFrame {
+	type: "btw_record";
+	record: BtwHistoryRecord;
+}
 
 // ============================================================================
 // Subagent Events (stdout)
@@ -3186,17 +3385,26 @@ export interface RpcSubagentEventFrame {
 	payload: SubagentEventPayload;
 }
 
-export type RpcSubagentFrame = RpcSubagentLifecycleFrame | RpcSubagentProgressFrame | RpcSubagentEventFrame;
+export type RpcSubagentFrame =
+	| RpcSubagentLifecycleFrame
+	| RpcSubagentProgressFrame
+	| RpcSubagentEventFrame;
 
 /** Message lifecycle event kinds that RPC mode stamps with a `messageId`. */
-export type RpcMessageEventType = "message_start" | "message_update" | "message_end";
+export type RpcMessageEventType =
+	| "message_start"
+	| "message_update"
+	| "message_end";
 
 /**
  * Message lifecycle frame as written by RPC mode. `messageId` is shared by the
  * `message_start`, every `message_update`, and the `message_end` of one message;
  * it is unique within the RPC process.
  */
-export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
+export type RpcMessageEventFrame = Extract<
+	AgentSessionEvent,
+	{ type: RpcMessageEventType }
+> & { messageId: string };
 
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
@@ -3215,7 +3423,9 @@ export type RpcAgentSessionEventFrame =
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
-export type RpcProjectedSessionEventFrame = RpcAgentSessionEventFrame | RpcDeltaMessageUpdateFrame;
+export type RpcProjectedSessionEventFrame =
+	| RpcAgentSessionEventFrame
+	| RpcDeltaMessageUpdateFrame;
 
 export type RpcSessionEventFrame = RpcAgentSessionEventFrame | RpcSubagentFrame;
 
