@@ -32,7 +32,6 @@ import { orderedSettings } from "../../config/all-settings";
 import { resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
-import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,

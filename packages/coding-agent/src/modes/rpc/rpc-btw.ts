@@ -10,6 +10,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, toError } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
+import { assistantMessageWithReplyText } from "../controllers/btw-controller";
 import {
 	BtwHistoryConflictError,
 	type BtwHistoryRecord,
@@ -268,6 +269,9 @@ export class RpcBtwController {
 					});
 				},
 			});
+			// Cancelled (or superseded) while the reply resolved: the turn is not
+			// complete, so it must not become branchable.
+			if (this.#running !== running) return;
 			this.#finish(running, {
 				answer: replyText,
 				status: "complete",
@@ -276,7 +280,16 @@ export class RpcBtwController {
 			const leafId = running.record.leafId;
 			const sessionId = this.#session.sessionManager?.getSessionId() ?? null;
 			// A null leaf (ephemeral start) can't be branched — branchFromBtw requires it.
-			this.#completed = leafId && sessionId ? { question, assistantMessage, leafId, sessionId } : undefined;
+			// Branch the visible answer (TUI parity), not raw provider parts.
+			this.#completed =
+				leafId && sessionId
+					? {
+							question,
+							assistantMessage: assistantMessageWithReplyText(assistantMessage, replyText),
+							leafId,
+							sessionId,
+						}
+					: undefined;
 		} catch (error) {
 			this.#finish(running, {
 				status: "error",

@@ -33,7 +33,7 @@ interface BtwRequest {
 	conversationKey: string;
 }
 
-function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
+export function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
 	const content: AssistantMessage["content"] = [];
 	let replacedText = false;
 	for (const part of assistantMessage.content) {
