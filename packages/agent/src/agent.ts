@@ -552,6 +552,11 @@ export class Agent {
 	 * are queued for the next boundary.
 	 */
 	hasBackgroundCompletions?: AgentLoopConfig["hasBackgroundCompletions"];
+	/**
+	 * Hook that peeks whether a passive aside is queued for the next boundary;
+	 * ends an interruptible wait without interrupting other tools.
+	 */
+	hasQueuedAsides?: AgentLoopConfig["hasQueuedAsides"];
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -1177,7 +1182,8 @@ export class Agent {
 	/**
 	 * Provide a source of non-interrupting "aside" messages (e.g. background-job
 	 * completions, late LSP diagnostics) drained at each step boundary. Never
-	 * aborts in-flight tools. See `AgentLoopConfig.getAsideMessages`.
+	 * aborts foreground tools; an interruptible `wait` may end early through the
+	 * peek hooks. See `AgentLoopConfig.getAsideMessages`.
 	 */
 	setAsideMessageProvider(fn: (() => AsideMessage[] | Promise<AsideMessage[]>) | undefined): void {
 		this.#asideMessageProvider = fn;
@@ -2021,6 +2027,7 @@ export class Agent {
 			onLiveSteeringTaken: messages => this.#adoptLiveSteering(messages),
 			hasIrcInterrupts: this.hasIrcInterrupts,
 			hasBackgroundCompletions: this.hasBackgroundCompletions,
+			hasQueuedAsides: this.hasQueuedAsides,
 			getFollowUpMessages: signal => this.#dequeueFollowUpMessagesAfterHooks(signal ?? loopSignal),
 			getAsideMessages: async () => (await this.#asideMessageProvider?.()) ?? [],
 			onBeforeYield: () => this.#onBeforeYield?.(),
