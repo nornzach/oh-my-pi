@@ -148,7 +148,7 @@ describe("RPC queued-message editing", () => {
 				steering: [],
 				followUp: ["second"],
 			});
-			expect((await client.getState()).queuedMessages).toEqual(queueTexts(updates.at(-1)!));
+			expect((await client.getState()).queuedMessages).toEqual({ ...queueTexts(updates.at(-1)!), liveSteered: 0 });
 
 			// Snapshot-string-removal invariant: every chip string in a snapshot,
 			// passed back verbatim to remove_queued_message with its queue, removes
@@ -165,10 +165,7 @@ describe("RPC queued-message editing", () => {
 				});
 			}
 			expect(updates.at(-1)).toEqual({ steering: [], followUp: [] });
-			expect((await client.getState()).queuedMessages).toEqual({
-				steering: [],
-				followUp: [],
-			});
+			expect((await client.getState()).queuedMessages).toEqual({ steering: [], followUp: [], liveSteered: 0 });
 
 			// Requeue and let delivery (the next turn dequeuing it) drain the queue.
 			await client.followUp("delivered");
@@ -188,10 +185,7 @@ describe("RPC queued-message editing", () => {
 				unsubscribeIdle();
 			}
 			expect(updates.at(-1)).toEqual({ steering: [], followUp: [] });
-			expect((await client.getState()).queuedMessages).toEqual({
-				steering: [],
-				followUp: [],
-			});
+			expect((await client.getState()).queuedMessages).toEqual({ steering: [], followUp: [], liveSteered: 0 });
 
 			// No duplicate identical consecutive events: every emitted snapshot
 			// differs from the one immediately before it.

@@ -12,8 +12,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SessionQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type StreamFn } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -26,6 +27,7 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 interface QueueSnapshot {
 	steering: readonly string[];
 	followUp: readonly string[];
+	liveSteered: number;
 }
 
 interface QueueUpdateSnapshot {
@@ -33,7 +35,8 @@ interface QueueUpdateSnapshot {
 	followUp: readonly SessionQueuedMessage[];
 }
 
-function queueTexts(snapshot: QueueUpdateSnapshot): QueueSnapshot {
+/** `queue_update` lists only id-addressable (removable) entries, so it carries no `liveSteered` count. */
+function queueTexts(snapshot: QueueUpdateSnapshot): Omit<QueueSnapshot, "liveSteered"> {
 	return {
 		steering: snapshot.steering.map(message => message.text),
 		followUp: snapshot.followUp.map(message => message.text),
@@ -60,14 +63,17 @@ describe("AgentSession queue_update events", () => {
 		removeSyncWithRetries(tempDir);
 	});
 
-	function createSession(responses: MockResponse[], followUpMode: "all" | "one-at-a-time" = "one-at-a-time") {
+	function createSession(
+		responses: MockResponse[],
+		followUpMode: "all" | "one-at-a-time" = "one-at-a-time",
+		streamFn: StreamFn = createMockModel({ responses }).stream,
+	) {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({ responses });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			convertToLlm,
-			streamFn: mock.stream,
+			streamFn,
 			followUpMode,
 		});
 		session = new AgentSession({
@@ -83,7 +89,10 @@ describe("AgentSession queue_update events", () => {
 		const updates: QueueUpdateSnapshot[] = [];
 		target.subscribe(event => {
 			if (event.type === "queue_update")
-				updates.push({ steering: [...event.steering], followUp: [...event.followUp] });
+				updates.push({
+					steering: [...event.steering],
+					followUp: [...event.followUp],
+				});
 		});
 		return updates;
 	}
@@ -119,7 +128,7 @@ describe("AgentSession queue_update events", () => {
 		expect(updates.every(update => update.steering.length === 0)).toBe(true);
 
 		// get_state's RPC-facing text snapshot matches the last emitted event.
-		expect(target.getQueuedMessages()).toEqual(queueTexts(updates.at(-1)!));
+		expect(target.getQueuedMessages()).toEqual({ ...queueTexts(updates.at(-1)!), liveSteered: 0 });
 		// No duplicate identical consecutive events.
 		for (let i = 1; i < updates.length; i++) {
 			expect(updates[i]).not.toEqual(updates[i - 1]);
@@ -160,8 +169,110 @@ describe("AgentSession queue_update events", () => {
 
 		await target.prompt("hello");
 
-		expect(snapshot).toEqual({ steering: ["steer one"], followUp: ["follow one", "follow two"] });
+		expect(snapshot).toEqual({ steering: ["steer one"], followUp: ["follow one", "follow two"], liveSteered: 0 });
 		expect(removed).toEqual([true, true, true]);
-		expect(remaining).toEqual({ steering: [], followUp: [] });
+		expect(remaining).toEqual({ steering: [], followUp: [], liveSteered: 0 });
+	});
+
+	it("keeps the queue snapshot truthful while a steer is claimed live", async () => {
+		// The provider stream stays open and claims the steer through live
+		// steering, like OpenAI Responses `response.steer` does. Moving the
+		// message into the live-steered set changes the snapshot (it still
+		// counts as pending input until it lands in the transcript or an
+		// interrupt takes it back), so a queue_update must fire at the claim
+		// and again when the interrupt path withdraws it — without those,
+		// clients show an empty queue while the user's input is in flight,
+		// then a stale entry after it is reclaimed.
+		const streaming = Promise.withResolvers<void>();
+		const claimed = Promise.withResolvers<void>();
+		const target = createSession([], "one-at-a-time", async (_model, _context, options) => {
+			const live = options?.liveSteering;
+			const signal = options?.signal;
+			if (!live || !signal) throw new Error("live steering was not offered");
+			const stream = new AssistantMessageEventStream();
+			signal.addEventListener("abort", () => stream.fail(new Error("aborted")), { once: true });
+			streaming.resolve();
+			await live.wait(signal);
+			if (!(await live.claim(signal))) throw new Error("steer was not claimed");
+			claimed.resolve();
+			return stream;
+		});
+		const updates = collectQueueUpdates(target);
+		const running = target.prompt("start");
+		await streaming.promise;
+		await target.steer("use tabs");
+		await claimed.promise;
+
+		const afterClaim = { steering: ["use tabs"], followUp: [], liveSteered: 1 };
+		expect(target.getQueuedMessages()).toEqual(afterClaim);
+		// The claimed steer can no longer be removed by id, so the structured
+		// queue_update drops it at the claim.
+		expect(queueTexts(updates.at(-1)!)).toEqual({ steering: [], followUp: [] });
+
+		// The interrupt path (Esc) is what takes a live-steered message back.
+		expect(target.clearQueue({ forInterrupt: true }).steering.map(message => message.text)).toEqual(["use tabs"]);
+		expect(queueTexts(updates.at(-1)!)).toEqual({ steering: [], followUp: [] });
+		expect(target.getQueuedMessages()).toEqual({ steering: [], followUp: [], liveSteered: 0 });
+		await target.abort();
+		await running;
+	});
+
+	it("emits the queue change when a live-steered message lands in the transcript", async () => {
+		// The other half of the claim lifecycle: without an interrupt, the
+		// finished turn records the steered message, so it stops counting as
+		// pending input and queue listeners must hear that arrival too.
+		const streaming = Promise.withResolvers<void>();
+		const claimed = Promise.withResolvers<void>();
+		const followUpStream = createMockModel({ responses: [{ content: ["answered"] }] }).stream;
+		let calls = 0;
+		const target = createSession([{ content: ["answered"] }], "all", async (model, context, options) => {
+			// Later turns deliver the claimed steer as ordinary input.
+			if (calls++ > 0) return followUpStream(model, context, options);
+			const live = options?.liveSteering;
+			const signal = options?.signal;
+			if (!live || !signal) throw new Error("live steering was not offered");
+			const stream = new AssistantMessageEventStream();
+			streaming.resolve();
+			await live.wait(signal);
+			if (!(await live.claim(signal))) throw new Error("steer was not claimed");
+			claimed.resolve();
+			const partial = {
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "ok" }],
+				timestamp: Date.now(),
+				provider: "mock",
+				model: "mock",
+				api: "anthropic-messages",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop" as const,
+			};
+			stream.push({ type: "start", partial });
+			stream.push({ type: "done", reason: "stop", message: partial });
+			return stream;
+		});
+		const updates = collectQueueUpdates(target);
+		const running = target.prompt("start");
+		await streaming.promise;
+		await target.steer("use tabs");
+		await claimed.promise;
+		expect(target.getQueuedMessages()).toEqual({ steering: ["use tabs"], followUp: [], liveSteered: 1 });
+
+		await running;
+
+		// The transcript-arrival transition must be announced: the recorded
+		// steer leaves the live-steered set (liveSteered back to 0) while the
+		// visible queue is momentarily empty. This synthetic provider never
+		// integrates the steer into its response, so the agent afterwards
+		// restores it to the steering queue for a later turn — the arrival
+		// notification itself is this test's contract, not that restore.
+		expect(updates.map(queueTexts)).toContainEqual({ steering: [], followUp: [] });
+		expect(target.getQueuedMessages().liveSteered).toBe(0);
 	});
 });

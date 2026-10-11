@@ -1706,6 +1706,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 * Extension UI context that uses the RPC protocol.
 	 */
 	class RpcExtensionUIContext implements ExtensionUIContext {
+		readonly supportsEditor = true;
 		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
 		askDialogEnabled = false;
 
@@ -2544,6 +2545,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					queuedMessages: {
 						steering: [...queuedMessages.steering],
 						followUp: [...queuedMessages.followUp],
+						liveSteered: queuedMessages.liveSteered,
 					},
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),

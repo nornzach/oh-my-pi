@@ -23,6 +23,7 @@ import {
 	MCP_SERVER_NAME_SUBCOMMANDS,
 } from "../../slash-commands/builtin-completions";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../../slash-commands/builtin-registry";
+import type { SubcommandDef } from "../../slash-commands/types";
 
 export interface RpcArgCompletionItem {
 	value: string;
@@ -53,6 +54,24 @@ async function collectRpcMcpServerNames(
 	return [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
+/** Remote composers show `hint` as a dropdown column, so it carries the
+ *  subcommand's usage rather than the TUI's inline ghost-text remainder the
+ *  shared builder produces. */
+function buildRpcSubcommandCompletions(subcommands: SubcommandDef[], prefix: string): RpcArgCompletionItem[] | null {
+	const items = buildArgumentCompletions(subcommands)(prefix);
+	return (
+		items?.map(item => {
+			const usage = subcommands.find(sub => sub.name === item.label)?.usage;
+			return {
+				value: item.value,
+				label: item.label,
+				description: item.description,
+				...(usage ? { hint: usage } : {}),
+			};
+		}) ?? null
+	);
+}
+
 export async function buildRpcCommandArgCompletions(
 	cwd: string,
 	commandName: string,
@@ -69,7 +88,7 @@ export async function buildRpcCommandArgCompletions(
 		// (buildMcpArgumentCompletions parity).
 		if (spec.name === "mcp") {
 			const spaceIndex = prefix.indexOf(" ");
-			if (spaceIndex === -1) return buildArgumentCompletions(spec.subcommands)(prefix);
+			if (spaceIndex === -1) return buildRpcSubcommandCompletions(spec.subcommands, prefix);
 			const rawSubcommand = prefix.slice(0, spaceIndex);
 			const lowerSubcommand = rawSubcommand.toLowerCase();
 			if (MCP_SERVER_NAME_SUBCOMMANDS[lowerSubcommand] !== true) return null;
@@ -94,7 +113,7 @@ export async function buildRpcCommandArgCompletions(
 				.map(name => ({ value: `${rawSubcommand} ${name} `, label: name }));
 			return matches.length > 0 ? matches : null;
 		}
-		return buildArgumentCompletions(spec.subcommands)(prefix);
+		return buildRpcSubcommandCompletions(spec.subcommands, prefix);
 	}
 
 	if (spec.name === "move") {

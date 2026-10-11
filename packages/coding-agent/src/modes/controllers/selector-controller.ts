@@ -15,6 +15,7 @@ import {
 	getAgentDbPath,
 	getAgentDir,
 	getProjectDir,
+	logger,
 	normalizePathForComparison,
 	sanitizeText,
 } from "@oh-my-pi/pi-utils";
@@ -63,7 +64,7 @@ import {
 	persistForeignSession,
 } from "../../session/foreign-session-import";
 import type { ForeignSessionInfo, ForeignSessionSource } from "../../session/foreign-session-store";
-import { setModelCompactionPoint } from "../../session/model-compaction-threshold";
+import { previewModelCompactionPoint, setModelCompactionPoint } from "../../session/model-compaction-threshold";
 import { isTranscriptEntry, type TranscriptEntry } from "../../session/session-context";
 import { isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
@@ -186,7 +187,7 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub";
+type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub" | "usage-dashboard";
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
@@ -429,6 +430,9 @@ export class SelectorController {
 	 * classic full report one keypress away. Takes no transcript space.
 	 */
 	showUsageDashboard(reports: UsageReport[]): void {
+		// Checked here, not before the fetch: a repeat `/usage` whose fetch lands
+		// while the first dashboard is open focuses it instead of stacking a copy.
+		if (this.#focusOpenMenu("usage-dashboard")) return;
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
 		const accounts = selectReportableAccounts(
 			collectStoredAccounts(authStorage),
@@ -448,7 +452,8 @@ export class SelectorController {
 			: undefined;
 		const usageModelSelectors = this.ctx.session.getUsageReportingModelSelectors(reports);
 		const done = () => {
-			overlayHandle?.hide();
+			menu.handle?.hide();
+			this.#releaseMenu("usage-dashboard", menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
@@ -470,7 +475,8 @@ export class SelectorController {
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
 		});
-		const overlayHandle = this.#showFullscreenMenu(dashboard);
+		const menu = this.#claimMenu("usage-dashboard");
+		this.#mountMenu(menu, dashboard, () => this.#showFullscreenMenu(dashboard));
 	}
 
 	showAdvisorConfigure(): void {
@@ -1092,21 +1098,41 @@ export class SelectorController {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
-				onCompactionPointChange: (model, input) => {
+				onCompactionPointChange: (model, input, confirmed) => {
 					try {
-						const entry = setModelCompactionPoint(this.ctx.settings, model, input);
-						const selector = `${model.provider}/${model.id}`;
+						const update = setModelCompactionPoint(this.ctx.settings, model, input, {
+							tiers: this.ctx.session.modelRegistry.contextWindowTiers(model),
+							confirmed,
+						});
+						if (update.kind === "confirm") return update;
+						const { described, summary } = update;
 						this.ctx.showStatus(
-							entry === undefined
-								? `Compaction point for ${selector} reset`
-								: `Compaction point for ${selector}: ${typeof entry === "number" ? `${entry.toLocaleString("en-US")} tokens` : entry}`,
+							`Compaction limit for ${model.provider}/${model.id}: ${described}${summary ? ` · ${summary}` : ""}`,
 						);
 						this.ctx.statusLine.invalidate();
+						// The entry can move the model between window tiers; the open hub's
+						// rows are a pre-rebuild snapshot until the catalog rebuild settles.
+						// The settings listener's own reapply coalesces onto this one.
+						void this.ctx.session.modelRegistry
+							.reapplyModelPolicies()
+							.then(() => {
+								if (!closed) hub.refreshAfterExternalMutation();
+							})
+							.catch(error =>
+								logger.warn("model hub refresh after compaction point failed", { error: String(error) }),
+							);
 						return undefined;
 					} catch (error) {
-						return error instanceof Error ? error.message : String(error);
+						return { kind: "error", message: error instanceof Error ? error.message : String(error) };
 					}
 				},
+				previewCompactionPoint: (model, input) =>
+					previewModelCompactionPoint(
+						this.ctx.settings,
+						model,
+						input,
+						this.ctx.session.modelRegistry.contextWindowTiers(model),
+					),
 				onSavePreset: name => {
 					try {
 						saveModelPreset(this.ctx.settings, name);

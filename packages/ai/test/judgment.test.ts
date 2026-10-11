@@ -110,7 +110,7 @@ describe("TextJudge", () => {
 				"<count>2</count>\n" +
 				"<active>true</active>\n" +
 				"<missing>null</missing>\n" +
-				"<config>\nretries: 3\nlabels: \n  - fast\n  - safe\n</config>\n" +
+				"<config>\nretries: 3\nlabels:\n  - fast\n  - safe\n</config>\n" +
 				'<field name="bad key">\nenabled: false\n</field>',
 		);
 		expect(renderJudgmentState(["a", { nested: "<value>" }])).toBe(
@@ -357,5 +357,116 @@ describe("TypeSafeJudge", () => {
 				Response.json({ model: "jev-latest", answers: { urgent: { type: "choice", choice: "x" } }, usage: {} }),
 		});
 		await expect(mismatched.judge(request)).rejects.toThrow(/missing a "noul" answer/);
+	});
+
+	it("splits a request above maxQuestions into chunks, merging answers and usage", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		const sizes: number[] = [];
+		const judgeWith = (maxQuestions: number | undefined) =>
+			new TypeSafeJudge({
+				apiKey: "k",
+				maxQuestions,
+				fetch: async (_url, init) => {
+					const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+					sizes.push(ids.length);
+					// OpenJEV's validation: oversized maps are rejected before any judging.
+					if (ids.length > 8) {
+						return new Response(
+							`{"detail":[{"msg":"Dictionary should have at most 8 items after validation, not ${ids.length}"}]}`,
+							{ status: 422 },
+						);
+					}
+					return Response.json({
+						model: "openjev-4b",
+						answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+						usage: { input_tokens: 10, output_tokens: 1 },
+					});
+				},
+			});
+
+		const result = await judgeWith(8).judge({ state: "s", questions });
+		expect(sizes).toEqual([8, 8, 4]);
+		expect(Object.keys(result.answers).sort()).toEqual(Object.keys(questions).sort());
+		expect(result.usage).toMatchObject({ input: 30, output: 3, totalTokens: 33 });
+
+		// Without a declared cap the request goes out whole.
+		sizes.length = 0;
+		await expect(judgeWith(undefined).judge({ state: "s", questions })).rejects.toBeInstanceOf(TypeSafeApiError);
+		expect(sizes).toEqual([20]);
+	});
+
+	it("aborts in-flight sibling chunks when one chunk fails", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 20 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		let aborted = 0;
+		const judge = new TypeSafeJudge({
+			apiKey: "k",
+			maxQuestions: 8,
+			fetch: async (_url, init) => {
+				if ("q0" in JSON.parse(String(init?.body)).questions) return new Response("bad", { status: 400 });
+				const { promise, reject } = Promise.withResolvers<Response>();
+				init?.signal?.addEventListener("abort", () => {
+					aborted++;
+					reject(init.signal?.reason);
+				});
+				return promise;
+			},
+		});
+
+		await expect(judge.judge({ state: "s", questions })).rejects.toBeInstanceOf(TypeSafeApiError);
+		expect(aborted).toBe(2);
+	});
+
+	it("keeps at most four chunks of one split judgment in flight", async () => {
+		const questions = Object.fromEntries(
+			Array.from({ length: 10 }, (_, i) => [`q${i}`, { type: "noul", instructions: `Question ${i}?` }] as const),
+		);
+		// In flight = dispatched minus responses the judge has read. Fetches are held
+		// and released four at a time (or all once every chunk has arrived), so an
+		// unbounded dispatch would land a fifth fetch before any response is read.
+		let arrived = 0;
+		let consumed = 0;
+		let peak = 0;
+		const held: (() => void)[] = [];
+		const judge = new TypeSafeJudge({
+			apiKey: "k",
+			maxQuestions: 1,
+			fetch: async (_url, init) => {
+				arrived++;
+				peak = Math.max(peak, arrived - consumed);
+				const { promise, resolve } = Promise.withResolvers<void>();
+				held.push(resolve);
+				if (held.length === 4 || arrived === 10) for (const release of held.splice(0)) release();
+				await promise;
+				const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+				const response = Response.json({
+					model: "openjev-4b",
+					answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+					usage: { input_tokens: 1, output_tokens: 1 },
+				});
+				const read = response.json.bind(response);
+				Object.defineProperty(response, "json", {
+					value: () => {
+						consumed++;
+						return read();
+					},
+				});
+				return response;
+			},
+		});
+
+		const result = await judge.judge({ state: "s", questions });
+		expect(Object.keys(result.answers)).toHaveLength(10);
+		expect(peak).toBe(4);
+	});
+
+	it("rejects a non-positive or fractional maxQuestions", () => {
+		// One row per guard: integer but not positive, then not an integer.
+		for (const maxQuestions of [0, 1.5]) {
+			expect(() => new TypeSafeJudge({ apiKey: "k", maxQuestions })).toThrow(RangeError);
+		}
 	});
 });

@@ -962,7 +962,7 @@ export async function discoverOpenAIModelsList(
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
 	const references = getBundledModelReferenceIndex();
-	const discovered: Model<Api>[] = [];
+	const specs: ModelSpec<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
@@ -1009,25 +1009,23 @@ export async function discoverOpenAIModelsList(
 		// cannot serve (issue #13021).
 		const task = extractOpenAIModelsListOutputTask(item);
 		if (task) {
-			discovered.push(
-				buildModel({
-					id,
-					name: reference?.name ?? id,
-					api: task.api,
-					kind: task.kind,
-					provider: providerConfig.provider,
-					baseUrl,
-					reasoning: false,
-					input,
-					supportsTools: false,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					// Embeddings cap their input by context; image jobs carry no
-					// token window. Neither produces output tokens.
-					contextWindow: task.kind === "embedding" ? reportedContextWindow : null,
-					maxTokens: null,
-					headers,
-				} as ModelSpec<Api>),
-			);
+			specs.push({
+				id,
+				name: reference?.name ?? id,
+				api: task.api,
+				kind: task.kind,
+				provider: providerConfig.provider,
+				baseUrl,
+				reasoning: false,
+				input,
+				supportsTools: false,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				// Embeddings cap their input by context; image jobs carry no
+				// token window. Neither produces output tokens.
+				contextWindow: task.kind === "embedding" ? reportedContextWindow : null,
+				maxTokens: null,
+				headers,
+			} as ModelSpec<Api>);
 			continue;
 		}
 		const api =
@@ -1042,45 +1040,44 @@ export async function discoverOpenAIModelsList(
 		const displayName =
 			typeof item.display_name === "string" && item.display_name.trim() ? item.display_name : undefined;
 		const advertisedMaxTokens = toPositiveNumberOrUndefined(item.max_tokens);
-		discovered.push(
-			buildModel({
-				id,
-				name: displayName ?? reference?.name ?? id,
-				api,
-				provider: providerConfig.provider,
-				baseUrl,
-				reasoning: supportsThinking || reference?.reasoning === true,
-				thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
-				input,
-				...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
-				// Proxy/gateway pricing is provider-specific and rarely matches
-				// upstream bundled catalogs, so keep costs local-unknown even
-				// when we successfully recover the upstream model identity.
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		specs.push({
+			id,
+			name: displayName ?? reference?.name ?? id,
+			api,
+			provider: providerConfig.provider,
+			baseUrl,
+			reasoning: supportsThinking || reference?.reasoning === true,
+			thinking: inheritReferenceThinking(undefined, reference, providerConfig.provider),
+			input,
+			...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
+			// Proxy/gateway pricing is provider-specific and rarely matches
+			// upstream bundled catalogs, so keep costs local-unknown even
+			// when we successfully recover the upstream model identity.
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow,
+			// Cap a provider-advertised output limit or the reference's output limit at
+			// the discovered context window so a larger limit can never request more
+			// tokens than the local runtime advertises.
+			maxTokens: Math.min(
+				reportedMaxTokens ?? advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
 				contextWindow,
-				// Cap a provider-advertised output limit or the reference's output limit at
-				// the discovered context window so a larger limit can never request more
-				// tokens than the local runtime advertises.
-				maxTokens: Math.min(
-					reportedMaxTokens ?? advertisedMaxTokens ?? reference?.maxTokens ?? discoveryDefaultMaxTokens(api),
-					contextWindow,
-				),
-				headers,
-				compat: {
-					supportsStore: false,
-					supportsDeveloperRole: false,
-					supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
-					...(referenceCompat?.reasoningEffortMap
-						? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
-						: {}),
-					...(referenceCompat?.omitReasoningEffort !== undefined
-						? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
-						: {}),
-				},
-			} as ModelSpec<Api>),
-		);
+			),
+			headers,
+			compat: {
+				supportsStore: false,
+				supportsDeveloperRole: false,
+				supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+				...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
+				...(referenceCompat?.omitReasoningEffort !== undefined
+					? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+					: {}),
+			},
+		} as ModelSpec<Api>);
 	}
-	return discovered;
+	// `discovery.type: "litellm"` keeps LiteLLM provider policy under any alias.
+	return providerConfig.discovery.type === "litellm"
+		? specs.map(spec => buildDiscoveredModel(spec, "litellm"))
+		: specs.map(spec => buildModel(spec));
 }
 
 export async function discoverLiteLLMModels(
@@ -1137,7 +1134,7 @@ export async function discoverLiteLLMModels(
 	if (richModels === null) {
 		return discoverOpenAIModelsList({ ...providerConfig, baseUrl }, ctx);
 	}
-	return richModels.map(spec => buildModel({ ...spec, headers }));
+	return richModels.map(spec => buildDiscoveredModel({ ...spec, headers }, "litellm"));
 }
 
 /**
