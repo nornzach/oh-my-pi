@@ -11,6 +11,9 @@
 // questions"), and wev / OpenJev-4B (github.com/alanhuangyoo/OpenJev, which
 // answers under any requested name).
 //
+// Unassigned: OpenAI Decisions (`openai-decisions`); its guide
+// (developers.openai.com/api/docs/guides/decisions) documents no question cap.
+//
 // Not isolatable: openjev-sglang (github.com/ekzhang/openjev-sglang) caps at
 // 64 but answers as `jev-latest` or its upstream model name, the same ids as
 // uncapped hosts.
@@ -30,5 +33,21 @@ on-api "typesafe" "openrouter-decisions" {
 	// outrank the glob above.
 	models "openjev-latest" "openjev-0.1" "laya-1.0" "verdict-1.4" "jevk5-0.2" {
 		judgment-questions-max 256
+	}
+}
+// Cloudflare Clef, Clef Flash and Clef Omni: the Workers AI input schema
+// bounds `questions` to 1-64 entries (`maxProperties: 64`,
+// developers.cloudflare.com/workers-ai/models/clef, /clef-flash, /clef-omni).
+on-api "workers-ai-systemone" {
+	models "@cf/cloudflare/clef*" {
+		judgment-questions-max 64
+	}
+}
+// OpenRouter Decisions serves its `cloudflare/clef*` rows from Workers AI (and
+// PrimeIntellect, whose cap is unpublished), so the Workers AI schema's 64
+// applies; scoped apart from the TypeSafe block above.
+on-api "openrouter-decisions" {
+	models "cloudflare/clef*" {
+		judgment-questions-max 64
 	}
 }

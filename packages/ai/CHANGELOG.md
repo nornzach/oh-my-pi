@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed `TypeSafeJudge` to `NativeJudge` (`TypeSafeJudgeOptions` → `NativeJudgeOptions`, `TypeSafeJudgeCallOptions` → `NativeJudgeCallOptions`) and `TypeSafeApiError` to `JudgmentApiError`, since the client now speaks every native judgment API; `JUDGMENT_ROUTES` is removed, so use `isJudgmentApi` or build a judge for a catalog model with `createNativeJudge(model, { apiKey })`
+
 ### Changed
 
 - Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
@@ -11,7 +15,10 @@
 
 ### Added
 
-- Added `maxQuestions` to `TypeSafeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; when a split fails, the usage already billed for its successful chunks still reaches `onPartialUsage`, the session ledger and the auth-gateway usage ledger. The auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
+- Added native judges for OpenAI's Decisions API (`openai-decisions`: System One questions and answers translated to and from `POST /v1/decisions`) and Cloudflare Workers AI decision models such as Clef (`workers-ai-systemone`: `POST /client/v4/accounts/{account}/ai/run/{model}`, with the account id from the login credential or `CLOUDFLARE_ACCOUNT_ID`); the auth-gateway System One route serves both
+- Added `createNativeJudge(model, { apiKey, headers, fetch })`, which builds the judge for a catalog judge model with its wire id (`requestModelId`) and catalog question cap
+- Added the `cloudflare-workers-ai` login (`loginCloudflareWorkersAi`), which stores a Cloudflare API token with its account ID; logging in again with the same token replaces the stored credential
+- Added `maxQuestions` to `NativeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; when a split fails, the usage already billed for its successful chunks still reaches `onPartialUsage`, the session ledger and the auth-gateway usage ledger. The auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
 
 ## [18.9.1] - 2026-10-11
 
