@@ -56,8 +56,10 @@ export async function getRpcGitDiff(cwd: string, filePath: string): Promise<RpcG
 		const stat = await fs.lstat(absolute);
 		if (stat.isSymbolicLink()) return { ...result, kind: "symlink" };
 		if (stat.isDirectory()) return { ...result, kind: "directory" };
-		const resolved = await fs.realpath(absolute);
-		if (!resolved.startsWith(`${changes.root}${path.sep}`)) throw new Error("File resolves outside this checkout");
+		// Compare real paths on both sides: a checkout opened through a symlinked
+		// path (macOS /tmp, /var, a linked projects folder) is still inside itself.
+		const [resolved, realRoot] = await Promise.all([fs.realpath(absolute), fs.realpath(changes.root)]);
+		if (!resolved.startsWith(`${realRoot}${path.sep}`)) throw new Error("File resolves outside this checkout");
 		if (stat.size > MAX_DIFF_BYTES) return { ...result, kind: "large", truncated: true };
 	} catch (error) {
 		if (!isEnoent(error)) throw error;

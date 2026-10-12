@@ -55,3 +55,23 @@ test("repository diff reports final contents, renames, binary, deletion and untr
 		await fs.rm(root, { recursive: true, force: true });
 	}
 });
+
+test("repository diff reads files in a checkout opened through a symlinked path", async () => {
+	const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "omp-git-diff-link-"));
+	const real = path.join(await fs.realpath(temporary), "real");
+	const linked = path.join(await fs.realpath(temporary), "linked");
+	try {
+		await fs.mkdir(real);
+		await fs.symlink(real, linked);
+		await $`git init -b main`.cwd(real).quiet();
+		await Bun.write(path.join(real, "a.txt"), "original\n");
+		await $`git add .`.cwd(real).quiet();
+		await $`git -c user.name=Test -c user.email=test@example.test commit -m initial`.cwd(real).quiet();
+		await Bun.write(path.join(real, "a.txt"), "final\n");
+		const diff = await getRpcGitDiff(linked, "a.txt");
+		expect(diff.diff).toContain("-original");
+		expect(diff.diff).toContain("+final");
+	} finally {
+		await fs.rm(temporary, { recursive: true, force: true });
+	}
+});
