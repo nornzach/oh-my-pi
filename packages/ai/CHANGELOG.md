@@ -2,23 +2,26 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Breaking Changes
 
-- Renamed `TypeSafeJudge` to `NativeJudge` (`TypeSafeJudgeOptions` → `NativeJudgeOptions`, `TypeSafeJudgeCallOptions` → `NativeJudgeCallOptions`) and `TypeSafeApiError` to `JudgmentApiError`, since the client now speaks every native judgment API; `JUDGMENT_ROUTES` is removed, so use `isJudgmentApi` or build a judge for a catalog model with `createNativeJudge(model, { apiKey })`
-
-### Changed
-
-- Improved Anthropic prompt-cache breakpoint selection in long conversations to pick cache anchors in a single backward walk, removing the per-request index arrays that grew with conversation length ([#15219](https://github.com/can1357/oh-my-pi/pull/15219) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-### Fixed
-
-- Fixed Devin-routed OpenAI models rejecting every turn with `invalid_argument` after switching an existing session from `openai-codex` ([#15234](https://github.com/can1357/oh-my-pi/issues/15234))
+- Renamed `TypeSafeJudge` to `NativeJudge` and `TypeSafeApiError` to `JudgmentApiError`, including their associated option types. `JUDGMENT_ROUTES` has been removed; use `isJudgmentApi` or create a judge for catalog models with `createNativeJudge(model, { apiKey })`.
 
 ### Added
 
-- Added native judges for OpenAI's Decisions API (`openai-decisions`: System One questions and answers translated to and from `POST /v1/decisions`) and Cloudflare Workers AI decision models such as Clef (`workers-ai-systemone`: `POST /client/v4/accounts/{account}/ai/run/{model}`, with the account id from the login credential or `CLOUDFLARE_ACCOUNT_ID`); the auth-gateway System One route serves both
-- Added `createNativeJudge(model, { apiKey, headers, fetch })`, which builds the judge for a catalog judge model with its wire id (`requestModelId`) and catalog question cap
-- Added the `cloudflare-workers-ai` login (`loginCloudflareWorkersAi`), which stores a Cloudflare API token with its account ID; logging in again with the same token replaces the stored credential
-- Added `maxQuestions` to `NativeJudge`: requests with more questions are split into chunks, at most 4 in flight at once, and their answers and usage merged, for System One endpoints that cap the `questions` map; when a split fails, the usage already billed for its successful chunks still reaches `onPartialUsage`, the session ledger and the auth-gateway usage ledger. The auth-gateway System One route applies the catalog's cap too ([#15368](https://github.com/can1357/oh-my-pi/pull/15368), [#15373](https://github.com/can1357/oh-my-pi/pull/15373) by [@H4vC](https://github.com/H4vC))
+- Added native judge support for OpenAI’s Decisions API and Cloudflare Workers AI decision models, including the `openai-decisions` and `workers-ai-systemone` APIs. The auth gateway’s System One route supports both providers.
+- Added `createNativeJudge(model, { apiKey, headers, fetch })` for creating judges from catalog models with their configured request model IDs and question limits.
+- Added Cloudflare Workers AI authentication with `loginCloudflareWorkersAi`, storing the API token and account ID; logging in again with the same token replaces the existing credential.
+- Added automatic question batching to `NativeJudge` for endpoints with question limits, with up to four concurrent batches and merged answers and usage reporting. Usage from successful batches is reported through partial-usage callbacks and both session and auth-gateway usage ledgers, even if another batch fails.
+
+### Changed
+
+- Improved Anthropic prompt caching for long conversations, reducing memory usage while selecting cache breakpoints.
+
+### Fixed
+
+- Fixed Devin-routed OpenAI models returning `invalid_argument` on every turn after an existing session was switched from `openai-codex`.
 
 ## [18.9.1] - 2026-10-11
 

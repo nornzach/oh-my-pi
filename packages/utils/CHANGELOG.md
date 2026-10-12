@@ -2,13 +2,25 @@
 
 ## [Unreleased]
 
-### Changed
+## [18.10.0] - 2026-10-12
 
-- Sped up streaming JSON parsing of tool arguments with many string values: the scan no longer re-searches the rest of the payload for a backslash once per string (about 2.2x faster on a 24 KB object of 300 short-string entries) ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+### Added
+
+- Added `getMnemopiEmbedRuntimeDir()` for the shared mnemopi embedding server endpoints and logs.
 
 ### Fixed
 
-- Fixed `JsonLexer.string()` running past a closing delimiter other than `"` or `'` (such as a backtick) in strings longer than 32 characters ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+- Fixed `ChildProcess.kill()` silently leaving the child running when the native process handle could not be resolved or used; it now signals the child directly and escalates to SIGKILL after the grace period.
+
+## [18.9.2] - 2026-10-11
+
+### Changed
+
+- Improved streaming JSON parsing performance for tool arguments containing many string values.
+
+### Fixed
+
+- Fixed parsing of long strings that contain closing delimiters other than double or single quotes.
 
 ## [18.9.0] - 2026-10-11
 

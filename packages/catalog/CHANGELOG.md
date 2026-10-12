@@ -2,22 +2,17 @@
 
 ## [Unreleased]
 
-### Added
+## [18.10.0] - 2026-10-12
 
-- Added the `judgment-questions-max` catalog axis and `resolveJudgmentQuestionsMax`: self-hosted OpenJEV judges are capped at 16 questions per System One request, razorback16/openjev's `openjev-latest`, Laya, Verdict and JevK5 at 256, and hosted jev stays uncapped ([#15368](https://github.com/can1357/oh-my-pi/pull/15368) by [@H4vC](https://github.com/H4vC))
-- Added the OpenAI Decisions judge `openai/gpt-6-luna-decisions` (GPT-6 Luna, $0.10 per 1M input tokens, text and image input) on the new `openai-decisions` judge API; it appears after OpenAI model discovery succeeds
-- Added the `cloudflare-workers-ai` provider with Cloudflare's Clef and Clef Flash judges on the new `workers-ai-systemone` judge API, authenticated by `/login cloudflare-workers-ai` or `CLOUDFLARE_API_TOKEN` with `CLOUDFLARE_ACCOUNT_ID`
-- Capped Clef judges at 64 questions per request, on Workers AI and through OpenRouter Decisions (`cloudflare/clef*`)
-- Added the seed-row `request-model-id` directive so an authored row can request a wire model id different from its own id
-- Added `@oh-my-pi/pi-catalog/wire/cloudflare` (`parseCloudflareCredential`, `serializeCloudflareCredential`), shared by the AI Gateway and Workers AI logins
+### Changed
 
-### Fixed
+- Raised the default context window for `openai-codex/gpt-6.1-sol` and `gpt-6.1-sol-wm` from 272K to 500K, matching OpenAI's new Codex default; extended context still opens 922K ([#15421](https://github.com/can1357/oh-my-pi/issues/15421))
 
-- Fixed Groq rejecting requests omp built for it: Kimi tool-call turns no longer carry `reasoning_content` (400 "property 'reasoning_content' is unsupported"), and Qwen is driven by `reasoning_effort` with `none` as its off value instead of `enable_thinking` (400 "property 'enable_thinking' is unsupported"); Groq Qwen models offer only the effort levels Groq accepts (low/medium/high, or on for Qwen 3.6) ([#15322](https://github.com/can1357/oh-my-pi/pull/15322) by [@Robinbinu](https://github.com/Robinbinu))
+## [18.9.2] - 2026-10-11
 
 ### Removed
 
-- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential` and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`; use the `wire/cloudflare` equivalents
+- Removed `parseCloudflareAiGatewayCredential`, `serializeCloudflareAiGatewayCredential`, and `CloudflareAiGatewayCredential` from `@oh-my-pi/pi-catalog/wire/cloudflare-ai-gateway`. Use the equivalents from `@oh-my-pi/pi-catalog/wire/cloudflare` instead.
 
 ## [18.9.1] - 2026-10-11
 
