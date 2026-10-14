@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ApprovalDialogComponent` takes a `draft` option that routes typing to the composer beneath it, so a message can be written while a tool call waits ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+- `ApprovalDialogComponent` takes a `fullPrompt` option that the expand key (`app.tools.expand`) or a Details button swaps in for the summarized prompt; it replaces `wrapDetails` ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed clipboard-image and image-path pastes being dropped while the composer draft is edited beneath an ask or approval dialog ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+## [18.10.4] - 2026-10-13
+
+### Added
+
+- Added `ApprovalDialogComponent` and the `app.approval.approve` keybinding (default `Ctrl+Enter`, `Ctrl+Q`) ([#15548](https://github.com/can1357/oh-my-pi/pull/15548) by [@H4vC](https://github.com/H4vC))
+- Plan review overlay can take a remote answer: it shows the remotely chosen execution tier and locks further input like a terminal approval ([#15552](https://github.com/can1357/oh-my-pi/pull/15552) by [@Shadorain](https://github.com/Shadorain))
+
+### Fixed
+
+- The model browser shows the price a model is billed at now, not the one current when its row was loaded: DeepSeek V4 Pro shows its $0.30 / $1.20 card in effect since 2026-09-14 instead of $1.32 / $3.96, and Gemini 4 Argon switches to $4 / $20 on 2026-12-01 ([#15620](https://github.com/can1357/oh-my-pi/pull/15620) by [@eggpeat](https://github.com/eggpeat))
+- Clicking Copy answer in the `/btw` history (and Copy raw in the raw SSE viewer) on native terminals copies the answer instead of the button's label ([#15547](https://github.com/can1357/oh-my-pi/pull/15547) by [@H4vC](https://github.com/H4vC))
+- Fixed image previews inside tmux showing as `SIXEL IMAGE (WxH)` placeholder text when the outer terminal lacks SIXEL; SIXEL is now enabled from tmux's DA1 reply only when tmux's terminal description for the attached client has `Sxl` ([#15513](https://github.com/can1357/oh-my-pi/issues/15513))
+
+### Removed
+
+- Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
+
+## [18.10.3] - 2026-10-12
+
+### Changed
+
+- Updated model picker to offer manual effort selection for unverified models instead of automatic mode
+
+### Fixed
+
+- Fixed the `snapcompact.shape` settings preview labelling variants `5x8-sent` and repeating the first variant's sample when the frame edge differs from the variant table (Claude and GPT on Cursor; `auto` on high-resolution Claude) ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added opt-in `/tree` branch navigation across visible branches and nested fork depths; bind `app.tree.previousBranch` / `app.tree.nextBranch` (e.g. to `Shift+Left` / `Shift+Right`) in `keybindings.yml` ([#12623](https://github.com/can1357/oh-my-pi/pull/12623) by [@azain47](https://github.com/azain47)).
+
+### Changed
+
+- The `wait` tool's native job rows (`omp.wait.job`) are a single `row`: badge, id and label, progress and clock, without the output preview or capture notice beneath
+- The native bash run foot reads In background with a live clock (`omp.run.time` without `stopped`) while a parked job's frames stream (`details.async.state === "running"`, partial), instead of Running
+- Native model pickers (/model, the quick switch and the advisor's) mark providers with their logo (`mark.icon: "provider:<id>"`, initials where the terminal has none), and every model row leads with its provider's mark
+
+### Removed
+
+- Removed the unused `app.tree.foldOrUp` / `app.tree.unfoldOrDown` keybinding ids, which no longer did anything.
+- Added `parksAsBackground(toolName, details)`, `asyncJobState(details)`, `isSettledJobFrame(details)` and `settleWithJobFrame(component, frame, toolCallId)` (`chat/tool-execution`): whether a returned call's card stays live for its background job's frames (`task` always; `bash` and `eval` under native rendering), the job state a frame reports, and settling the card with the job's last frame (a cancelled job keeps its output and seals as cancelled)
+- `BashToolDetails.async.state` and `EvalToolDetails.async.state` gain `cancelled` for a job killed before it finished
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
@@ -2712,95 +2766,4 @@
 - Migrated key parsing and matching logic to native implementation for improved performance
 - Simplified `isKeyRelease()` and `isKeyRepeat()` to use regex pattern matching instead of string inclusion checks
 
-## [9.6.2] - 2026-02-01
-
-### Changed
-
-- Renamed `EllipsisKind` enum to `Ellipsis` for clearer API naming
-- Changed hardcoded ellipsis character from theme-configurable to literal "…" in editor truncation
-- Refactored `visibleWidth` function to use caching wrapper around new `visibleWidthRaw` implementation for improved performance
-
-### Removed
-
-- Removed `truncateToWidth`, `sliceWithWidth`, and `extractSegments` functions from public API (now re-exported directly from @oh-my-pi/pi-natives)
-- Removed `ellipsis` property from `SymbolTheme` interface
-- Removed `extractAnsiCode` function from public API
-
-## [9.6.1] - 2026-02-01
-
-### Changed
-
-- Improved performance of key ID parsing with optimized cache lookup strategy
-- Simplified `visibleWidth` calculation to use consistent Bun.stringWidth approach for all string lengths
-
-### Removed
-
-- Removed `visibleWidth` benchmark file in favor of Kitty sequence benchmarking
-
-## [9.5.0] - 2026-02-01
-
-### Changed
-
-- Improved fuzzy file search performance by using native implementation instead of spawning external process
-- Replaced external `fd` binary with native fuzzy path search for `@`-prefixed autocomplete
-
-## [9.4.0] - 2026-01-31
-
-### Added
-
-- Exported `padding` utility function for creating space-padded strings efficiently
-
-### Changed
-
-- Optimized padding operations across all components to use pre-allocated space buffer for better performance
-
-## [9.2.2] - 2026-01-31
-
-### Added
-
-- Added setAutocompleteMaxVisible() configuration (3-20 items)
-- Added image detection to terminal capabilities (containsImage method)
-- Added stdin monitoring to detect stalled input events and log warnings
-
-### Changed
-
-- Improved blockquote rendering with text wrapping in Markdown component
-- Restructured terminal capabilities from interface-based to class-based model
-- Improved table column width calculation with word-aware wrapping
-- Refactored text utilities to use native WASM implementations for strings >256 chars with JS fast path
-
-### Fixed
-
-- Simplified terminal write error handling to mark terminal as dead on any write failure
-- Fixed multi-line strings in renderOutputBlock causing width overflow
-- Fixed slash command autocomplete applying stale completion when typing quickly
-
-### Removed
-
-- Removed TUI layout engine exports from public API (BoxNode, ColumnNode, LayoutNode, etc.)
-
-## [8.12.7] - 2026-01-29
-
-### Fixed
-
-- Fixed slash command autocomplete applying stale completion when typing quickly
-
-## [8.4.1] - 2026-01-25
-
-### Added
-
-- Added fuzzy match function for autocomplete suggestions
-
-## [8.4.0] - 2026-01-25
-
-### Changed
-
-- Added Ctrl+Backspace as a delete-word-backward keybinding and improved modified backspace matching
-
-### Fixed
-
-- Terminal gracefully handles write failures by marking dead instead of exiting the process
-- Reserved cursor space for zero padding and corrected end-of-line cursor rendering to prevent wrap glitches
-- Corrected editor end-of-line cursor rendering assertion to use includes() instead of endsWith()
-
-Older entries are archived in [packages/tui/CHANGELOG.md@89ad0a77d575](https://github.com/can1357/oh-my-pi/blob/89ad0a77d575f01398d3c0a57bc3a22111bef36a/packages/tui/CHANGELOG.md).
+Older entries are archived in [packages/tui/CHANGELOG.md@e6b8074bbe4b](https://github.com/can1357/oh-my-pi/blob/e6b8074bbe4b0d459aa812948822c2a634c8e62d/packages/tui/CHANGELOG.md).
