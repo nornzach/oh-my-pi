@@ -4,6 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type {
+	InteractiveTerminalHost,
+	InteractiveTerminalRequest,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
@@ -90,6 +94,32 @@ describe("BashTool execution results", () => {
 		expect(result.isError).toBeFalsy();
 		expect(text).toContain("pty-fallback-ok");
 		expect(text).toContain("pty requested but unavailable");
+	});
+
+	it("runs a pty request in the RPC host's terminal with an interactive environment", async () => {
+		const tool = new BashTool(makeSession());
+		const requests: InteractiveTerminalRequest[] = [];
+		const interactiveTerminal: InteractiveTerminalHost = {
+			async runCommand(request, onChunk) {
+				requests.push(request);
+				onChunk("host-terminal-ok\r\n");
+				return { exitCode: 0, cancelled: false, timedOut: false };
+			},
+		};
+		const ui = { custom: async () => undefined as never, interactiveTerminal } as unknown as AgentToolContext["ui"];
+		const result = await tool.execute("call-pty-host", { command: "sudo true", pty: true }, undefined, undefined, {
+			hasUI: true,
+			ui,
+		} as AgentToolContext);
+
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		expect(text).toContain("host-terminal-ok");
+		expect(text).not.toContain("pty requested but unavailable");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toMatchObject({ command: "sudo true", env: { TERM: "xterm-256color" } });
+		// A user is at the keyboard: the non-interactive guards are gone.
+		expect(requests[0]?.env.CI).toBeUndefined();
+		expect(requests[0]?.env.GIT_EDITOR).toBeUndefined();
 	});
 
 	it("resolves with an error result carrying execution details instead of throwing", async () => {

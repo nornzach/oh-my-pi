@@ -46,6 +46,7 @@ import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { DebugParams } from "../../tools/debug";
+import type { RpcBrowserHostInfo } from "./rpc-browser-host";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { RpcMessagesPage } from "./rpc-messages";
 
@@ -142,6 +143,23 @@ export type RpcCommand =
 	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
 	| { id?: string; type: "live_stop" }
 	| { id?: string; type: "live_mute"; muted?: boolean }
+	// Interactive terminals (host-rendered PTYs; see rpc-terminal.ts)
+	| { id?: string; type: "terminal_open"; cols?: number; rows?: number; cwd?: string }
+	| { id?: string; type: "terminal_input"; terminalId: string; data: string }
+	| { id?: string; type: "terminal_resize"; terminalId: string; cols: number; rows: number }
+	| { id?: string; type: "terminal_close"; terminalId: string }
+	| { id?: string; type: "terminal_list" }
+	| { id?: string; type: "terminal_snapshot"; terminalId: string }
+	/**
+	 * Opt in to running `pty: true` bash calls in a host terminal (`terminal_opened`
+	 * with `reveal`) and, with `agentTools`, to the agent's `terminal` tool, which
+	 * reads the host's terminals and runs long-lived commands in new ones.
+	 */
+	| { id?: string; type: "terminal_configure"; interactiveCommands: boolean; agentTools?: boolean }
+	// Browser panel (host-served relay; see rpc-browser-host.ts)
+	/** Serve a private browser relay the host dials as its extension; browser opens go to the host's panel. */
+	| { id?: string; type: "browser_host_start" }
+	| { id?: string; type: "browser_host_stop" }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -836,6 +854,73 @@ export interface RpcLiveEndFrame {
 }
 
 export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
+
+// ============================================================================
+// Terminal Frames (stdout, unsolicited; see rpc-terminal.ts)
+// ============================================================================
+
+/** One host-rendered terminal. */
+export interface RpcTerminalInfo {
+	terminalId: string;
+	/**
+	 * `shell`: a login shell the host opened; `command`: a `pty: true` bash tool
+	 * call the agent waits on; `background`: a long-lived command the agent
+	 * started with the `terminal` tool (a dev server, a watcher).
+	 */
+	kind: "shell" | "command" | "background";
+	/** Shell name, or the command's first line. */
+	title: string;
+	cwd: string;
+	running: boolean;
+	/** Exit code once the process ended (absent when it was killed by a signal). */
+	exitCode?: number;
+	pid?: number;
+	cols: number;
+	rows: number;
+}
+
+/** A terminal exists; `reveal` asks the host to show it (an agent command waits for the user). */
+export interface RpcTerminalOpenedFrame {
+	type: "terminal_opened";
+	terminal: RpcTerminalInfo;
+	reveal?: boolean;
+}
+
+/** Raw PTY output; `seq` counts characters sent for this terminal through the end of `data`. */
+export interface RpcTerminalOutputFrame {
+	type: "terminal_output";
+	terminalId: string;
+	data: string;
+	seq: number;
+}
+
+/** The terminal's process ended; the terminal stays until closed. */
+export interface RpcTerminalExitFrame {
+	type: "terminal_exit";
+	terminalId: string;
+	exitCode?: number;
+	cancelled: boolean;
+	timedOut: boolean;
+}
+
+/** The terminal is gone. */
+export interface RpcTerminalClosedFrame {
+	type: "terminal_closed";
+	terminalId: string;
+}
+
+export type RpcTerminalFrame =
+	| RpcTerminalOpenedFrame
+	| RpcTerminalOutputFrame
+	| RpcTerminalExitFrame
+	| RpcTerminalClosedFrame;
+
+/** `terminal_snapshot` result: recent output through `seq`; later frames have a larger `seq`. */
+export interface RpcTerminalSnapshot {
+	terminal: RpcTerminalInfo;
+	data: string;
+	seq: number;
+}
 
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
@@ -2485,6 +2570,35 @@ export type RpcResponse =
 			data: { voice: string };
 	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
+	// Interactive terminals
+	| { id?: string; type: "response"; command: "terminal_open"; success: true; data: RpcTerminalInfo }
+	| { id?: string; type: "response"; command: "terminal_input"; success: true }
+	| { id?: string; type: "response"; command: "terminal_resize"; success: true }
+	| { id?: string; type: "response"; command: "terminal_close"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "terminal_list";
+			success: true;
+			data: { terminals: RpcTerminalInfo[] };
+	  }
+	| { id?: string; type: "response"; command: "terminal_snapshot"; success: true; data: RpcTerminalSnapshot }
+	| {
+			id?: string;
+			type: "response";
+			command: "terminal_configure";
+			success: true;
+			data: { interactiveCommands: boolean; agentTools: boolean };
+	  }
+	// Browser panel
+	| {
+			id?: string;
+			type: "response";
+			command: "browser_host_start";
+			success: true;
+			data: RpcBrowserHostInfo;
+	  }
+	| { id?: string; type: "response"; command: "browser_host_stop"; success: true }
 	| {
 			id?: string;
 			type: "response";

@@ -49,6 +49,10 @@ export type WorkerInitPayload =
 			safeDir: string;
 			/** Keep the page tied to an OMP-owned worker without pinning a visible window's layout viewport. */
 			emulateViewport?: boolean;
+			/** Headless fingerprint patches (user agent, automation markers); `false` for a real visible browser. */
+			stealth?: boolean;
+			/** Create the page without showing it (a panel page the user keeps looking past). */
+			background?: boolean;
 			viewport?: { width: number; height: number; deviceScaleFactor?: number };
 			dialogs?: "accept" | "dismiss";
 			/** Hostname patterns allowed for every page request. */

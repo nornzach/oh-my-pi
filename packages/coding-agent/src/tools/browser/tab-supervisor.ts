@@ -125,6 +125,8 @@ export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle>
 	activateForScreenshot: boolean;
 	/** A recycle gave the tab a worker that adopted its page instead of creating it; that worker's close leaves the page open. */
 	reattached?: boolean;
+	/** The tab created its page (headless Chromium, or a page in the host's browser panel), so closing it closes the page. */
+	ownsPage: boolean;
 }
 
 export interface CmuxTabSession extends TabSessionBase<CmuxBrowserHandle> {
@@ -148,6 +150,8 @@ export interface AcquireTabOptions {
 	waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 	viewport?: { width: number; height: number; deviceScaleFactor?: number };
 	target?: string;
+	/** Create a page in the host's browser panel without showing it. */
+	background?: boolean;
 	signal?: AbortSignal;
 	timeoutMs: number;
 	/**
@@ -553,6 +557,7 @@ async function acquireTabImpl(
 		allowedDomains: opts.allowedDomains ? [...opts.allowedDomains] : undefined,
 		kindTag: browser.kind.kind,
 		activateForScreenshot: initPayload.mode === "headless" || initPayload.activateForScreenshot !== false,
+		ownsPage: initPayload.mode === "headless",
 		ownerSessionId: opts.ownerSessionId,
 		persist: opts.persist ?? false,
 		lastActivityAt: Date.now(),
@@ -1174,8 +1179,8 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		}
 	}
 	await tab.worker.terminate().catch(() => undefined);
-	// A recycled worker adopted the omp-owned headless page and leaves it open on close, so close it here.
-	if ((forced || (wasAlive && tab.reattached)) && tab.kindTag === "headless") {
+	// A recycled worker adopted the omp-owned page and leaves it open on close, so close it here.
+	if ((forced || (wasAlive && tab.reattached)) && tab.ownsPage) {
 		try {
 			// `false` is "not confirmed closed" (the CDP session could not be
 			// created, or `Target.getTargets` failed) — the same unconfirmed
@@ -1599,14 +1604,21 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 	const safeDir = getPuppeteerDir();
 	const browserWSEndpoint = browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
-	if (browser.kind.kind === "headless") {
+	// The host's browser panel gives each open its own page, like a launched
+	// browser; naming a target adopts a page the user opened there instead.
+	const hostedPage = browser.kind.kind === "relay" && browser.kind.hosted === true && opts.target === undefined;
+	if (browser.kind.kind === "headless" || hostedPage) {
 		return {
 			mode: "headless",
 			browserWSEndpoint,
 			safeDir,
 			// Visible launches still need an OMP-owned page, stealth setup, and
 			// independent lifecycle; only their fixed device emulation is disabled.
-			emulateViewport: browser.kind.headless,
+			// A panel page keeps the panel's size unless the caller asked for one,
+			// and is a real browser, so it skips headless stealth.
+			emulateViewport: browser.kind.kind === "headless" ? browser.kind.headless : opts.viewport !== undefined,
+			stealth: browser.kind.kind === "headless",
+			background: hostedPage && opts.background === true,
 			viewport: opts.viewport,
 			dialogs: opts.dialogs,
 			allowedDomains: opts.allowedDomains,
@@ -1734,7 +1746,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
 		// otherwise init stalls, times out, and the tab gets force-killed.
 		recover: true,
-		emulateFocus: tab.kindTag === "headless",
+		emulateFocus: tab.ownsPage,
 		activateForScreenshot: tab.activateForScreenshot,
 		userDriven: tab.kindTag === "connected" || tab.kindTag === "relay",
 	};
@@ -1831,7 +1843,7 @@ async function forceKillSurfaceTab(tab: CmuxTabSession | TernTabSession, name: s
 async function forceKillTabTeardown(tab: WorkerTabSession): Promise<void> {
 	await tab.worker.terminate().catch(() => undefined);
 	let targetClosed = true;
-	if (tab.kindTag === "headless") {
+	if (tab.ownsPage) {
 		targetClosed = await waitForTabCleanup(
 			tab,
 			DEFAULT_TAB_CLOSE_TIMEOUT_MS,

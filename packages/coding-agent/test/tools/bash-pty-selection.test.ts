@@ -63,4 +63,11 @@ describe("bash PTY selection", () => {
 		// RPC and ACP report hasUI but leave supportsCustom unset.
 		expect(canUseInteractiveBashPty(true, { hasUI: true, ui: {} })).toBe(false);
 	});
+
+	it("picks an opted-in host terminal even under the PI_NO_PTY that rpc-ui mode sets", () => {
+		setNoPty("1");
+
+		expect(canUseInteractiveBashPty(true, { hasUI: true, ui: { interactiveTerminal: {} } })).toBe(true);
+		expect(canUseInteractiveBashPty(false, { hasUI: true, ui: { interactiveTerminal: {} } })).toBe(false);
+	});
 });

@@ -68,6 +68,7 @@ import type {
 	OverlayOptions,
 	TUI,
 } from "@oh-my-pi/pi-tui";
+import type { PtyRunResult } from "@oh-my-pi/pi-natives";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
 import type { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { ComposerShapeDefinition } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
@@ -267,6 +268,24 @@ export interface ExtensionApprovalPrompt {
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
+/** One command for {@link InteractiveTerminalHost.runCommand}. */
+export interface InteractiveTerminalRequest {
+	command: string;
+	cwd: string;
+	/** Shell that runs `command` (`<shell> -lc <command>`). */
+	shell: string;
+	/** Complete PTY environment overrides, already interactive (no CI/editor guards). */
+	env: Record<string, string>;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+}
+
+/** A host-rendered terminal that runs interactive commands outside the TUI. */
+export interface InteractiveTerminalHost {
+	/** Run `request` where the user can see and type into it; resolves when the command exits. */
+	runCommand(request: InteractiveTerminalRequest, onChunk: (chunk: string) => void): Promise<PtyRunResult>;
+}
+
 // fallow-ignore-next-line code-duplication
 // Parallel to HookUIContext: extensions expose a strictly larger UI surface
 // (custom editor component, header/footer, widgets, theming, terminal input)
@@ -279,6 +298,8 @@ export interface ExtensionUIContext {
 	supportsEditor?: boolean;
 	/** True when custom() renders the component; absent means it resolves without calling the factory. */
 	supportsCustom?: boolean;
+	/** Present when the host renders interactive commands in its own terminal (the GUI); the TUI uses custom(). */
+	interactiveTerminal?: InteractiveTerminalHost;
 	/** Show a selector and return the selected label, even when an option also includes a description. */
 	select(
 		title: string,

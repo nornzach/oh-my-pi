@@ -14,6 +14,8 @@ export function isReadOnlyCollabCommand(type: RpcCommand["type"]): boolean {
 		type.startsWith("get_") ||
 		type.startsWith("list_") ||
 		type.startsWith("preview_") ||
+		// Terminals run on this machine and never touch the shared session.
+		type.startsWith("terminal_") ||
 		[
 			"negotiate_protocol",
 			"set_host_tools",

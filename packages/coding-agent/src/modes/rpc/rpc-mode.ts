@@ -13,7 +13,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { type AgentTool, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -41,6 +41,7 @@ import {
 	type ExtensionUISelectItem,
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
+	type InteractiveTerminalHost,
 	timedOutAskDialogResult,
 } from "../../extensibility/extensions";
 import {
@@ -66,6 +67,7 @@ import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpe
 import { sttClient } from "../../stt/asr-client";
 import { resolveSttModelSpec } from "../../stt/models";
 import type { ToolSession } from "../../tools";
+import { interactivePtyEnv } from "../../tools/bash-interactive";
 import { DebugTool } from "../../tools/debug";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import { DEFAULT_TTS_VOICE } from "../../tts/models";
@@ -110,6 +112,9 @@ import { getRpcGitChanges, getRpcGitDiff } from "./rpc-git-diff";
 import { RpcGoalController } from "./rpc-goal";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
+import { RpcTerminalHost, resolveTerminalShell } from "./rpc-terminal";
+import { TerminalTool } from "./rpc-terminal-tool";
+import { RpcBrowserHost } from "./rpc-browser-host";
 import { applyRpcMarketplaceAction } from "./rpc-marketplace";
 import {
 	applyRpcMcpAdd,
@@ -605,6 +610,17 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"worktree_create",
 	"worktree_remove",
 	"btw_cancel",
+	// Terminal handlers are synchronous up to the PTY call, so backgrounded
+	// keystrokes keep their arrival order and never wait behind a slow command.
+	"browser_host_start",
+	"browser_host_stop",
+	"terminal_close",
+	"terminal_configure",
+	"terminal_input",
+	"terminal_list",
+	"terminal_open",
+	"terminal_resize",
+	"terminal_snapshot",
 ]);
 
 /**
@@ -1682,6 +1698,24 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const hostUriBridge = new RpcHostUriBridge(output);
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
+	const browserHost = new RpcBrowserHost();
+	const terminalHost = new RpcTerminalHost({
+		output,
+		environment: async () => {
+			const { shell: configuredShell, env } = session.settings.getShellConfig();
+			return {
+				...resolveTerminalShell(process.env.SHELL, configuredShell),
+				cwd: session.sessionManager.getCwd(),
+				env: interactivePtyEnv(env, { COLORTERM: "truecolor" }),
+			};
+		},
+	});
+	/** Tools the host registered with `set_host_tools` (executed by the host). */
+	let hostTools: AgentTool[] = [];
+	/** The agent's `terminal` tool while the host opts in with `terminal_configure`. */
+	let terminalTool: TerminalTool | undefined;
+	const refreshRpcTools = () =>
+		session.refreshRpcHostTools(terminalTool ? [...hostTools, terminalTool as AgentTool] : hostTools);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
 	const planApprovalController = new RpcPlanApprovalController({
 		session,
@@ -1709,6 +1743,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		readonly supportsEditor = true;
 		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
 		askDialogEnabled = false;
+		/** Set by `terminal_configure`; `pty: true` bash runs here instead of without a terminal. */
+		interactiveTerminal: InteractiveTerminalHost | undefined;
 
 		constructor(
 			private pendingRequests: Map<string, PendingExtensionRequest>,
@@ -1949,7 +1985,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			await liveBridge.stop();
+			terminalHost.dispose();
 			await session.dispose();
+			browserHost.stop();
 		} catch (error) {
 			if (!persistenceFailure || error !== persistenceFailure) throw error;
 			await outputWriter.close();
@@ -2669,8 +2707,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "set_host_tools": {
 				const tools = normalizeHostToolDefinitions(command.tools);
-				const rpcTools = hostToolBridge.setTools(tools);
-				await session.refreshRpcHostTools(rpcTools);
+				hostTools = hostToolBridge.setTools(tools);
+				await refreshRpcTools();
 				return success(id, "set_host_tools", {
 					toolNames: tools.map(tool => tool.name),
 				});
@@ -2694,6 +2732,69 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "live_stop": {
 				await liveBridge.stop();
 				return success(id, "live_stop");
+			}
+
+			// =================================================================
+			// Interactive terminals
+			// =================================================================
+
+			case "terminal_open":
+				return success(
+					id,
+					"terminal_open",
+					await terminalHost.open({ cols: command.cols, rows: command.rows, cwd: command.cwd }),
+				);
+
+			case "terminal_input":
+				terminalHost.input(command.terminalId, command.data);
+				return success(id, "terminal_input");
+
+			case "terminal_resize":
+				terminalHost.resize(command.terminalId, command.cols, command.rows);
+				return success(id, "terminal_resize");
+
+			case "terminal_close":
+				terminalHost.close(command.terminalId);
+				return success(id, "terminal_close");
+
+			case "terminal_list":
+				return success(id, "terminal_list", { terminals: terminalHost.list() });
+
+			case "terminal_snapshot":
+				return success(id, "terminal_snapshot", terminalHost.snapshot(command.terminalId));
+
+			case "browser_host_start":
+				return success(id, "browser_host_start", browserHost.start());
+
+			case "browser_host_stop":
+				browserHost.stop();
+				return success(id, "browser_host_stop");
+
+			case "terminal_configure": {
+				rpcUiContext.interactiveTerminal = command.interactiveCommands
+					? terminalHost.asInteractiveTerminal()
+					: undefined;
+				const wantsTool = command.agentTools === true;
+				if (wantsTool !== (terminalTool !== undefined)) {
+					terminalTool = wantsTool
+						? new TerminalTool(terminalHost, {
+								commandEnvironment: async () => {
+									const { shell, env } = session.settings.getShellConfig();
+									return {
+										shell,
+										cwd: session.sessionManager.getCwd(),
+										env: interactivePtyEnv(env, { COLORTERM: "truecolor" }),
+									};
+								},
+								bashApproval: () => session.getToolByName("bash")?.approval,
+							})
+						: undefined;
+					await refreshRpcTools();
+				}
+				return success(id, "terminal_configure", {
+					interactiveCommands: rpcUiContext.interactiveTerminal !== undefined,
+					agentTools: terminalTool !== undefined,
+				});
 			}
 
 			case "live_mute": {

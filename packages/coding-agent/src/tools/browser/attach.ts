@@ -582,13 +582,20 @@ export function relayTargets(entries: readonly unknown[]): RelayTarget[] {
 	return targets;
 }
 
-/** The `browser.targets()` listing of relay pages: `- "Title" https://… (active)`. */
-export function describeRelayTargets(targets: readonly RelayTarget[]): string {
-	if (targets.length === 0) return "The relay lists no Chrome pages to adopt.";
+/**
+ * The `browser.targets()` listing of relay pages: `- "Title" https://… (active)`;
+ * `panel` lists the omp app's browser panel instead of Chrome.
+ */
+export function describeRelayTargets(targets: readonly RelayTarget[], panel = false): string {
+	if (targets.length === 0) {
+		return panel ? "The omp app's browser panel has no pages to adopt." : "The relay lists no Chrome pages to adopt.";
+	}
+	const shown = panel ? " (on screen)" : " (active)";
 	const list = targets
-		.map(entry => `- ${JSON.stringify(entry.title)} ${entry.url}${entry.shown ? " (active)" : ""}`)
+		.map(entry => `- ${JSON.stringify(entry.title)} ${entry.url}${entry.shown ? shown : ""}`)
 		.join("\n");
-	return `Chrome pages via the relay (adopt one with app.target set to its URL or a title substring):\n${list}`;
+	const source = panel ? "Pages in the omp app's browser panel" : "Chrome pages via the relay";
+	return `${source} (adopt one with app.target set to its URL or a title substring):\n${list}`;
 }
 
 /** The pages of the user's Chrome the relay at `relayJson` can adopt. */

@@ -41,6 +41,11 @@ Drive real Chromium tabs from JavaScript or Python Eval with the global `browser
 
 Application modes:
 
+{{#if panel}}
+- This session runs in the omp app, whose browser panel replaces the managed Chromium: every open without `app.path`, `app.cdp_url`, or `app.relay` creates a page there, beside the user's own pages, where the user watches and can take over. `headed: false` opens it in the background without changing what the user sees; prefer that for work the user did not ask to watch.
+- The panel keeps the user's sign-ins across sessions: sites attribute actions to the user, as with the relay.
+- `browser.targets()` lists the panel's pages (`shown`: the one on screen). When the user refers to a page they have open ("this page", "the docs I'm on"), adopt it with `app.target` set to its URL or a title substring instead of opening a copy. It is the user's page: opening with `url` navigates it, so do that only when asked. Closing releases it without closing it.
+{{/if}}
 - Omit `app` for default automation; no executable path required. Managed Chromium installs automatically on first use.
 - `headed` picks a visible or hidden managed browser per open. `allow_file_access` is a launch flag and cannot change an already-running shared Chromium; use a dedicated `app.path` with `app.args`. `ignore_https_errors` applies per tab through CDP.
 - `app.path`: launch the specified browser or Electron executable. Chromium-family browsers use an omp-owned profile unless `args` supplies `--user-data-dir`.

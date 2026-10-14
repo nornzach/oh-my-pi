@@ -16,8 +16,30 @@ export interface BashInteractiveResult extends OutputSummary {
 	images?: ImageContent[];
 }
 
+/**
+ * Environment for a PTY a user types into. The native PTY starts from the
+ * process's C environ, which Bun's `process.env` writes never reach, so it is
+ * handed the spawn env — minus its non-interactive guards (GIT_EDITOR, GPG_TTY,
+ * CI; added by procmgr's `buildSpawnEnv`, and a guard added there belongs here
+ * too) and NO_COLOR, a monochrome marker — plus a real TERM so editors, pagers,
+ * and TUIs behave like a normal terminal. A key left out keeps the inherited
+ * launch value; `overrides` win over everything.
+ */
+export function interactivePtyEnv(
+	shellEnv: Record<string, string>,
+	overrides?: Record<string, string>,
+): Record<string, string> {
+	const { GIT_EDITOR: _gitEditor, GPG_TTY: _gpgTty, CI: _ci, NO_COLOR: _noColor, ...interactive } = shellEnv;
+	return { ...interactive, TERM: "xterm-256color", ...overrides };
+}
+
+/**
+ * Run `command` on a PTY the user can type into: the TUI's overlay when the UI
+ * renders custom components, otherwise the host's own terminal (the GUI's
+ * terminal panel). Callers gate on `canUseInteractiveBashPty`.
+ */
 export async function runInteractiveBashPty(
-	ui: Pick<NonNullable<AgentToolContext["ui"]>, "custom">,
+	ui: Pick<NonNullable<AgentToolContext["ui"]>, "custom" | "supportsCustom" | "interactiveTerminal">,
 	options: {
 		command: string;
 		cwd: string;
@@ -29,16 +51,7 @@ export async function runInteractiveBashPty(
 	},
 ): Promise<BashInteractiveResult> {
 	const settings = await Settings.init();
-	// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
-	const XtermTerminal = await loadXtermTerminal();
 	const { shell: resolvedShell, env: shellEnv } = settings.getShellConfig();
-	// The native PTY starts from the process's C environ, which Bun's
-	// `process.env` writes never reach, so it is handed the spawn env. A pty call
-	// has a user at the keyboard, so it gets the spawn env minus its
-	// non-interactive guards (GIT_EDITOR, GPG_TTY, CI; added by procmgr's
-	// `buildSpawnEnv`, and a guard added there belongs here too) and NO_COLOR, a
-	// monochrome marker. A key left out keeps the inherited launch value.
-	const { GIT_EDITOR: _gitEditor, GPG_TTY: _gpgTty, CI: _ci, NO_COLOR: _noColor, ...interactiveShellEnv } = shellEnv;
 	const graphics = new TerminalGraphicsDecoder();
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
@@ -47,7 +60,42 @@ export async function runInteractiveBashPty(
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
 	});
+	/** Transcript copy of one raw PTY chunk: graphics extracted, line endings normalized. */
+	const record = (chunk: string) => {
+		const clean = graphics.push(chunk);
+		if (clean) sink.push(clean.replace(/\r\n?/gu, "\n"));
+	};
+	const summarize = async (run: PtyRunResult): Promise<BashInteractiveResult> => {
+		const tail = graphics.finish();
+		if (tail) sink.push(tail);
+		const [summary, images] = await Promise.all([sink.dump(), graphics.images()]);
+		return {
+			exitCode: run.exitCode,
+			cancelled: run.cancelled,
+			timedOut: run.timedOut,
+			...summary,
+			...(images.length > 0 ? { images } : {}),
+		};
+	};
 	try {
+		const host = ui.supportsCustom === true ? undefined : ui.interactiveTerminal;
+		if (host) {
+			const run = await host.runCommand(
+				{
+					command: options.command,
+					cwd: options.cwd,
+					shell: resolvedShell,
+					// direnv's values win over everything.
+					env: interactivePtyEnv(shellEnv, options.env),
+					timeoutMs: options.timeoutMs,
+					signal: options.signal,
+				},
+				record,
+			);
+			return await summarize(run);
+		}
+		// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
+		const XtermTerminal = await loadXtermTerminal();
 		const result = await ui.custom<BashInteractiveResult>(
 			(tui, uiTheme, _keybindings, done) => {
 				const session = new PtySession();
@@ -66,16 +114,7 @@ export async function runInteractiveBashPty(
 					tui.requestRender();
 					void (async () => {
 						await component.flushOutput();
-						const tail = graphics.finish();
-						if (tail) sink.push(tail);
-						const [summary, images] = await Promise.all([sink.dump(), graphics.images()]);
-						done({
-							exitCode: run.exitCode,
-							cancelled: run.cancelled,
-							timedOut: run.timedOut,
-							...summary,
-							...(images.length > 0 ? { images } : {}),
-						});
+						done(await summarize(run));
 					})();
 				};
 				const cols = Math.max(20, tui.terminal.columns - 2);
@@ -109,9 +148,8 @@ export async function runInteractiveBashPty(
 							command: options.command,
 							cwd: options.cwd,
 							timeoutMs: options.timeoutMs,
-							// A real TERM so editors, pagers, and TUIs behave like a normal
-							// terminal; direnv's values win over everything.
-							env: { ...interactiveShellEnv, TERM: "xterm-256color", ...options.env },
+							// direnv's values win over everything.
+							env: interactivePtyEnv(shellEnv, options.env),
 							signal: options.signal,
 							cols,
 							rows,
@@ -120,8 +158,7 @@ export async function runInteractiveBashPty(
 						(err, chunk) => {
 							if (finished || err || !chunk) return;
 							component.appendOutput(chunk);
-							const clean = graphics.push(chunk);
-							if (clean) sink.push(clean.replace(/\r\n?/gu, "\n"));
+							record(chunk);
 							tui.requestRender();
 						},
 					)

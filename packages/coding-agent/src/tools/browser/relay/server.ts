@@ -18,9 +18,16 @@ import { RelayBridge } from "./bridge";
 
 /** Options for {@link startRelayServer}. */
 export interface RelayServerOptions {
+	/** Port to bind; `0` picks a free one (read it back from {@link RelayServer.port}). */
 	port: number;
 	/** Shared secret the extension must present as `?token=`; unset disables the check. */
 	token?: string;
+	/**
+	 * Secret first path segment every discovery and CDP path must carry
+	 * (`/<cdpToken>/json/version`, `/<cdpToken>/cdp`); unset serves them at the
+	 * root. `/ext` stays at the root, gated by {@link token}.
+	 */
+	cdpToken?: string;
 	/** Group tabs the agent actively drives under one per-window Chrome tab group (default on); `false` disables. */
 	group?: boolean | { title: string; color: string };
 	log?: (message: string, data?: Record<string, unknown>) => void;
@@ -84,7 +91,7 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 		hostname: "127.0.0.1",
 		port: opts.port,
 		fetch(req, srv): Response | undefined {
-			const fallback = `127.0.0.1:${opts.port}`;
+			const fallback = `127.0.0.1:${srv.port ?? opts.port}`;
 			const rawHost = req.headers.get("host")?.trim();
 			const host = rawHost && isWsAuthority(rawHost) ? rawHost : fallback;
 			const requestUrl =
@@ -92,7 +99,13 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 					? req.url.slice(`http://${rawHost}`.length)
 					: req.url;
 			const url = new URL(requestUrl, `http://${fallback}`);
-			const path = url.pathname.replace(/\/+$/, "") || "/";
+			let path = url.pathname.replace(/\/+$/, "") || "/";
+			const cdpPrefix = opts.cdpToken ? `/${opts.cdpToken}` : "";
+			if (cdpPrefix && path !== "/ext") {
+				if (path !== cdpPrefix && !path.startsWith(`${cdpPrefix}/`))
+					return new Response("Not found", { status: 404 });
+				path = path.slice(cdpPrefix.length) || "/";
+			}
 			if (path === "/cdp") {
 				// Browsers set Origin on websocket upgrades; native CDP clients
 				// don't. Reject any Origin so a web page can't drive the relay.
@@ -127,7 +140,7 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 					};
 					return Response.json(info, { status: 503 });
 				}
-				return Response.json(bridge.versionInfo(`ws://${host}/cdp`));
+				return Response.json(bridge.versionInfo(`ws://${host}${cdpPrefix}/cdp`));
 			}
 			if (path === "/json" || path === "/json/list") {
 				return Response.json(bridge.listTargets());
@@ -173,10 +186,11 @@ export function startRelayServer(opts: RelayServerOptions): RelayServer {
 	}, WS_KEEPALIVE_MS);
 	keepalive.unref();
 
-	log("relay listening", { port: opts.port });
+	const port = server.port ?? opts.port;
+	log("relay listening", { port });
 	return {
 		bridge,
-		port: opts.port,
+		port,
 		stop() {
 			clearInterval(keepalive);
 			server.stop(true);

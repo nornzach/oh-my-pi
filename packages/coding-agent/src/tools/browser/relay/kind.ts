@@ -12,6 +12,25 @@ import { parseFlag } from "@oh-my-pi/pi-utils";
 export interface RelayKind {
 	kind: "relay";
 	cdpUrl: string;
+	/**
+	 * Served by this process for its RPC host's browser panel (the GUI), which
+	 * dials in as the relay's extension: never daemon-managed, and opens get
+	 * their own panel page instead of adopting one.
+	 */
+	hosted?: true;
+}
+
+/** The relay this process serves for its RPC host (see `modes/rpc/rpc-browser-host.ts`). */
+let hostedRelayUrl: string | null = null;
+
+/** Route opens without an explicit browser choice to the host's panel; `null` stops. */
+export function setHostedRelay(cdpUrl: string | null): void {
+	hostedRelayUrl = cdpUrl;
+}
+
+/** The host panel's relay kind, or null when no RPC host serves one. */
+export function resolveHostedRelayKind(): RelayKind | null {
+	return hostedRelayUrl === null ? null : { kind: "relay", cdpUrl: hostedRelayUrl, hosted: true };
 }
 
 /** Default endpoint of the `omp-browser-relay` CLI. */

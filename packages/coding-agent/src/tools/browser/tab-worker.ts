@@ -1079,7 +1079,18 @@ async function targetIdForPage(page: Page): Promise<string> {
 	return await targetIdForTarget(page.target());
 }
 
-async function createTrackedHeadlessPage(browser: Browser, reportTarget: (targetId: string) => void): Promise<Page> {
+async function createTrackedHeadlessPage(
+	browser: Browser,
+	reportTarget: (targetId: string) => void,
+	background: boolean,
+): Promise<Page> {
+	// A browser relay (the omp app's browser panel) announces pages but no
+	// browser target; create through the root connection, which it serves.
+	if (!browser.targets().some(target => target.type() === "browser")) {
+		const page = await browser.newPage({ background });
+		reportTarget(await targetIdForPage(page));
+		return page;
+	}
 	const session = await browser.target().createCDPSession();
 	let targetId: string;
 	try {
@@ -1529,11 +1540,17 @@ export class WorkerCore {
 				// Create the target directly so its id is reportable before
 				// Puppeteer waits for target/page initialization. If that wait
 				// wedges, the supervisor can still close the created target.
-				this.#page = await createTrackedHeadlessPage(this.#browser, targetId => {
-					this.#transport.send({ type: "page-created", targetId });
-				});
+				this.#page = await createTrackedHeadlessPage(
+					this.#browser,
+					targetId => {
+						this.#transport.send({ type: "page-created", targetId });
+					},
+					payload.background === true,
+				);
 				this.#observeDialogs();
-				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
+				if (payload.stealth !== false) {
+					await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
+				}
 				if (payload.emulateViewport !== false) await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 			} else {
