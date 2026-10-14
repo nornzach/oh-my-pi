@@ -29,7 +29,7 @@ function setNoPty(value: string | undefined): void {
 }
 
 function interactiveContext() {
-	return { hasUI: true, ui: {} };
+	return { hasUI: true, ui: { supportsCustom: true } };
 }
 
 describe("bash PTY selection", () => {
@@ -55,5 +55,12 @@ describe("bash PTY selection", () => {
 
 		setNoPty("1");
 		expect(canUseInteractiveBashPty(true, interactiveContext())).toBe(false);
+	});
+
+	it("does not pick the PTY overlay for a UI host that cannot render it", () => {
+		setNoPty(undefined);
+
+		// RPC and ACP report hasUI but leave supportsCustom unset.
+		expect(canUseInteractiveBashPty(true, { hasUI: true, ui: {} })).toBe(false);
 	});
 });

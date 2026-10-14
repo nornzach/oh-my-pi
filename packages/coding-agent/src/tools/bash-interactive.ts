@@ -134,6 +134,9 @@ export async function runInteractiveBashPty(
 			},
 			{ overlay: true },
 		);
+		// A host that reports a UI but cannot render overlays resolves without
+		// running the factory; surface that instead of a TypeError downstream.
+		if (result === undefined) throw new Error("Interactive terminal is not available in this UI host");
 		return result;
 	} finally {
 		await sink.dispose();

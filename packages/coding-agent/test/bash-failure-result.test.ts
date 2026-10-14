@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -68,6 +69,27 @@ describe("BashTool execution results", () => {
 				.find(node => "k" in node && node.k === "ansi");
 			expect(output).toMatchObject({ p: { role: "omp.tool.bash.output", text: timingOutput } });
 		}
+	});
+
+	it("runs a pty request without a terminal when the UI host cannot render overlays", async () => {
+		const tool = new BashTool(makeSession());
+		// RPC/ACP shape: a UI is reported, but custom() resolves without rendering.
+		const ui = { custom: async () => undefined as never } as unknown as AgentToolContext["ui"];
+		const result = await tool.execute(
+			"call-pty-rpc",
+			{ command: "printf 'pty-fallback-ok'", pty: true },
+			undefined,
+			undefined,
+			{
+				hasUI: true,
+				ui,
+			} as AgentToolContext,
+		);
+
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		expect(result.isError).toBeFalsy();
+		expect(text).toContain("pty-fallback-ok");
+		expect(text).toContain("pty requested but unavailable");
 	});
 
 	it("resolves with an error result carrying execution details instead of throwing", async () => {

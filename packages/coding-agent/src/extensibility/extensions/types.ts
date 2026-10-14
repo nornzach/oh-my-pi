@@ -277,6 +277,8 @@ export interface ExtensionUIContext {
 	timeoutStartsOnPresentation?: boolean;
 	/** True when pasteToEditor updates a local or remote composer; absent means unsupported. */
 	supportsEditor?: boolean;
+	/** True when custom() renders the component; absent means it resolves without calling the factory. */
+	supportsCustom?: boolean;
 	/** Show a selector and return the selected label, even when an option also includes a description. */
 	select(
 		title: string,
