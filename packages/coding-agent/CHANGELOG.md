@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [18.11.0] - 2026-10-14
-
 ### Added
 
 - RPC hosts can run terminals for the user (`terminal_open`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_snapshot`); after `terminal_configure`, `pty: true` bash commands open in one so the user can answer their prompts
@@ -11,6 +9,15 @@
 - RPC hosts can serve the `browser` tool from their own browser view: `browser_host_start` starts a private relay the host connects to, and opens then drive the host's pages instead of launching Chromium (`headed: false` opens a background page there; explicit `app` options and `browser.cdpUrl` keep their browser). `browser.targets()` lists the view's pages, `app.target` adopts one the user opened, and the browser docs describe the view while it serves the session
 - RPC hosts can show and edit a project's local memory (`get_memory_overview`, `get_memory_activity`, `edit_memory`, `update_memory`): notes, captured lessons, the sessions memory was built from (forget or restore each), erasing the project, and updating on demand with live progress; `get_skills` reports when a managed skill last changed
 - Notes you write in a project's memory reach the agent as standing instructions for that project
+
+### Fixed
+
+- Interactive bash commands (`pty: true`) in RPC and ACP hosts now run without a terminal and say so, instead of failing the call
+
+## [18.11.0] - 2026-10-14
+
+### Added
+
 - Added a microphone button beside Send in Tern: click to record, click Stop to finish, then review and submit the transcription yourself. Clicking while it says **Starting…** cancels a slow first model load ([#15759](https://github.com/can1357/oh-my-pi/pull/15759) by [@daaximus](https://github.com/daaximus)).
 - Added local Nemotron streaming dictation: words appear while you speak, and the microphone waits for the recognizer to be ready before recording ([#15759](https://github.com/can1357/oh-my-pi/pull/15759) by [@daaximus](https://github.com/daaximus)).
 - Added agent frontmatter `structured: true`: that agent's task spawns keep the `yield` tool and its `output` schema validation while `task.structured` is off ([#15717](https://github.com/can1357/oh-my-pi/pull/15717) by [@alphastorm](https://github.com/alphastorm))
@@ -64,10 +71,6 @@
 - Fixed hashline edits silently dropping the tail of a line that `read` or `grep` had cut at the column limit; such an edit is now refused until a `:raw` read shows the full line ([#15649](https://github.com/can1357/oh-my-pi/issues/15649))
 - Fixed isolated tasks failing on linked worktrees with initialized recursive submodules and leaving updated submodule pins unreachable after cleanup ([#15457](https://github.com/can1357/oh-my-pi/issues/15457))
 - Fixed `/tan` missing the parent's prompt cache by advertising `xd://` tools top-level and omitting `ask` ([#15578](https://github.com/can1357/oh-my-pi/issues/15578)).
-
-### Fixed
-
-- Interactive bash commands (`pty: true`) in RPC and ACP hosts now run without a terminal and say so, instead of failing the call
 
 ## [18.10.4] - 2026-10-13
 
