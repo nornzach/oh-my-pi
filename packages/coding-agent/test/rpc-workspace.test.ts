@@ -5,6 +5,7 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { hindsightBackend } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
 import { rebindRpcSessionCwd } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import {
@@ -313,13 +314,15 @@ describe("RPC workspace directories", () => {
 				await session.prompt("Summarize the source project.");
 				const rebindEntered = Promise.withResolvers<void>();
 				const releaseRebind = Promise.withResolvers<void>();
-				const refresh = session.refreshBaseSystemPrompt.bind(session);
-				vi.spyOn(session, "refreshBaseSystemPrompt").mockImplementation(async () => {
+				// Every base-prompt rebuild asks the active backend for its section, whichever
+				// path (backend apply from "off", or a Hindsight bank rescope) drove the rebuild.
+				const buildInstructions = hindsightBackend.buildDeveloperInstructions.bind(hindsightBackend);
+				vi.spyOn(hindsightBackend, "buildDeveloperInstructions").mockImplementation(async (...args) => {
 					if (session.getHindsightSessionState()?.bankId === "destination") {
 						rebindEntered.resolve();
 						await releaseRebind.promise;
 					}
-					await refresh();
+					return buildInstructions(...args);
 				});
 				let completed = false;
 				const move = applyRpcMoveSession(session, dest, {

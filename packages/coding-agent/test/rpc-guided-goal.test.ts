@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { RpcGoalModeController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-modes";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
@@ -7,7 +8,7 @@ function createSession(overrides: Record<string, unknown> = {}) {
 	const followUp = vi.fn(async (_message: string, _images?: unknown, _options?: { synthetic?: boolean }) => {});
 	const setActiveToolsByName = vi.fn(async () => {});
 	const session = {
-		settings: { get: vi.fn(() => true) },
+		settings: Settings.isolated({ "goal.enabled": true }),
 		getPlanModeState: vi.fn(() => undefined),
 		getVibeModeState: vi.fn(() => undefined),
 		getGoalModeState: vi.fn(() => undefined),

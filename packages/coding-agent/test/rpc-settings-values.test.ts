@@ -21,9 +21,9 @@ test("global saves preserve explicit runtime false and report both configured la
 });
 
 test("RPC rejects malformed booleans, unsupported enums, non-finite numbers and inherited paths before saving", () => {
-	expect(() => validateRpcSettingValue("display.showTokenUsage", "false")).toThrow("expected boolean");
-	expect(() => validateRpcSettingValue("tools.approvalMode", "unknown")).toThrow("expected enum");
-	expect(() => validateRpcSettingValue("setupVersion", Number.NaN)).toThrow("expected number");
+	expect(() => validateRpcSettingValue("display.showTokenUsage", "false")).toThrow("expected a boolean");
+	expect(() => validateRpcSettingValue("tools.approvalMode", "unknown")).toThrow("expected one of");
+	expect(() => validateRpcSettingValue("setupVersion", Number.NaN)).toThrow("expected a number");
 	expect(() => validateRpcSettingValue("__proto__", {})).toThrow("Unknown setting");
 	const settings = Settings.isolated();
 	const showTokenUsage = lookupSetting("display.showTokenUsage");

@@ -7,6 +7,7 @@ import {
 	createRpcWorktree,
 	removeRpcWorktree,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-worktree";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $ } from "bun";
@@ -22,9 +23,7 @@ function stubSession(
 ): AgentSession {
 	return {
 		sessionManager: { getCwd: () => cwd },
-		settings: {
-			get: (key: string) => (key === "worktree.clone" ? worktree.clone : worktree.backend),
-		},
+		settings: Settings.isolated({ "worktree.clone": worktree.clone, "isolation.backend": worktree.backend }),
 	} as unknown as AgentSession;
 }
 

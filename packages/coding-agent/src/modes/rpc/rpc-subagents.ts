@@ -200,6 +200,15 @@ export class RpcSubagentRegistry {
 		return this.#subscriptionLevel;
 	}
 
+	/**
+	 * The unfinished row this session's own task lifecycle reported for `subagentId`.
+	 * Unlike {@link getSubagents}, never a registry-merged or retained terminal row,
+	 * so it can prove the subagent belongs to this session.
+	 */
+	getReportedSubagent(subagentId: string): RpcSubagentSnapshot | undefined {
+		return this.#subagents.get(subagentId);
+	}
+
 	getSubagents(): RpcSubagentSnapshot[] {
 		// Terminal rows seed the roster so finished agents keep their last-known
 		// task/assignment/progress; live rows then win outright (revival race).
@@ -384,10 +393,12 @@ export interface RpcOwnedSubagent {
  * frame prunes the roster, and a running ref always holds a live session.
  */
 export function resolveOwnedLiveSubagent(
-	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentRegistry: Pick<RpcSubagentRegistry, "getReportedSubagent">,
 	subagentId: string,
 ): RpcOwnedSubagent | undefined {
-	const snapshot = subagentRegistry.getSubagents().find(candidate => candidate.id === subagentId);
+	// Not getSubagents(): it merges every process-global registry ref, so any
+	// running ref would vouch for itself.
+	const snapshot = subagentRegistry.getReportedSubagent(subagentId);
 	// Progress can briefly report a terminal status before the terminal
 	// lifecycle frame prunes the snapshot; treat that as not running.
 	if ((snapshot?.status !== "running" && snapshot?.status !== "pending") || !snapshot.sessionFile) return undefined;

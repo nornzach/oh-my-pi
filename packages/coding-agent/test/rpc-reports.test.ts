@@ -6,6 +6,7 @@ import {
 	shareRpcSession,
 	previewRpcShareSession,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-reports";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AsyncJobSnapshotItem } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -138,9 +139,7 @@ describe("shareRpcSession", () => {
 				getEntries: () => entries,
 				getLeafId: () => entries[entries.length - 1]?.id ?? "leaf",
 			} as unknown as SessionManager,
-			settings: {
-				get: (path: string) => (path === "share.serverUrl" ? serverUrl : undefined),
-			},
+			settings: Settings.isolated({ "share.serverUrl": serverUrl }),
 			state: undefined,
 			obfuscator: undefined,
 		} as unknown as AgentSession;

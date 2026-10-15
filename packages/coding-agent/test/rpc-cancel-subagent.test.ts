@@ -277,6 +277,7 @@ describe("handleRpcCancelSubagent", () => {
 			"started",
 			"aborted",
 		]);
-		expect(registry.getSubagents()).toEqual([]);
+		// The roster keeps the cancelled card as revivable, no longer running.
+		expect(registry.getSubagents()).toEqual([expect.objectContaining({ id, status: "aborted" })]);
 	});
 });

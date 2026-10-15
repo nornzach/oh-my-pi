@@ -4,6 +4,7 @@ import {
 	applyRpcReviveSubagent,
 	buildRpcAgentDefinitions,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-agents";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -32,10 +33,7 @@ describe("buildRpcAgentDefinitions", () => {
 			sessionManager: { getCwd: () => process.cwd() },
 			model: undefined,
 			modelRegistry: { getAvailable: () => [] },
-			settings: {
-				get: () => undefined,
-				getModelRole: () => undefined,
-			},
+			settings: Settings.isolated(),
 		} as unknown as AgentSession);
 		const task = result.agents.find(agent => agent.name === "task");
 		expect(task).toMatchObject({

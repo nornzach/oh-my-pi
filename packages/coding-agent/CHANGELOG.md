@@ -15,6 +15,7 @@
 
 - Interactive bash commands (`pty: true`) in RPC and ACP hosts now run without a terminal and say so, instead of failing the call
 - An auto-cleared todo list is hidden rather than erased, so `/todo` can show it again and the agent keeps its finished plan; RPC hosts still see it cleared, including after a reload
+- RPC `cancel_subagent` and `steer_subagent` act only on subagents the session itself started, never on another session's live subagent with the same id
 
 ## [18.11.0] - 2026-10-14
 

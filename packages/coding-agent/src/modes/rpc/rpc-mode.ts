@@ -991,7 +991,7 @@ export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
  * or the abort fails; the subagent is still detached and disposed.
  */
 export async function handleRpcCancelSubagent(
-	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentRegistry: Pick<RpcSubagentRegistry, "getReportedSubagent">,
 	subagentId: string,
 ): Promise<boolean> {
 	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
@@ -1034,7 +1034,7 @@ export async function handleRpcCancelSubagent(
  * failures are logged. Returns an error message, or `undefined` once accepted.
  */
 export async function handleRpcSteerSubagent(
-	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	subagentRegistry: Pick<RpcSubagentRegistry, "getReportedSubagent">,
 	subagentId: string,
 	message: string,
 ): Promise<string | undefined> {
