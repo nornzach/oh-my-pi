@@ -31,6 +31,8 @@ import type {
 	ExtensionAskDialogResult,
 } from "../../extensibility/extensions/types";
 import type { GoalModeState } from "../../goals/state";
+import type { MemoryListEditResult } from "../../memories";
+import type { MemoryOverview } from "../../memories/workbench";
 import type { MemoryBackendId } from "../../memory-backend/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type {
@@ -341,6 +343,11 @@ export type RpcCommand =
 	| { id?: string; type: "get_marketplaces" }
 	| { id?: string; type: "get_prompt_templates" }
 	| { id?: string; type: "get_memory_report" }
+	// Memory workbench (local backend). `cwd` picks the project; it defaults to the session's.
+	| { id?: string; type: "get_memory_overview"; cwd?: string }
+	| { id?: string; type: "get_memory_activity"; cwd?: string }
+	| { id?: string; type: "edit_memory"; cwd?: string; edit: RpcMemoryEdit }
+	| { id?: string; type: "update_memory"; cwd?: string; minIdleMinutes?: number }
 	| { id?: string; type: "get_security_dashboard" }
 	| { id?: string; type: "get_security_scan"; scanId: string }
 	| { id?: string; type: "get_ssh_hosts" }
@@ -1325,6 +1332,8 @@ export interface RpcSkillInfo {
 	level: "user" | "project" | "native";
 	/** Only managed skills can be changed or deleted through RPC. */
 	managed: boolean;
+	/** Managed skills only: last write to SKILL.md, ms since epoch. */
+	modifiedAt?: number;
 	/** Hidden skills remain manually invocable but are omitted from model discovery. */
 	hidden: boolean;
 }
@@ -1603,6 +1612,29 @@ export interface RpcMemoryStatus {
 	database?: string;
 	message?: string;
 	error?: string;
+}
+
+/** One project's local memory as the workbench shows it. */
+export type RpcMemoryOverview = MemoryOverview;
+
+/** A workbench edit. Notes and lessons are named by their stored `line`. */
+export type RpcMemoryEdit =
+	| { kind: "note"; action: "add"; text: string }
+	| { kind: "note" | "lesson"; action: "update"; line: string; text: string; context?: string }
+	| { kind: "note" | "lesson"; action: "delete"; line: string }
+	| { kind: "source"; action: "forget" | "restore"; threadId: string }
+	| { kind: "erase" };
+
+export interface RpcMemoryEditResult {
+	/** `ok: false` names an expected refusal (empty text, entry changed elsewhere, notes full). */
+	result: MemoryListEditResult;
+	overview: RpcMemoryOverview;
+}
+
+export interface RpcMemoryUpdateResult {
+	/** False when this process was already updating the project. */
+	started: boolean;
+	overview: RpcMemoryOverview;
 }
 
 /** Read-only memory backend report. Optional fields are omitted when the backend lacks (or fails) that hook. */
@@ -2873,6 +2905,34 @@ export type RpcResponse =
 			command: "get_memory_report";
 			success: true;
 			data: RpcMemoryReport;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_memory_overview";
+			success: true;
+			data: RpcMemoryOverview;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_memory_activity";
+			success: true;
+			data: Pick<RpcMemoryOverview, "activity">;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "edit_memory";
+			success: true;
+			data: RpcMemoryEditResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "update_memory";
+			success: true;
+			data: RpcMemoryUpdateResult;
 	  }
 	| {
 			id?: string;

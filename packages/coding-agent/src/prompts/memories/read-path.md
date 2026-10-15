@@ -7,6 +7,10 @@ Rules:
 4. Memory changes plan → cite artifact path (e.g. `memory://root/skills/<name>/SKILL.md`) and current-repo evidence.
 5. Memory disagreement with repo state/user instruction → stale; corrected behavior, then update/regenerate memory artifacts.
 6. Confidence only after repository verification; memory alone NEVER sufficient proof.
+{{#if notes}}
+Project notes (written by the user; standing instructions for this project unless the user's current request says otherwise):
+{{notes}}
+{{/if}}
 {{#if memory_summary}}
 Memory summary:
 {{memory_summary}}

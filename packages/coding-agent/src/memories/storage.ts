@@ -6,6 +6,8 @@ export interface MemoryThread {
 	rolloutPath: string;
 	cwd: string;
 	sourceKind: string;
+	/** Session title from the file's title slot; not persisted. */
+	title?: string;
 }
 
 export interface Stage1OutputRow {
@@ -105,6 +107,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 	last_success_watermark INTEGER,
 	PRIMARY KEY (kind, job_key)
 );
+
+CREATE TABLE IF NOT EXISTS forgotten_threads (
+	thread_id TEXT PRIMARY KEY,
+	cwd TEXT NOT NULL,
+	forgotten_at INTEGER NOT NULL
+);
 `);
 	return db;
 }
@@ -118,6 +126,7 @@ export function clearMemoryData(db: Database): void {
 DELETE FROM stage1_outputs;
 DELETE FROM threads;
 DELETE FROM jobs WHERE kind IN ('memory_stage1', 'memory_consolidate_global');
+DELETE FROM forgotten_threads;
 `);
 }
 
@@ -154,33 +163,86 @@ VALUES (?, ?, 'pending', ?, 0, 0)
 `).run(GLOBAL_KIND, globalJobKey(cwd), DEFAULT_RETRY_REMAINING);
 }
 
+interface Stage1CandidateParams {
+	nowSec: number;
+	threadScanLimit: number;
+	maxRolloutAgeDays: number;
+	minRolloutIdleHours: number;
+	excludeThreadIds?: string[];
+	/** Only consider this project's sessions. */
+	cwd?: string;
+}
+
+interface Stage1CandidateRow {
+	id: string;
+	updated_at: number;
+	rollout_path: string;
+	cwd: string;
+	source_kind: string;
+}
+
+/** Recent, idle, not-forgotten sessions whose current content has not been read yet. */
+function stage1Candidates(db: Database, params: Stage1CandidateParams): Stage1CandidateRow[] {
+	const { nowSec, threadScanLimit, maxRolloutAgeDays, minRolloutIdleHours, excludeThreadIds = [], cwd } = params;
+	const maxAgeSec = maxRolloutAgeDays * 24 * 60 * 60;
+	const minIdleSec = minRolloutIdleHours * 60 * 60;
+	const candidateSql = `
+SELECT id, updated_at, rollout_path, cwd, source_kind FROM threads
+WHERE id NOT IN (SELECT thread_id FROM forgotten_threads)${cwd === undefined ? "" : " AND cwd = ?"}
+ORDER BY updated_at DESC LIMIT ?`;
+	const candidateArgs = cwd === undefined ? [threadScanLimit] : [normalizeScopeCwd(cwd), threadScanLimit];
+	const rows = db.prepare(candidateSql).all(...candidateArgs) as Stage1CandidateRow[];
+	const excluded = new Set(excludeThreadIds);
+	const outputAt = db.prepare("SELECT source_updated_at FROM stage1_outputs WHERE thread_id = ?");
+	return rows.filter(row => {
+		if (excluded.has(row.id)) return false;
+		if (row.source_kind !== "cli" && row.source_kind !== "app") return false;
+		if (nowSec - row.updated_at > maxAgeSec) return false;
+		if (nowSec - row.updated_at < minIdleSec) return false;
+		const stage1 = outputAt.get(row.id) as { source_updated_at?: number } | undefined;
+		return (stage1?.source_updated_at ?? 0) < row.updated_at;
+	});
+}
+
+/** How many sessions a claim with these parameters could still take, ignoring the concurrency cap. */
+export function countClaimableStage1Threads(db: Database, params: Stage1CandidateParams): number {
+	const job = db.prepare(
+		"SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark FROM jobs WHERE kind = ? AND job_key = ?",
+	);
+	let count = 0;
+	for (const row of stage1Candidates(db, params)) {
+		const state = job.get(STAGE1_KIND, row.id) as
+			| {
+					status: string;
+					lease_until: number | null;
+					retry_at: number | null;
+					retry_remaining: number;
+					input_watermark: number | null;
+					last_success_watermark: number | null;
+			  }
+			| undefined;
+		if (state) {
+			if ((state.last_success_watermark ?? 0) >= row.updated_at) continue;
+			if (state.status === "running" && state.lease_until !== null && state.lease_until > params.nowSec) continue;
+			const changed = state.input_watermark === null || state.input_watermark < row.updated_at;
+			const retryable = state.retry_remaining > 0 && (state.retry_at === null || state.retry_at <= params.nowSec);
+			if (!changed && !retryable) continue;
+		}
+		count++;
+	}
+	return count;
+}
+
 export function claimStage1Jobs(
 	db: Database,
-	params: {
-		nowSec: number;
-		threadScanLimit: number;
+	params: Stage1CandidateParams & {
 		maxRolloutsPerStartup: number;
-		maxRolloutAgeDays: number;
-		minRolloutIdleHours: number;
 		leaseSeconds: number;
 		runningConcurrencyCap: number;
 		workerId: string;
-		excludeThreadIds?: string[];
 	},
 ): Stage1Claim[] {
-	const {
-		nowSec,
-		threadScanLimit,
-		maxRolloutsPerStartup,
-		maxRolloutAgeDays,
-		minRolloutIdleHours,
-		leaseSeconds,
-		runningConcurrencyCap,
-		workerId,
-		excludeThreadIds = [],
-	} = params;
-	const maxAgeSec = maxRolloutAgeDays * 24 * 60 * 60;
-	const minIdleSec = minRolloutIdleHours * 60 * 60;
+	const { nowSec, maxRolloutsPerStartup, leaseSeconds, runningConcurrencyCap, workerId } = params;
 	const runningCountRow = db
 		.prepare(
 			"SELECT COUNT(*) AS count FROM jobs WHERE kind = ? AND status = 'running' AND lease_until IS NOT NULL AND lease_until > ?",
@@ -188,28 +250,11 @@ export function claimStage1Jobs(
 		.get(STAGE1_KIND, nowSec) as { count?: number } | undefined;
 	let runningCount = runningCountRow?.count ?? 0;
 	if (runningCount >= runningConcurrencyCap) return [];
-	const candidateRows = db
-		.prepare("SELECT id, updated_at, rollout_path, cwd, source_kind FROM threads ORDER BY updated_at DESC LIMIT ?")
-		.all(threadScanLimit) as Array<{
-		id: string;
-		updated_at: number;
-		rollout_path: string;
-		cwd: string;
-		source_kind: string;
-	}>;
+	const candidateRows = stage1Candidates(db, params);
 	const claims: Stage1Claim[] = [];
-	const excluded = new Set(excludeThreadIds);
 	for (const row of candidateRows) {
 		if (claims.length >= maxRolloutsPerStartup) break;
-		if (excluded.has(row.id)) continue;
-		if (row.source_kind !== "cli" && row.source_kind !== "app") continue;
-		if (nowSec - row.updated_at > maxAgeSec) continue;
-		if (nowSec - row.updated_at < minIdleSec) continue;
 		if (runningCount >= runningConcurrencyCap) break;
-		const stage1 = db.prepare("SELECT source_updated_at FROM stage1_outputs WHERE thread_id = ?").get(row.id) as
-			| { source_updated_at?: number }
-			| undefined;
-		if ((stage1?.source_updated_at ?? 0) >= row.updated_at) continue;
 		ensureStage1Job(db, row.id);
 		const ownershipToken = crypto.randomUUID();
 		const leaseUntil = nowSec + leaseSeconds;
@@ -518,6 +563,7 @@ FROM stage1_outputs o
 LEFT JOIN threads t ON t.id = o.thread_id
 WHERE (TRIM(COALESCE(o.raw_memory, '')) != '' OR TRIM(COALESCE(o.rollout_summary, '')) != '')
   AND t.cwd = ?
+  AND o.thread_id NOT IN (SELECT thread_id FROM forgotten_threads)
 ORDER BY o.source_updated_at DESC
 LIMIT ?
 `)
@@ -595,4 +641,180 @@ WHERE kind = ? AND job_key = ? AND status = 'running'
 `)
 		.run(nowSec, nowSec + retryDelaySeconds, reason, GLOBAL_KIND, globalJobKey(cwd), nowSec);
 	return Number(result.changes ?? 0) > 0;
+}
+
+/** A session's standing in one project's memory, joined for review surfaces. */
+export interface MemorySourceRow {
+	threadId: string;
+	updatedAt: number;
+	rolloutPath: string;
+	output?: Omit<Stage1OutputRow, "threadId" | "cwd">;
+	job?: {
+		status: string;
+		leaseUntil: number | null;
+		lastError: string | null;
+		retryAt: number | null;
+		retryRemaining: number;
+		lastSuccessWatermark: number | null;
+	};
+	forgottenAt?: number;
+}
+
+/** Every session the memory pipeline has seen for `cwd`, newest first, plus sessions forgotten there. */
+export function listMemorySources(db: Database, cwd: string): MemorySourceRow[] {
+	const scope = normalizeScopeCwd(cwd);
+	const rows = db
+		.prepare(`
+SELECT t.id AS thread_id, t.updated_at, t.rollout_path,
+	o.source_updated_at, o.raw_memory, o.rollout_summary, o.rollout_slug, o.generated_at,
+	j.status, j.lease_until, j.last_error, j.retry_at, j.retry_remaining, j.last_success_watermark,
+	f.forgotten_at
+FROM threads t
+LEFT JOIN stage1_outputs o ON o.thread_id = t.id
+LEFT JOIN jobs j ON j.kind = ? AND j.job_key = t.id
+LEFT JOIN forgotten_threads f ON f.thread_id = t.id
+WHERE t.cwd = ?
+UNION ALL
+SELECT f.thread_id, 0, '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, f.forgotten_at
+FROM forgotten_threads f
+WHERE f.cwd = ? AND f.thread_id NOT IN (SELECT id FROM threads)
+ORDER BY 2 DESC
+`)
+		.all(STAGE1_KIND, scope, scope) as Array<{
+		thread_id: string;
+		updated_at: number;
+		rollout_path: string;
+		source_updated_at: number | null;
+		raw_memory: string | null;
+		rollout_summary: string | null;
+		rollout_slug: string | null;
+		generated_at: number | null;
+		status: string | null;
+		lease_until: number | null;
+		last_error: string | null;
+		retry_at: number | null;
+		retry_remaining: number | null;
+		last_success_watermark: number | null;
+		forgotten_at: number | null;
+	}>;
+	return rows.map(row => ({
+		threadId: row.thread_id,
+		updatedAt: row.updated_at,
+		rolloutPath: row.rollout_path,
+		output:
+			row.source_updated_at === null
+				? undefined
+				: {
+						sourceUpdatedAt: row.source_updated_at,
+						rawMemory: row.raw_memory ?? "",
+						rolloutSummary: row.rollout_summary ?? "",
+						rolloutSlug: row.rollout_slug,
+						generatedAt: row.generated_at ?? 0,
+					},
+		job:
+			row.status === null
+				? undefined
+				: {
+						status: row.status,
+						leaseUntil: row.lease_until,
+						lastError: row.last_error,
+						retryAt: row.retry_at,
+						retryRemaining: row.retry_remaining ?? 0,
+						lastSuccessWatermark: row.last_success_watermark,
+					},
+		forgottenAt: row.forgotten_at ?? undefined,
+	}));
+}
+
+export interface ConsolidationJobState {
+	status: string;
+	finishedAt: number | null;
+	leaseUntil: number | null;
+	lastError: string | null;
+	retryAt: number | null;
+	retryRemaining: number;
+	/** Sources changed since the last successful consolidation. */
+	dirty: boolean;
+}
+
+/** Phase 2 job state for `cwd`, or undefined before the project's first consolidation. */
+export function readConsolidationJob(db: Database, cwd: string): ConsolidationJobState | undefined {
+	const row = db
+		.prepare(
+			"SELECT status, finished_at, lease_until, last_error, retry_at, retry_remaining, input_watermark, last_success_watermark FROM jobs WHERE kind = ? AND job_key = ?",
+		)
+		.get(GLOBAL_KIND, globalJobKey(cwd)) as
+		| {
+				status: string;
+				finished_at: number | null;
+				lease_until: number | null;
+				last_error: string | null;
+				retry_at: number | null;
+				retry_remaining: number;
+				input_watermark: number | null;
+				last_success_watermark: number | null;
+		  }
+		| undefined;
+	if (!row) return undefined;
+	return {
+		status: row.status,
+		finishedAt: row.finished_at,
+		leaseUntil: row.lease_until,
+		lastError: row.last_error,
+		retryAt: row.retry_at,
+		retryRemaining: row.retry_remaining,
+		dirty: (row.input_watermark ?? 0) > (row.last_success_watermark ?? 0),
+	};
+}
+
+/**
+ * Keep a session out of `cwd`'s memory: drop what was taken from it, never read it again (even
+ * after it changes), and mark the project for re-consolidation so the knowledge built on it goes.
+ */
+export function forgetMemorySource(db: Database, params: { threadId: string; cwd: string; nowSec: number }): void {
+	const { threadId, cwd, nowSec } = params;
+	db.transaction(() => {
+		db.prepare("INSERT OR REPLACE INTO forgotten_threads (thread_id, cwd, forgotten_at) VALUES (?, ?, ?)").run(
+			threadId,
+			normalizeScopeCwd(cwd),
+			nowSec,
+		);
+		db.prepare("DELETE FROM stage1_outputs WHERE thread_id = ?").run(threadId);
+		enqueueGlobalWatermark(db, nowSec, cwd, { forceDirtyWhenNotAdvanced: true });
+	})();
+}
+
+/** Undo {@link forgetMemorySource}: the session is read again on the next memory update. */
+export function restoreMemorySource(db: Database, threadId: string): void {
+	db.transaction(() => {
+		db.prepare("DELETE FROM forgotten_threads WHERE thread_id = ?").run(threadId);
+		db.prepare(`
+UPDATE jobs
+SET status = 'pending', input_watermark = NULL, last_success_watermark = NULL,
+	retry_at = NULL, retry_remaining = ?, last_error = NULL
+WHERE kind = ? AND job_key = ? AND NOT (status = 'running' AND lease_until IS NOT NULL AND lease_until > ?)
+`).run(DEFAULT_RETRY_REMAINING, STAGE1_KIND, threadId, Math.floor(Date.now() / 1000));
+	})();
+}
+
+/**
+ * Erase `cwd`'s memory state. The sessions in `threadIds` (the project's sessions as of now) are
+ * marked forgotten so the next update does not rebuild the same memory from them; sessions that
+ * start or change afterwards are remembered as usual.
+ */
+export function eraseProjectMemory(db: Database, params: { cwd: string; threadIds: string[]; nowSec: number }): void {
+	const scope = normalizeScopeCwd(params.cwd);
+	db.transaction(() => {
+		db.prepare("DELETE FROM stage1_outputs WHERE thread_id IN (SELECT id FROM threads WHERE cwd = ?)").run(scope);
+		db.prepare("DELETE FROM jobs WHERE kind = ? AND job_key IN (SELECT id FROM threads WHERE cwd = ?)").run(
+			STAGE1_KIND,
+			scope,
+		);
+		db.prepare("DELETE FROM jobs WHERE kind = ? AND job_key = ?").run(GLOBAL_KIND, globalJobKey(params.cwd));
+		db.prepare("DELETE FROM threads WHERE cwd = ?").run(scope);
+		const forget = db.prepare(
+			"INSERT OR REPLACE INTO forgotten_threads (thread_id, cwd, forgotten_at) VALUES (?, ?, ?)",
+		);
+		for (const threadId of params.threadIds) forget.run(threadId, scope, params.nowSec);
+	})();
 }

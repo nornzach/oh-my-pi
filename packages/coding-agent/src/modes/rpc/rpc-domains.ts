@@ -4,6 +4,7 @@
  * cases thin; all projection logic lives here. Every builder is read-only: no
  * mutation of settings, registries, or runtime state.
  */
+import * as fs from "node:fs/promises";
 import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import { MANAGED_SKILLS_PROVIDER_ID } from "../../autolearn/managed-skills";
 import { type Hook, hookCapability } from "../../capability/hook";
@@ -73,18 +74,31 @@ export async function buildRpcSkillsResult(session: AgentSession): Promise<RpcSk
 		includeSkills: [],
 		disabledExtensions: [],
 	});
-	const skills = discovered.skills.map(skill => ({
-		name: skill.name,
-		description: skill.description,
-		source: skill.source,
-		enabled: enabledNames.has(skill.name),
-		location: skill.filePath,
-		provider: skill._source?.provider ?? skill.source.split(":", 1)[0] ?? "custom",
-		providerName: skill._source?.providerName ?? skill.source.split(":", 1)[0] ?? "Custom",
-		level: skill._source?.level ?? "user",
-		managed: skill._source?.provider === MANAGED_SKILLS_PROVIDER_ID,
-		hidden: skill.hide === true,
-	}));
+	const skills = await Promise.all(
+		discovered.skills.map(async skill => {
+			const managed = skill._source?.provider === MANAGED_SKILLS_PROVIDER_ID;
+			// Learned skills change behind the user's back; hosts show when they last did.
+			const modifiedAt = managed
+				? await fs.stat(skill.filePath).then(
+						stat => stat.mtimeMs,
+						() => undefined,
+					)
+				: undefined;
+			return {
+				name: skill.name,
+				description: skill.description,
+				source: skill.source,
+				enabled: enabledNames.has(skill.name),
+				location: skill.filePath,
+				provider: skill._source?.provider ?? skill.source.split(":", 1)[0] ?? "custom",
+				providerName: skill._source?.providerName ?? skill.source.split(":", 1)[0] ?? "Custom",
+				level: skill._source?.level ?? "user",
+				managed,
+				hidden: skill.hide === true,
+				...(modifiedAt === undefined ? {} : { modifiedAt }),
+			};
+		}),
+	);
 	return { skills };
 }
 

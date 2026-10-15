@@ -7,6 +7,8 @@
 - RPC hosts can run terminals for the user (`terminal_open`, `terminal_input`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_snapshot`); after `terminal_configure`, `pty: true` bash commands open in one so the user can answer their prompts
 - RPC hosts can give the agent a `terminal` tool (`terminal_configure` with `agentTools`): it reads what the user's terminals show and runs long-lived commands (dev servers, watchers) in new terminals the user can watch and stop; `run` follows the `bash` approval rules. Only the five most recent finished agent terminals are kept
 - RPC hosts can serve the `browser` tool from their own browser view: `browser_host_start` starts a private relay the host connects to, and opens then drive the host's pages instead of launching Chromium (`headed: false` opens a background page there; explicit `app` options and `browser.cdpUrl` keep their browser). `browser.targets()` lists the view's pages, `app.target` adopts one the user opened, and the browser docs describe the view while it serves the session
+- RPC hosts can show and edit a project's local memory (`get_memory_overview`, `get_memory_activity`, `edit_memory`, `update_memory`): notes, captured lessons, the sessions memory was built from (forget or restore each), erasing the project, and updating on demand with live progress; `get_skills` reports when a managed skill last changed
+- Notes you write in a project's memory reach the agent as standing instructions for that project
 - The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 
 ### Changed

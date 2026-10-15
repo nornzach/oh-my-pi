@@ -124,6 +124,7 @@ import {
 	type RpcMcpOAuthUi,
 	RpcMcpReauthBusyError,
 } from "./rpc-mcp-extra";
+import { applyRpcMemoryEdit, applyRpcMemoryUpdate, buildRpcMemoryActivity, buildRpcMemoryOverview } from "./rpc-memory";
 import {
 	attachRpcMessageEntryIds,
 	attachRpcTranscriptEntryIds,
@@ -4232,6 +4233,39 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return success(id, "get_prompt_templates", result);
 				} catch (err: unknown) {
 					return error(id, "get_prompt_templates", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_memory_overview": {
+				try {
+					return success(id, "get_memory_overview", await buildRpcMemoryOverview(session, command.cwd));
+				} catch (err: unknown) {
+					return error(id, "get_memory_overview", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "get_memory_activity": {
+				try {
+					return success(id, "get_memory_activity", buildRpcMemoryActivity(session, command.cwd));
+				} catch (err: unknown) {
+					return error(id, "get_memory_activity", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "edit_memory": {
+				try {
+					return success(id, "edit_memory", await applyRpcMemoryEdit(session, command.edit, command.cwd));
+				} catch (err: unknown) {
+					return error(id, "edit_memory", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "update_memory": {
+				try {
+					const result = await applyRpcMemoryUpdate(session, command.cwd, command.minIdleMinutes);
+					return success(id, "update_memory", result);
+				} catch (err: unknown) {
+					return error(id, "update_memory", err instanceof Error ? err.message : String(err));
 				}
 			}
 
