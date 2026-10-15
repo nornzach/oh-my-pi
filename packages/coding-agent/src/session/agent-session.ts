@@ -253,6 +253,7 @@ import {
 	writeDeviceDispatch,
 } from "../tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
+import { createTodoHudStateData, getTodoHudVisibility, TODO_HUD_STATE_CUSTOM_TYPE } from "../tools/todo";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
@@ -9724,15 +9725,25 @@ export class AgentSession implements SettingsScope {
 		this.#syncTodoAutoClearTimer();
 	}
 
+	/** The todo list a client should show: empty once a settled list was dismissed, though the plan itself is kept. */
+	getVisibleTodoPhases(): TodoPhase[] {
+		const phases = this.#todo.phases;
+		return getTodoHudVisibility(this.sessionManager.getBranch(), phases) === "dismissed" ? [] : phases;
+	}
+
 	// ── tasks.todoClearDelay (session-side auto-clear) ─────────────────────
-	// Previously the auto-clear timer lived only in the TUI (interactive-mode),
-	// so RPC/GUI sessions never cleared closed todos — and the todo_auto_clear
-	// wire event both UIs already handle had no emitter. Now the session owns
-	// it: closed tasks are dropped after the configured delay and the event
-	// fires on the bus for every client.
+	// Upstream runs the auto-clear timer only in the TUI, so RPC/GUI sessions
+	// never cleared closed todos and the todo_auto_clear wire event had no
+	// emitter. The session owns a timer too: once a settled list has waited the
+	// configured delay, it records the same durable `todo_hud_state` dismissal
+	// the TUI writes — the plan stays, so `/todo` can reveal it again — and
+	// emits todo_auto_clear for every client. A list with no durable snapshot
+	// (host-set via `set_todos`) has nothing to reveal later, so it is dropped.
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
+	#todoAutoClearGeneration = 0;
 
 	#syncTodoAutoClearTimer(): void {
+		this.#todoAutoClearGeneration++;
 		if (this.#todoAutoClearTimer) {
 			clearTimeout(this.#todoAutoClearTimer);
 			this.#todoAutoClearTimer = undefined;
@@ -9740,13 +9751,18 @@ export class AgentSession implements SettingsScope {
 		const delaySeconds = cfgTasksTodoClearDelay.get(this.settings);
 		if (!Number.isFinite(delaySeconds) || delaySeconds < 0) return;
 		if (!this.#isTodoListSettled()) return;
+		const dismiss = () => {
+			void this.#dismissSettledTodos().catch(error => {
+				logger.warn("Failed to auto-clear settled todos", { error: String(error) });
+			});
+		};
 		if (delaySeconds === 0) {
-			this.#autoClearClosedTodos();
+			dismiss();
 			return;
 		}
 		this.#todoAutoClearTimer = setTimeout(() => {
 			this.#todoAutoClearTimer = undefined;
-			this.#autoClearClosedTodos();
+			dismiss();
 		}, delaySeconds * 1000);
 		this.#todoAutoClearTimer.unref?.();
 	}
@@ -9762,9 +9778,28 @@ export class AgentSession implements SettingsScope {
 		return seenTask;
 	}
 
-	#autoClearClosedTodos(): void {
-		if (!this.#isTodoListSettled()) return;
-		this.#todo.setPhases([]);
+	async #dismissSettledTodos(): Promise<void> {
+		const generation = this.#todoAutoClearGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		const isCurrent = () =>
+			!this.isDisposed &&
+			generation === this.#todoAutoClearGeneration &&
+			this.sessionManager.getSessionId() === sessionId &&
+			this.#isTodoListSettled();
+		// The todo result that produced this list must be on the branch before the
+		// dismissal can name it as its snapshot.
+		await this.settleInFlightMessagePersistence();
+		if (!isCurrent()) return;
+		const entries = this.sessionManager.getBranch();
+		const phases = this.#todo.phases;
+		const visibility = getTodoHudVisibility(entries, phases);
+		// The user brought this list back on purpose; it stays until it changes.
+		if (visibility === "revealed") return;
+		if (!visibility) {
+			const data = createTodoHudStateData(entries, phases, "dismissed");
+			if (data) this.sessionManager.appendCustomEntry(TODO_HUD_STATE_CUSTOM_TYPE, data);
+			else this.#todo.setPhases([]);
+		}
 		this.#emit({ type: "todo_auto_clear" });
 	}
 

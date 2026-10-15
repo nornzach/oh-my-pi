@@ -101,9 +101,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await session.sessionManager.flush();
 		expect(renderTodos(mode)).not.toContain("done task");
 		expect(renderTodos(mode)).not.toContain("abandoned task");
-		// The auto-clear timer is session-owned (RPC/GUI sessions get the
-		// todo_auto_clear event), so a delay of 0 clears the session list itself.
-		expect(session.getTodoPhases()).toEqual([]);
+		expect(session.getTodoPhases()).toEqual(phases);
 	});
 
 	/**
@@ -212,8 +210,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 		vi.advanceTimersByTime(1);
 		await session.settleInFlightMessagePersistence();
 		await session.sessionManager.flush();
-		expect(session.getTodoPhases()).toEqual([]);
-		await mode.reloadTodos();
 		expect(renderTodos(mode)).not.toContain("done task");
 	});
 

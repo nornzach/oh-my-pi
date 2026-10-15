@@ -2597,7 +2597,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						followUp: [...queuedMessages.followUp],
 						liveSteered: queuedMessages.liveSteered,
 					},
-					todoPhases: session.getTodoPhases(),
+					todoPhases: session.getVisibleTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
 					fastModeActive: session.isFastModeActive(),

@@ -4121,9 +4121,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#todoAutoClearTimer = undefined;
 			await owner.settleInFlightMessagePersistence();
 			if (!isCurrent()) return;
-			const data = createTodoHudStateData(owner.sessionManager.getBranch(), this.todoPhases, "dismissed");
-			if (!data) return;
-			owner.sessionManager.appendCustomEntry(TODO_HUD_STATE_CUSTOM_TYPE, data);
+			const branch = owner.sessionManager.getBranch();
+			// The session's own auto-clear timer may have recorded this dismissal already.
+			const visibility = getTodoHudVisibility(branch, this.todoPhases);
+			if (visibility === "revealed") return;
+			if (!visibility) {
+				const data = createTodoHudStateData(branch, this.todoPhases, "dismissed");
+				if (!data) return;
+				owner.sessionManager.appendCustomEntry(TODO_HUD_STATE_CUSTOM_TYPE, data);
+			}
 			await owner.sessionManager.flush();
 			if (!isCurrent()) return;
 			this.#todoHudHidden = true;

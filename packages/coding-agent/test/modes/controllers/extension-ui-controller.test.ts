@@ -10,6 +10,7 @@ import { ExtensionUiController } from "../../../src/modes/controllers/extension-
 import { InputController } from "../../../src/modes/controllers/input-controller";
 import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../../src/modes/types";
+import type { SessionQueuedMessage } from "../../../src/session/agent-session-types";
 
 afterEach(() => {
 	setKeybindings(KeybindingsManager.inMemory());
@@ -43,7 +44,11 @@ function makeHarness() {
 	const showOverlay = vi.fn(() => fakeHandle);
 	let uiContext: ExtensionUIContext | undefined;
 	const steering: string[] = [];
-	const sessionListeners = new Set<(event: { type: string; steering?: string[] }) => void>();
+	type QueueListener = (event: { type: string; steering?: SessionQueuedMessage[] }) => void;
+	const sessionListeners = new Set<QueueListener>();
+	// `queue_update` carries the queued entries; `getQueuedMessages()` carries their texts.
+	const queued = (): SessionQueuedMessage[] =>
+		steering.map((text, index) => ({ id: `steer-${index}`, text, editable: true, timestamp: index }));
 	const ctx = {
 		editor,
 		ui: {
@@ -58,7 +63,7 @@ function makeHarness() {
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
 			getQueuedMessages: () => ({ steering: [...steering], followUp: [], liveSteered: 0 }),
-			subscribe(listener: (event: { type: string; steering?: string[] }) => void) {
+			subscribe(listener: QueueListener) {
 				sessionListeners.add(listener);
 				return () => sessionListeners.delete(listener);
 			},
@@ -89,7 +94,7 @@ function makeHarness() {
 		/** Queue a user steer the way the session does: append, then emit `queue_update`. */
 		queueSteer(text: string): void {
 			steering.push(text);
-			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [...steering] });
+			for (const listener of sessionListeners) listener({ type: "queue_update", steering: queued() });
 		},
 		/** Deliver the queued steering at the batch boundary: the queue empties. */
 		deliverSteering(): void {
