@@ -9,7 +9,7 @@ import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import { MANAGED_SKILLS_PROVIDER_ID } from "../../autolearn/managed-skills";
 import { type Hook, hookCapability } from "../../capability/hook";
 import { templateUsesInlineArgPlaceholders } from "../../config/prompt-templates";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgDisabledExtensions } from "../../extensibility/settings";
 import { loadCapability } from "../../discovery";
 import { clearPluginRootsAndCaches, resolveOrDefaultProjectRegistryPath } from "../../discovery/helpers";
 import { PluginManager } from "../../extensibility/plugins";
@@ -121,8 +121,7 @@ function hookKey(hook: Hook): string {
  */
 export async function buildRpcHooksResult(session: AgentSession): Promise<RpcHooksResult> {
 	const cwd = session.sessionManager.getCwd();
-	const disabledExtensions =
-		(lookupSetting("disabledExtensions")?.get(session.settings) as string[] | undefined) ?? [];
+	const disabledExtensions = cfgDisabledExtensions.get(session.settings);
 	const [enabledResult, allResult] = await Promise.all([
 		loadCapability<Hook>(hookCapability.id, { cwd, disabledExtensions: [...disabledExtensions] }),
 		loadCapability<Hook>(hookCapability.id, { cwd, includeDisabled: true }),

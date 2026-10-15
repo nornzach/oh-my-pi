@@ -32,6 +32,9 @@ import { orderedSettings } from "../../config/all-settings";
 import { resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
+import { cfgSttLanguage } from "../../stt/settings";
+import { cfgSpeechVoice } from "../../tts/settings";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -2113,8 +2116,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 		// Mirror print-mode's startup arming, minus the abort-after-proposal hook.
 		if (
-			lookupSetting("plan.defaultOnStartup")?.get(session.settings) === true &&
-			lookupSetting("plan.enabled")?.get(session.settings) === true &&
+			cfgPlanDefaultOnStartup.get(session.settings) &&
+			cfgPlanEnabled.get(session.settings) &&
 			!session.sessionManager.getEntries().some(entry => entry.type === "mode_change") &&
 			!session.getPlanModeState()?.enabled
 		) {
@@ -3589,7 +3592,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
 					const selectedId = resolveRoleChain("dictation", session.settings, pool)[0]?.model.id;
 					const modelKey = resolveSttModelSpec(selectedId).key;
-					const language = lookupSetting("stt.language")?.get(session.settings) as string | undefined;
+					const language = cfgSttLanguage.get(session.settings);
 					const text = await sttClient.transcribe(modelKey, samples, {
 						language: language || undefined,
 					});
@@ -3610,8 +3613,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 							audioBase64: "",
 							mimeType: "audio/wav",
 						});
-					const voice =
-						(lookupSetting("speech.voice")?.get(session.settings) as string | undefined) || DEFAULT_TTS_VOICE;
+					const voice = cfgSpeechVoice.get(session.settings) || DEFAULT_TTS_VOICE;
 					const modelKey = resolveLocalSpeechModelId({
 						settings: session.settings,
 						registry: session.modelRegistry,

@@ -7,6 +7,7 @@ import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { Settings } from "../../config/settings";
 import { orderedSettings } from "../../config/all-settings";
+import { cfgDisabledProviders } from "../../config/model-settings";
 import { lookup as lookupSetting } from "../../config/registry";
 import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import type { AgentSession } from "../../session/agent-session";
@@ -169,8 +170,7 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 		// listStoredCredentials may not be available on all store implementations.
 	}
 
-	const disabledProvidersSetting = lookupSetting("disabledProviders");
-	const disabledProviders = new Set((disabledProvidersSetting?.get(session.settings) as string[] | undefined) ?? []);
+	const disabledProviders = new Set(cfgDisabledProviders.get(session.settings));
 
 	const providers: RpcProviderInfo[] = [];
 	for (const id of providerIds) {

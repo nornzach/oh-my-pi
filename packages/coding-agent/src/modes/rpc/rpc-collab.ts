@@ -4,7 +4,7 @@ import { CollabHost } from "../../collab/host";
 import type { ExtensionUIDialogOptions, ExtensionUISelectItem } from "../../extensibility/extensions";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { EventBus } from "../../utils/event-bus";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgCollabRelayUrl, cfgCollabWebUrl } from "../../collab/settings";
 import type { InteractiveModeContext } from "../types";
 import type { RpcCollabState, RpcCommand } from "./rpc-types";
 
@@ -93,16 +93,10 @@ export class RpcCollabController {
 		if (!this.isGuest) this.#guest = undefined;
 		if (this.#guest) throw new Error("Leave the current collab session before hosting");
 		if (this.#host) return this.state;
-		const configured =
-			relayUrl?.trim() ||
-			(lookupSetting("collab.relayUrl")?.get(this.#options.session.settings) as string | undefined) ||
-			"";
+		const configured = relayUrl?.trim() || cfgCollabRelayUrl.get(this.#options.session.settings) || "";
 		if (!configured) throw new Error("No relay configured. Set collab.relayUrl or provide a relay URL.");
 		const host = new CollabHost(this.#ctx);
-		await host.start(
-			normalizeRelayUrl(configured),
-			(lookupSetting("collab.webUrl")?.get(this.#options.session.settings) as string | undefined) || "",
-		);
+		await host.start(normalizeRelayUrl(configured), cfgCollabWebUrl.get(this.#options.session.settings) || "");
 		this.#host = host;
 		this.#ctx.collabHost = host;
 		this.#publishState();

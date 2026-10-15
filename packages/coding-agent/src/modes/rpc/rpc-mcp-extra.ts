@@ -40,7 +40,8 @@ import { addMCPServer, readMCPConfigFile, updateMCPServer } from "../../mcp/conf
 import { lookupMcpOAuthCredentialForServer, removeManagedMcpOAuthCredential } from "../../mcp/oauth-credentials";
 import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../mcp/oauth-flow";
 import type { MCPAuthConfig, MCPServerConfig, MCPServerConnection } from "../../mcp/types";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
+import { cfgBrowserEnabled } from "../../tools/browser/settings";
 import type { AgentSession } from "../../session/agent-session";
 import { buildRpcMcpServersResult } from "./rpc-domains";
 import type {
@@ -144,10 +145,9 @@ async function reloadRpcMcpServers(session: AgentSession): Promise<void> {
 			// removed/disabled servers cannot leave stale `/server:prompt` entries.
 			session.setMCPPromptCommands([]);
 			await manager.discoverAndConnect({
-				enableProjectConfig:
-					(lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
+				enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 				filterExa: true,
-				filterBrowser: (lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
+				filterBrowser: cfgBrowserEnabled.get(session.settings),
 			});
 		}
 		await session.refreshMCPTools(manager?.getTools() ?? []);

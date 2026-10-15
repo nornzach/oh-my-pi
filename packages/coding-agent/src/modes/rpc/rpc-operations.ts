@@ -3,7 +3,7 @@ import { $which, compareVersions, getSSHConfigPath, prompt, VERSION } from "@oh-
 import { reset as resetCapabilities } from "../../capability";
 import { type SSHHost, sshCapability } from "../../capability/ssh";
 import { getLatestRelease } from "../../cli/update-cli";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgSecurityEnabled } from "../../tools/settings";
 import { loadCapability } from "../../discovery";
 import securityValidationPrompt from "../../prompts/security/validate-request.md" with { type: "text" };
 import type { SecurityFinding, SecurityScanBundle } from "../../security/contracts";
@@ -127,7 +127,7 @@ export async function buildRpcSecurityDashboard(session: AgentSession): Promise<
 	const latestBundle = bundles.find((bundle): bundle is SecurityScanBundle => bundle !== null);
 	const model = session.model;
 	return {
-		enabled: lookupSetting("security.enabled")?.get(session.settings) === true,
+		enabled: cfgSecurityEnabled.get(session.settings),
 		modelReady: model !== undefined,
 		...(model ? { modelLabel: `${model.provider}/${model.id}` } : {}),
 		repositoryRoot: store.repositoryRoot,

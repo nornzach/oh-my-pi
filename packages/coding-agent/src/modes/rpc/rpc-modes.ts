@@ -12,7 +12,8 @@ import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { formatModelString } from "../../config/model-resolver";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
+import { cfgLoopMode } from "../settings";
 import type { GoalModeState } from "../../goals/state";
 import guidedGoalInterviewPrompt from "../../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
@@ -174,7 +175,7 @@ export class RpcGoalModeController {
 		if (session.getVibeModeState()?.enabled) {
 			throw new Error("Exit vibe mode first.");
 		}
-		if (!(lookupSetting("goal.enabled")?.get(session.settings) as boolean | undefined)) {
+		if (!cfgGoalEnabled.get(session.settings)) {
 			throw new Error("Goal mode is disabled. Enable it in settings (goal.enabled).");
 		}
 	}
@@ -353,12 +354,7 @@ export class RpcGoalModeController {
 	#scheduleContinuation(): void {
 		this.#cancelContinuation();
 		const session = this.#deps.session;
-		if (
-			!((lookupSetting("goal.continuationModes")?.get(session.settings) as string[] | undefined) ?? []).includes(
-				"rpc",
-			)
-		)
-			return;
+		if (!cfgGoalContinuationModes.get(session.settings).includes("rpc")) return;
 		if (session.getPlanModeState()?.enabled) return;
 		if (this.#suppressNextContinuation) return;
 		const state = session.getGoalModeState();
@@ -570,7 +566,7 @@ export class RpcLoopModeController {
 			this.#defer(() => void this.#runIteration(text));
 			return;
 		}
-		const action = lookupSetting("loop.mode")?.get(this.#deps.session.settings) as string | undefined;
+		const action = cfgLoopMode.get(this.#deps.session.settings);
 		if (action === "reset" && this.#deps.session.getVibeModeState()?.enabled) {
 			this.#disable();
 			return;

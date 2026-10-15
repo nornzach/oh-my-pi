@@ -21,7 +21,9 @@ import { MCPManager } from "../../mcp";
 import { loadAllMCPConfigs } from "../../mcp/config";
 import { readMCPConfigFile, removeMCPServer, setMcpServerEnabled } from "../../mcp/config-writer";
 import type { AgentSession } from "../../session/agent-session";
-import { lookup as lookupSetting } from "../../config/registry";
+import { cfgDisabledExtensions } from "../../extensibility/settings";
+import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
+import { cfgBrowserEnabled } from "../../tools/browser/settings";
 import { createDomainMarketplaceManager } from "./rpc-domains";
 import { capturePluginActivationState, classifyPluginActivation } from "./rpc-marketplace";
 import { serializeMcpReload } from "./rpc-mcp-extra";
@@ -38,12 +40,12 @@ async function persistDisabledExtensionsToggle(
 	enabled: boolean,
 ): Promise<boolean> {
 	const settings = session.settings;
-	const disabled = [...((lookupSetting("disabledExtensions")?.get(settings) as string[] | undefined) ?? [])];
+	const disabled = [...cfgDisabledExtensions.get(settings)];
 	const index = disabled.indexOf(extensionId);
 	if (enabled === (index === -1)) return false;
 	if (enabled) disabled.splice(index, 1);
 	else disabled.push(extensionId);
-	lookupSetting("disabledExtensions")?.set(settings, disabled as never);
+	cfgDisabledExtensions.set(settings, disabled);
 	await settings.flush();
 	return true;
 }
@@ -213,11 +215,9 @@ export async function applyRpcMcpAction(
 					await manager.disconnectAll();
 					session.setMCPPromptCommands([]);
 					await manager.discoverAndConnect({
-						enableProjectConfig:
-							(lookupSetting("mcp.enableProjectConfig")?.get(session.settings) as boolean | undefined) ?? true,
+						enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 						filterExa: true,
-						filterBrowser:
-							(lookupSetting("browser.enabled")?.get(session.settings) as boolean | undefined) ?? false,
+						filterBrowser: cfgBrowserEnabled.get(session.settings),
 					});
 				}
 				await session.refreshMCPTools(manager?.getTools() ?? []);
