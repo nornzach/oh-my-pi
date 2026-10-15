@@ -9,6 +9,7 @@
 - RPC hosts can serve the `browser` tool from their own browser view: `browser_host_start` starts a private relay the host connects to, and opens then drive the host's pages instead of launching Chromium (`headed: false` opens a background page there; explicit `app` options and `browser.cdpUrl` keep their browser). `browser.targets()` lists the view's pages, `app.target` adopts one the user opened, and the browser docs describe the view while it serves the session
 - RPC hosts can show and edit a project's local memory (`get_memory_overview`, `get_memory_activity`, `edit_memory`, `update_memory`): notes, captured lessons, the sessions memory was built from (forget or restore each), erasing the project, and updating on demand with live progress; `get_skills` reports when a managed skill last changed
 - Notes you write in a project's memory reach the agent as standing instructions for that project
+- RPC hosts can dictate from their own microphone (`dictation_start`, `dictation_audio`, `dictation_stop`, `dictation_cancel`): words come back as `dictation_*` frames while the user speaks, with the TUI's dictation models (local streaming, local, and cloud), model download progress, and `stt.submitTrigger`
 
 ### Fixed
 

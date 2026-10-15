@@ -89,6 +89,7 @@ import { applyRpcHookEnabled, applyRpcMcpAction, applyRpcPluginEnabled, applyRpc
 import { applyRpcAbortSubagent, applyRpcReviveSubagent, buildRpcAgentDefinitions } from "./rpc-agents";
 import { RpcBtwController } from "./rpc-btw";
 import { isReadOnlyCollabCommand, RpcCollabController } from "./rpc-collab";
+import { RpcDictationBridge } from "./rpc-dictation";
 import { selectRpcEntries } from "./rpc-compat";
 import { buildRpcCommandArgCompletions } from "./rpc-completions";
 import {
@@ -586,6 +587,12 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"collab_join",
 	"collab_start",
 	"debug",
+	// Dictation: start waits on the model and stop on the transcript, while audio keeps arriving;
+	// every handler is synchronous up to the controller call, so audio keeps its arrival order.
+	"dictation_audio",
+	"dictation_cancel",
+	"dictation_start",
+	"dictation_stop",
 	"eval",
 	"get_git_changes",
 	"get_git_diff",
@@ -1699,6 +1706,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const hostUriBridge = new RpcHostUriBridge(output);
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
+	const dictation = new RpcDictationBridge(session, output, {
+		isBlocked: () => (liveBridge.active ? "End live mode before dictating." : undefined),
+	});
 	const browserHost = new RpcBrowserHost();
 	const terminalHost = new RpcTerminalHost({
 		output,
@@ -1985,6 +1995,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				});
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
+			dictation.cancel();
 			await liveBridge.stop();
 			terminalHost.dispose();
 			await session.dispose();
@@ -2716,6 +2727,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "live_start": {
+				// The realtime call takes the microphone; a dictation in progress ends without its words.
+				dictation.cancel();
 				try {
 					return success(
 						id,
@@ -2734,6 +2747,30 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				await liveBridge.stop();
 				return success(id, "live_stop");
 			}
+
+			// =================================================================
+			// Live dictation
+			// =================================================================
+
+			case "dictation_start": {
+				try {
+					return success(id, "dictation_start", await dictation.start());
+				} catch (err) {
+					return error(id, "dictation_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "dictation_audio":
+				dictation.pushAudio(command.pcm16Base64);
+				return success(id, "dictation_audio");
+
+			case "dictation_stop":
+				await dictation.stop();
+				return success(id, "dictation_stop");
+
+			case "dictation_cancel":
+				dictation.cancel();
+				return success(id, "dictation_cancel");
 
 			// =================================================================
 			// Interactive terminals
@@ -4691,6 +4728,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	}
 
 	await inputTask;
+	dictation.cancel();
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();

@@ -145,6 +145,12 @@ export type RpcCommand =
 	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
 	| { id?: string; type: "live_stop" }
 	| { id?: string; type: "live_mute"; muted?: boolean }
+	// Live dictation (the host's microphone feeding the dictation model; see rpc-dictation.ts).
+	// `dictation_audio.pcm16Base64` is little-endian PCM16 mono at 16 kHz.
+	| { id?: string; type: "dictation_start" }
+	| { id?: string; type: "dictation_audio"; pcm16Base64: string }
+	| { id?: string; type: "dictation_stop" }
+	| { id?: string; type: "dictation_cancel" }
 	// Interactive terminals (host-rendered PTYs; see rpc-terminal.ts)
 	| { id?: string; type: "terminal_open"; cols?: number; rows?: number; cwd?: string }
 	| { id?: string; type: "terminal_input"; terminalId: string; data: string }
@@ -861,6 +867,54 @@ export interface RpcLiveEndFrame {
 }
 
 export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
+
+// ============================================================================
+// Dictation Frames (stdout, unsolicited; see rpc-dictation.ts)
+// ============================================================================
+
+/**
+ * `preparing`: loading (or downloading) the model, microphone audio is not yet consumed;
+ * `recording`: `dictation_audio` is transcribed live; `transcribing`: finishing after stop.
+ */
+export type RpcDictationState = "preparing" | "recording" | "transcribing" | "idle";
+
+export interface RpcDictationStateFrame {
+	type: "dictation_state";
+	state: RpcDictationState;
+}
+
+/**
+ * Edits to the host's text box. `volatile` replaces the in-progress words (not yet final);
+ * `commit` inserts final text at the dictation point and clears the volatile words; `clear` drops
+ * them; `trim` deletes `count` characters before the dictation point (a spoken submit command);
+ * `submit` sends the message, per the `stt.submitTrigger` setting.
+ */
+export type RpcDictationTextFrame =
+	| { type: "dictation_text"; op: "volatile"; text: string }
+	| { type: "dictation_text"; op: "commit"; text: string }
+	| { type: "dictation_text"; op: "clear" }
+	| { type: "dictation_text"; op: "trim"; count: number }
+	| { type: "dictation_text"; op: "submit" };
+
+/** A warning (the capture failed or cannot start) or a status line (e.g. "No speech detected."). */
+export interface RpcDictationNoticeFrame {
+	type: "dictation_notice";
+	level: "warning" | "status";
+	message: string;
+}
+
+/** Download progress of the dictation model while preparing, as an integer percent. */
+export interface RpcDictationDownloadFrame {
+	type: "dictation_download";
+	label: string;
+	percent: number;
+}
+
+export type RpcDictationFrame =
+	| RpcDictationStateFrame
+	| RpcDictationTextFrame
+	| RpcDictationNoticeFrame
+	| RpcDictationDownloadFrame;
 
 // ============================================================================
 // Terminal Frames (stdout, unsolicited; see rpc-terminal.ts)
@@ -2602,6 +2656,17 @@ export type RpcResponse =
 			data: { voice: string };
 	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
+	// Live dictation
+	| {
+			id?: string;
+			type: "response";
+			command: "dictation_start";
+			success: true;
+			data: { state: RpcDictationState };
+	  }
+	| { id?: string; type: "response"; command: "dictation_audio"; success: true }
+	| { id?: string; type: "response"; command: "dictation_stop"; success: true }
+	| { id?: string; type: "response"; command: "dictation_cancel"; success: true }
 	// Interactive terminals
 	| { id?: string; type: "response"; command: "terminal_open"; success: true; data: RpcTerminalInfo }
 	| { id?: string; type: "response"; command: "terminal_input"; success: true }
