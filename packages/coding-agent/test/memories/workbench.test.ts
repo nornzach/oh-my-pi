@@ -128,7 +128,7 @@ describe("memory workbench", () => {
 			`- newest lesson ${"n".repeat(100)}\n- older lesson ${"o".repeat(100)}\n- oldest lesson ${"x".repeat(100)}\n`,
 		);
 
-		const prompt = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		const prompt = await buildMemoryToolDeveloperInstructions(agentDir, settings.getCwd(), settings);
 		expect(prompt).toBeDefined();
 		const text = prompt as string;
 		expect(text.indexOf("Always run bun check")).toBeLessThan(text.indexOf("Summary of the project."));
