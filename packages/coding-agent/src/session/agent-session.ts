@@ -3147,7 +3147,7 @@ export class AgentSession implements SettingsScope {
 	 * from the agent registry, falling back to the task job that runs a subagent
 	 * once its registry entry is gone.
 	 */
-	getAsyncJobTree(options?: { recentLimit?: number }): AsyncJobTree | null {
+	getAsyncJobTree(options?: { recentLimit?: number; includeResults?: boolean }): AsyncJobTree | null {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
 		const rootId = this.#agentId;
@@ -3164,8 +3164,8 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		return {
-			running: running.map(job => jobSnapshotItem(job)),
-			recent: recent.map(job => jobSnapshotItem(job)),
+			running: running.map(job => jobSnapshotItem(job, options)),
+			recent: recent.map(job => jobSnapshotItem(job, options)),
 			rootId,
 			agents: [...agents.values()],
 		};

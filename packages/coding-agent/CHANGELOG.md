@@ -10,6 +10,8 @@
 - RPC hosts can show and edit a project's local memory (`get_memory_overview`, `get_memory_activity`, `edit_memory`, `update_memory`): notes, captured lessons, the sessions memory was built from (forget or restore each), erasing the project, and updating on demand with live progress; `get_skills` reports when a managed skill last changed
 - Notes you write in a project's memory reach the agent as standing instructions for that project
 - RPC hosts can dictate from their own microphone (`dictation_start`, `dictation_audio`, `dictation_stop`, `dictation_cancel`): words come back as `dictation_*` frames while the user speaks, with the TUI's dictation models (local streaming, local, and cloud), model download progress, and `stt.submitTrigger`
+- RPC `get_jobs` also returns `tree`: this agent's and its subagents' jobs nested as `/jobs` shows them
+- `/seance <session id|path> [--model selector]` works in RPC and ACP hosts, using the session's saved model unless `--model` is given
 
 ### Fixed
 

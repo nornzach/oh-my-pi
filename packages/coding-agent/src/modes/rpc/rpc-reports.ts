@@ -4,6 +4,7 @@
  * same session data source as its slash-command twin (see builtin-registry);
  * all formatting stays client-side.
  */
+import { buildJobTree } from "@oh-my-pi/pi-tui/overlays/job-tree";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../../commands/settings";
 import {
 	buildShareSnapshot,
@@ -19,6 +20,7 @@ import type {
 	RpcActiveToolsResult,
 	RpcContextReportResult,
 	RpcJobsResult,
+	RpcJobTreeRow,
 	RpcShareSessionResult,
 	RpcShareSessionPreview,
 	RpcToolSource,
@@ -117,5 +119,13 @@ export async function shareRpcSession(session: AgentSession, snapshotId?: string
 export function buildRpcJobs(session: AgentSession): RpcJobsResult {
 	const snapshot = session.getAsyncJobSnapshot({ recentLimit: 5, includeResults: true });
 	if (!snapshot) return { jobs: [] };
-	return { jobs: [...snapshot.running, ...snapshot.recent] };
+	const jobs = [...snapshot.running, ...snapshot.recent];
+	const tree = session.getAsyncJobTree({ includeResults: true });
+	if (!tree) return { jobs };
+	const rows = buildJobTree([...tree.running, ...tree.recent], tree.agents, tree.rootId).map((row): RpcJobTreeRow =>
+		row.kind === "agent"
+			? { depth: row.depth, agentId: row.agent.id }
+			: { depth: row.depth, job: row.job, ...(row.agent ? { agentId: row.agent.id } : {}) },
+	);
+	return { jobs, tree: rows };
 }

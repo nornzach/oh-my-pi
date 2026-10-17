@@ -3,14 +3,19 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import type { TaskParams, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { discoverAgents } from "../task/discovery";
-import { isBundledSeance, resolveSeanceSource } from "../task/seance";
+import { isBundledSeance, type ResolvedSeanceSource, resolveSeanceSource } from "../task/seance";
 import { SEANCE_AGENT_NAME } from "../task/seance-policy";
 import seanceCommandPrompt from "../prompts/system/seance-command.md" with { type: "text" };
 import seanceCommandSolutionSpace from "../prompts/system/seance-command-solution-space.md" with { type: "text" };
 import { parseCommandArgs } from "../utils/command-args";
 import { clearSubmittedText } from "./helpers/draft";
+import { commandConsumed, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 import type { InteractiveModeContext } from "../modes/types";
+import type { AgentSession } from "../session/agent-session";
+
+/** Where a seance reports: the TUI's status line, or a text-mode host's command output. */
+type SeanceHost = Pick<InteractiveModeContext, "showError" | "showStatus"> & { session: AgentSession };
 
 type ParsedSeanceArgs = { source: string | undefined; model: string | undefined } | { error: string };
 
@@ -36,7 +41,7 @@ function parseSeanceArgs(args: string): ParsedSeanceArgs {
 	return { source, model };
 }
 
-async function launchSeance(ctx: InteractiveModeContext, sourceSession: string, model?: string): Promise<void> {
+async function launchSeance(ctx: SeanceHost, sourceSession: string, model?: string): Promise<void> {
 	const taskTool = ctx.session.agent.state.tools.find(tool => tool.name === "task");
 	if (!taskTool) {
 		ctx.showError("The task tool is not available for /seance.");
@@ -97,6 +102,21 @@ async function launchSeance(ctx: InteractiveModeContext, sourceSession: string, 
 	}
 }
 
+/** The saved session `selector` names, once the bundled seance agent is confirmed in charge. */
+async function resolveSeanceCommandSource(
+	session: AgentSession,
+	cwd: string,
+	selector: string,
+	sessionDirHint?: string,
+): Promise<ResolvedSeanceSource> {
+	const { agents } = await discoverAgents(cwd, undefined, session.effectiveExtensionRoots);
+	const seanceAgent = agents.find(agent => agent.name === SEANCE_AGENT_NAME);
+	if (!seanceAgent || !isBundledSeance(seanceAgent)) {
+		throw new Error("A custom `seance` agent overrides the bundled one; rename it to use /seance.");
+	}
+	return resolveSeanceSource(selector, { cwd, sessionDirHint, includeGlobal: true });
+}
+
 async function chooseSeanceModel(
 	ctx: InteractiveModeContext,
 	selector: string,
@@ -104,20 +124,12 @@ async function chooseSeanceModel(
 	sessionDirHint?: string,
 ): Promise<void> {
 	try {
-		const { agents } = await discoverAgents(
+		const source = await resolveSeanceCommandSource(
+			ctx.session,
 			ctx.sessionManager.getCwd(),
-			undefined,
-			ctx.session.effectiveExtensionRoots,
-		);
-		const seanceAgent = agents.find(agent => agent.name === SEANCE_AGENT_NAME);
-		if (!seanceAgent || !isBundledSeance(seanceAgent)) {
-			throw new Error("A custom `seance` agent overrides the bundled one; rename it to use /seance.");
-		}
-		const source = await resolveSeanceSource(selector, {
-			cwd: ctx.sessionManager.getCwd(),
+			selector,
 			sessionDirHint,
-			includeGlobal: true,
-		});
+		);
 		const sourceSession = source.file;
 		if (model !== undefined) {
 			void launchSeance(ctx, sourceSession, model);
@@ -154,6 +166,29 @@ export const SEANCE_SLASH_COMMAND: SlashCommandSpec = {
 	description: "Consult a saved session without resuming it",
 	inlineHint: "[session id|path] [--model selector]",
 	allowArgs: true,
+	// Text-mode hosts (RPC, ACP) have no pickers: they name the session and use its saved model unless `--model` is given.
+	handle: async (command, runtime) => {
+		const parsed = parseSeanceArgs(command.args);
+		if ("error" in parsed) return usage(parsed.error, runtime);
+		if (!parsed.source) return usage("Usage: /seance <session id|path> [--model selector]", runtime);
+		let source: ResolvedSeanceSource;
+		try {
+			source = await resolveSeanceCommandSource(
+				runtime.session,
+				runtime.cwd,
+				parsed.source,
+				runtime.sessionManager.getSessionDir(),
+			);
+		} catch (error) {
+			return usage(sanitizeErrorLine(error), runtime);
+		}
+		const report = (text: string) => void runtime.output(text);
+		const host: SeanceHost = { session: runtime.session, showError: report, showStatus: report };
+		const launch = () => launchSeance(host, source.file, parsed.model);
+		if (runtime.runCommandInBackground) runtime.runCommandInBackground(launch);
+		else await launch();
+		return commandConsumed();
+	},
 	handleTui: async (command, runtime) => {
 		clearSubmittedText(runtime);
 		const parsed = parseSeanceArgs(command.args);

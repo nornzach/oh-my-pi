@@ -2087,12 +2087,26 @@ export interface RpcShareSessionResult {
 }
 
 /**
+ * One get_jobs tree row: a job (a task job also heads the subagent it runs), or
+ * a header for a subagent whose task job is no longer listed.
+ */
+export interface RpcJobTreeRow {
+	/** 0 for the viewing agent's own jobs; one more per subagent level. */
+	depth: number;
+	job?: AsyncJobSnapshotItem;
+	/** Registry id of the subagent this row heads. */
+	agentId?: string;
+}
+
+/**
  * Result of get_jobs: running jobs first, then recent (TUI /jobs ordering),
  * items as-is from the session's async-job snapshot. Empty when the session
  * has no job registry.
  */
 export interface RpcJobsResult {
 	jobs: AsyncJobSnapshotItem[];
+	/** This agent's and its subagents' jobs nested as the TUI /jobs tree shows them, in display order. */
+	tree?: RpcJobTreeRow[];
 }
 
 // ============================================================================

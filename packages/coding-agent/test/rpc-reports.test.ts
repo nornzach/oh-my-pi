@@ -110,6 +110,7 @@ describe("buildRpcJobs", () => {
 		];
 		const session = {
 			getAsyncJobSnapshot: () => ({ running, recent, delivery: {} }),
+			getAsyncJobTree: () => null,
 		} as unknown as AgentSession;
 
 		const { jobs } = buildRpcJobs(session);
@@ -117,6 +118,42 @@ describe("buildRpcJobs", () => {
 		expect(jobs).toEqual([...running, ...recent]);
 		expect(jobs[0]).toBe(running[0]);
 		expect(jobs[1]).toBe(recent[0]);
+	});
+
+	test("nests a subagent's jobs under the task job that runs it", () => {
+		const own: AsyncJobSnapshotItem = {
+			id: "j1",
+			type: "bash",
+			status: "running",
+			label: "npm test",
+			startTime: 100,
+		};
+		const task: AsyncJobSnapshotItem = {
+			id: "scout",
+			type: "task",
+			status: "running",
+			label: "scout",
+			startTime: 50,
+			agentId: "0-Scout",
+		};
+		const child: AsyncJobSnapshotItem = {
+			id: "j3",
+			type: "bash",
+			status: "running",
+			label: "grep",
+			startTime: 60,
+			ownerId: "0-Scout",
+		};
+		const session = {
+			getAsyncJobSnapshot: () => ({ running: [own, task], recent: [], delivery: {} }),
+			getAsyncJobTree: () => ({ running: [own, task, child], recent: [], agents: [{ id: "0-Scout" }] }),
+		} as unknown as AgentSession;
+
+		expect(buildRpcJobs(session).tree).toEqual([
+			{ depth: 0, job: task, agentId: "0-Scout" },
+			{ depth: 1, job: child },
+			{ depth: 0, job: own },
+		]);
 	});
 
 	test("empty list when the session has no job registry", () => {

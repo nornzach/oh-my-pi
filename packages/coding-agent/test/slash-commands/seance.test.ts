@@ -59,6 +59,47 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+describe("/seance in text-mode hosts", () => {
+	it("runs a named session's seance in the background with its saved model and reports through command output", async () => {
+		vi.spyOn(seanceResolver, "resolveSeanceSource").mockResolvedValue({
+			file: "/repo/.omp/sessions/old.jsonl",
+			id: "source-session",
+			modelSelectors: ["openai/saved-model"],
+		});
+		const ctx = createInteractiveModeContext();
+		const execute = vi.fn(async (_callId: string, _params: TaskParams) =>
+			taskResult({ results: [{ id: "seance-result", exitCode: 0, resolvedModel: "openai/saved-model" } as never] }),
+		);
+		registerTaskTool(ctx, execute as unknown as AgentTool["execute"]);
+		const output = vi.fn();
+		const background: (() => Promise<void>)[] = [];
+		if (!command?.handle) throw new Error("/seance text-mode handler is not registered");
+
+		const result = await command.handle({ name: "seance", args: "old", text: "/seance old" }, {
+			session: ctx.session,
+			sessionManager: ctx.sessionManager,
+			cwd: "/repo",
+			output,
+			runCommandInBackground: (task: () => Promise<void>) => background.push(task),
+		} as never);
+
+		expect(result).toEqual({ consumed: true });
+		expect(execute).not.toHaveBeenCalled();
+		await Promise.all(background.map(task => task()));
+		const params = execute.mock.calls[0]?.[1] as TaskParams | undefined;
+		expect(params?.sourceSession).toBe("/repo/.omp/sessions/old.jsonl");
+		expect(params?.model).toBeUndefined();
+		expect(output).toHaveBeenCalledWith(expect.stringContaining("seance-result"));
+	});
+
+	it("asks for a session instead of opening pickers it does not have", async () => {
+		if (!command?.handle) throw new Error("/seance text-mode handler is not registered");
+		const output = vi.fn();
+		await command.handle({ name: "seance", args: "", text: "/seance" }, { output } as never);
+		expect(output).toHaveBeenCalledWith(expect.stringContaining("Usage: /seance <session id|path>"));
+	});
+});
+
 describe("/seance", () => {
 	it("opens the model picker directly for a picked session with no saved model", async () => {
 		const picked = sourceSession("/elsewhere/.omp/sessions/no-model.jsonl");
