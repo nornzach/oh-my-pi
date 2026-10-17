@@ -76,7 +76,7 @@ export type CommandMetadataChangedListener = () => void | Promise<void>;
 /** Public summary of an asynchronous job. */
 export type AsyncJobSnapshotItem = Pick<
 	AsyncJob,
-	"id" | "type" | "status" | "label" | "startTime" | "endTime" | "endedAt" | "agentId"
+	"id" | "type" | "status" | "label" | "startTime" | "endTime" | "endedAt" | "agentId" | "ownerId"
 > & {
 	cancellationPending?: boolean;
 	resultPreview?: string;
@@ -107,6 +107,16 @@ export interface AsyncJobSnapshot {
 	running: AsyncJobSnapshotItem[];
 	recent: AsyncJobSnapshotItem[];
 	delivery: AsyncJobDeliveryState;
+}
+
+/** Jobs of an agent and every subagent below it, with the lineage that nests them (see `AgentSession.getAsyncJobTree`). */
+export interface AsyncJobTree {
+	running: AsyncJobSnapshotItem[];
+	recent: AsyncJobSnapshotItem[];
+	/** The agent the tree is for; its own jobs are the top level. */
+	rootId?: string;
+	/** Subagents owning listed jobs, with the ancestors linking them to the root. */
+	agents: { id: string; parentId?: string }[];
 }
 
 export type { ShakeMode, ShakeResult } from "./shake-types";
@@ -215,6 +225,8 @@ export interface AgentSessionConfig {
 	unexpectedStopJudgeTimeoutMs?: number;
 	/** Prewalk from the starting model to a fast/cheap target after implementation begins. */
 	prewalk?: Prewalk;
+	/** Keep `prewalk.auto` away from this session until `/new` (`--no-prewalk`). */
+	suppressAutoPrewalk?: boolean;
 	/** Force read-only plan mode at start, auto-approve, then switch to the target. */
 	planYolo?: PlanYolo;
 	/** Initial per-family service tiers for the live session. */

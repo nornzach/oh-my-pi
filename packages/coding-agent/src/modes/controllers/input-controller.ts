@@ -4,6 +4,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type AutocompleteProvider,
 	type Component,
+	emergencyTerminalRestore,
 	matchesKey,
 	parseSgrMouse,
 	type PasteOptions,
@@ -166,11 +167,16 @@ const OMP_STATUS_LINE_RE = /^\s*in:\s+\d+\s+out:\s+\d+(?:\s+cache\s+\S+)?\s+t:\s
 /**
  * Read-only slash commands that also run from a focused subagent view, keyed by name to
  * a check on their arguments; every other command (and mutating forms such as
- * `/usage reset`, which spends a saved rate-limit reset) still needs the main session.
+ * `/usage reset`, which spends a saved rate-limit reset, or `/jobs kill`, which cancels
+ * a running job) still needs the main session.
  */
 const FOCUSED_VIEW_COMMANDS: Record<string, (args: string) => boolean> = {
 	btw: () => true,
 	export: () => true,
+	jobs: args => {
+		const { verb, rest } = parseSubcommand(args);
+		return !verb || (verb === "full" && !rest);
+	},
 	usage: args => {
 		const { verb, rest } = parseSubcommand(args);
 		return !verb || (verb === "show" && !rest);
@@ -732,6 +738,9 @@ export class InputController {
 
 		this.ctx.editor.onChange = (text: string) => {
 			this.#draftText = text;
+			// Typing signals an imminent turn; refresh the API connection now so
+			// the handshake overlaps composition instead of delaying the send.
+			if (text) this.ctx.session.prewarmModelConnection();
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
@@ -962,8 +971,9 @@ export class InputController {
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (slash/bash/python, loop,
-			// compaction queueing) is main-session-only.
-			if (this.ctx.focusedAgentId) {
+			// compaction queueing) is main-session-only. A tool-approval dialog
+			// owning the composer is the main session's, so its draft steers main.
+			if (this.ctx.focusedAgentId && !this.ctx.approvalOwnsComposer) {
 				if (initialQueueBody !== undefined) {
 					await this.#submitToFocusedSession(initialQueueBody, "followUp");
 					return;
@@ -1445,7 +1455,8 @@ export class InputController {
 			const parsed = parseSlashCommand(text);
 			if (parsed && FOCUSED_VIEW_COMMANDS[parsed.name]?.(parsed.args)) {
 				// Viewer-scoped commands: /btw asks about the focused transcript, /export
-				// writes it (with its own subagents), /usage reports account-wide limits.
+				// writes it (with its own subagents), /jobs lists the focused agent's jobs
+				// without a way to cancel them, /usage reports account-wide limits.
 				this.#recordSlashCommandUsage(text);
 				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx })) === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
@@ -1509,7 +1520,11 @@ export class InputController {
 		if (this.ctx.isShuttingDown) {
 			// Route through postmortem: this hard-abort can fire while an
 			// extension-load guard window is open, where raw process.exit is a
-			// throwing ExtensionExitError stub (#11789).
+			// throwing ExtensionExitError stub (#11789). exitProcess skips the
+			// postmortem cleanups, so hand the terminal back first: shutdown() has
+			// not reached ui.stop() yet, and a kitty keyboard frame left pushed
+			// makes the parent shell receive Ctrl+C as `CSI 99;5u` (prints `9;5u`).
+			emergencyTerminalRestore();
 			postmortem.exitProcess(130); // 128 + SIGINT
 		}
 
@@ -1873,7 +1888,7 @@ export class InputController {
 		if (!text && !images) return;
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
-		if (this.ctx.focusedAgentId) {
+		if (this.ctx.focusedAgentId && !this.ctx.approvalOwnsComposer) {
 			await this.#submitToFocusedSession(text, "followUp");
 			return;
 		}
@@ -2622,6 +2637,7 @@ export class InputController {
 					cwd: manager.getCwd(),
 					sessionId: manager.getSessionId(),
 					sessionFile: manager.getSessionFile(),
+					seanceSourceArtifactsDir: manager.getSeanceSourceArtifactsDir() ?? undefined,
 				};
 			},
 			keybindings: this.ctx.keybindings,

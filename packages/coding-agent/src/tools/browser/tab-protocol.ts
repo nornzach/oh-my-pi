@@ -47,6 +47,8 @@ export type WorkerInitPayload =
 			mode: "headless";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			/** Keep the page tied to an OMP-owned worker without pinning a visible window's layout viewport. */
 			emulateViewport?: boolean;
 			/** Headless fingerprint patches (user agent, automation markers); `false` for a real visible browser. */
@@ -70,6 +72,8 @@ export type WorkerInitPayload =
 			mode: "attach";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
 			/** Hostname patterns allowed for every page request. */
@@ -139,6 +143,12 @@ export interface RunErrorPayload {
 	navigationTimeout?: boolean;
 	/** The page's renderer crashed; the worker runs nothing more and must be recycled. */
 	rendererCrashed?: boolean;
+	/**
+	 * Chrome ended the debugger attachment the page is driven through (omp browser relay) `during` this run, after
+	 * its code started, or `before` it, so nothing ran; the worker runs nothing more. `reason` is Chrome's
+	 * (`target_closed`, `canceled_by_user`): after a user cancel the relay hides the tab, otherwise it is re-adopted.
+	 */
+	debuggerDetached?: { when: "during" | "before"; reason: string };
 }
 
 export type WorkerOutbound =

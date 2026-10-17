@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [18.11.3] - 2026-10-16
+
+### Added
+
+- `prepareQueuedMessages` receives which queue (`steering` or `followUp`) a batch came from ([#16026](https://github.com/can1357/oh-my-pi/pull/16026))
+
+## [18.11.2] - 2026-10-16
+
+### Added
+
+- `agent_start` carries `resumedToolCallIds` when a continued run first executes the calls of an unpaired assistant tail
+
+### Fixed
+
+- Cancelling an `ask` after a background job finishes now reports the user cancellation instead of telling the model to retry a skipped tool ([#15985](https://github.com/can1357/oh-my-pi/issues/15985))
+
+## [18.11.1] - 2026-10-15
+
+### Added
+
+- `Tokenizer.countLatestTurn`: counts a message as the transcript's latest assistant turn, which an Anthropic Messages replay keeps byte-for-byte ([#15791](https://github.com/can1357/oh-my-pi/pull/15791) by [@will-bogusz](https://github.com/will-bogusz))
+- `Agent.prioritizeSteering`: moves given pending steering messages ahead of older ones so one-at-a-time delivery takes them first ([#15642](https://github.com/can1357/oh-my-pi/pull/15642))
+
+### Fixed
+
+- Fixed a Cursor tool call re-sent by the server persisting two results under one id; the re-run's result replaces the first ([#15749](https://github.com/can1357/oh-my-pi/issues/15749))
+- Fixed compaction keeping more recent history than `keepRecentTokens` when the latest Claude turn on the Anthropic Messages API ended its tool calls on `stop` or `length`: the replay keeps that turn's signed reasoning, but the cut point counted only its visible blocks ([#15791](https://github.com/can1357/oh-my-pi/pull/15791) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.11.0] - 2026-10-14
 
 ### Breaking Changes

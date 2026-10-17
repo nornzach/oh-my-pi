@@ -14,7 +14,6 @@ import type {
 	Model,
 	ModelUsageHealth,
 	TextContent,
-	ThinkingContent,
 	ToolChoice,
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
@@ -51,7 +50,7 @@ import type {
 	UsageFallbackConfirmation,
 	UsageFallbackConfirmer,
 } from "./agent-session-types";
-import { assistantTurnProducedOutput, isEmptyAssistantStop, isEmptyErrorTurn } from "./messages";
+import { assistantTurnProducedOutput, isEmptyAssistantStop, isEmptyErrorTurn, operatorTitleText } from "./messages";
 import {
 	type ActiveRetryFallbackState,
 	calculateRetryBackoffDelayMs,
@@ -1113,28 +1112,28 @@ export class TurnRecovery {
 			return false;
 		}
 
-		let text = assistantMessage.content
+		const text = assistantMessage.content
 			.filter((content): content is TextContent => content.type === "text")
 			.map(content => content.text)
 			.join("\n");
-		const hasTextContent = hasNonWhitespace(text);
 
 		// A thinking-only terminal turn has no visible assistant message, so both
-		// mechanical and smart modes retry it directly. Tool-call turns never reach
-		// this path: isUnexpectedStopCandidate excludes them, including forced tools.
-		if (!hasTextContent) {
-			text = assistantMessage.content
-				.filter((content): content is ThinkingContent => content.type === "thinking")
-				.map(content => content.thinking)
-				.join("\n");
-			if (!hasNonWhitespace(text)) {
+		// mechanical and smart modes retry it directly, whether or not the provider
+		// exposed its reasoning text. Only a turn with visible text is gated on the
+		// mode and the judge. Tool-call turns never reach this path:
+		// isUnexpectedStopCandidate excludes them, including forced tools.
+		if (hasNonWhitespace(text)) {
+			if (mode === "mechanical") {
 				this.#unexpectedStopRetryCount = 0;
 				return false;
 			}
-		} else if (mode === "mechanical") {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		} else {
+			// This turn answers a stop nudge, which demands the next tool call or
+			// the final answer. Visible text without a tool call is that final
+			// answer; judging it again only chains no-op "nothing more to add" turns.
+			if (this.#unexpectedStopRetryCount > 0) {
+				this.#unexpectedStopRetryCount = 0;
+				return false;
+			}
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), this.#unexpectedStopJudgeTimeoutMs);
 			// Esc/session teardown must interrupt the extended judge wait: link the
@@ -1143,9 +1142,10 @@ export class TurnRecovery {
 			const sessionSignal = this.#host.unexpectedStopAbortSignal?.();
 			const onSessionAbort = (): void => controller.abort();
 			sessionSignal?.addEventListener("abort", onSessionAbort, { once: true });
+			const stop = { message: text, request: this.#latestOperatorRequest() };
 			let classification: boolean | undefined;
 			try {
-				classification = await classifyUnexpectedStop(text, {
+				classification = await classifyUnexpectedStop(stop, {
 					settings: this.#host.settings,
 					registry: this.#host.modelRegistry,
 					sessionId: this.#host.sessionId(),
@@ -1190,6 +1190,16 @@ export class TurnRecovery {
 			generation: this.#host.promptGeneration(),
 		});
 		return true;
+	}
+
+	/** The operator's latest typed request, which a text-only stop is judged against. */
+	#latestOperatorRequest(): string | undefined {
+		const messages = this.#host.agent.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const request = operatorTitleText(messages[i]!);
+			if (request !== undefined) return request;
+		}
+		return undefined;
 	}
 
 	#unexpectedStopRetryReminder(): string {
