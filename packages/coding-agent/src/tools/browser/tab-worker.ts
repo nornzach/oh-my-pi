@@ -1714,7 +1714,7 @@ export class WorkerCore {
 					targetId => {
 						this.#transport.send({ type: "page-created", targetId });
 					},
-					payload.background === true,
+					payload.mode === "headless" && payload.background === true,
 				);
 				this.#observeDialogs();
 				if (payload.mode === "headless") {

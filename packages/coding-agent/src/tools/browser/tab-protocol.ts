@@ -109,22 +109,6 @@ export type WorkerInitPayload =
 			 * names, since the user's own downloads land there too. Unset means an OMP-launched browser.
 			 */
 			userDriven?: boolean;
-			/**
-			 * A page visible in a host panel (the GUI's embedded browser): the agent's
-			 * screenshots must not activate/focus-steal the page the user is looking at.
-			 * `false` skips the activation step in `preparePageForScreenshot`.
-			 */
-			activateForScreenshot?: boolean;
-			/**
-			 * A host-panel page may be created without showing it (a background panel tab).
-			 * `browser.newPage` forwards it to the relay's `Target.createTarget`.
-			 */
-			background?: boolean;
-			/**
-			 * Emulate a focused page for an omp-owned attached page; unset means borrowed
-			 * pages keep their real focus state.
-			 */
-			emulateFocus?: boolean;
 	  };
 
 /** Result of one host tool requested by browser-run JavaScript. */

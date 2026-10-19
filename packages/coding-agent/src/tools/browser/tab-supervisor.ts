@@ -129,7 +129,6 @@ interface TabSessionBase<TBrowser extends BrowserHandle = BrowserHandle> {
 export interface WorkerTabSession extends TabSessionBase<PuppeteerBrowserHandle> {
 	backend: "worker";
 	worker: WorkerHandle;
-	activateForScreenshot: boolean;
 	/** A recycle gave the tab a worker that adopted its page instead of creating it; that worker's close leaves the page open. */
 	reattached?: boolean;
 	/** omp created this page (headless Chromium, a relay open without a target, or a page in the host's browser panel): closing the tab closes it. */
@@ -620,7 +619,6 @@ async function acquireTabImpl(
 		dialogPolicy: opts.dialogs,
 		allowedDomains: opts.allowedDomains ? [...opts.allowedDomains] : undefined,
 		kindTag: browser.kind.kind,
-		activateForScreenshot: initPayload.mode === "headless" || initPayload.activateForScreenshot !== false,
 		ownsPage: ownsPage(initPayload),
 		ownerSessionId: opts.ownerSessionId,
 		persist: opts.persist ?? false,
@@ -2061,8 +2059,6 @@ async function recycleTimedOutWorkerTab(
 		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
 		// otherwise init stalls, times out, and the tab gets force-killed.
 		recover: opts.recover ?? true,
-		emulateFocus: tab.ownsPage,
-		activateForScreenshot: tab.activateForScreenshot,
 		userDriven: tab.kindTag === "connected" || tab.kindTag === "relay",
 	};
 	// A release can land while the new worker starts: it tore down the worker it saw, so a
