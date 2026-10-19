@@ -55,9 +55,32 @@ export interface RpcTerminalHostOptions {
 	scrollbackChars?: number;
 }
 
+/**
+ * Drives a terminal whose screen comes from in-process code (an extension's
+ * TUI component) instead of a process: the host's keystrokes and size go here.
+ */
+export interface VirtualTerminalCallbacks {
+	onInput(data: string): void;
+	onResize(cols: number, rows: number): void;
+	/** The user closed the terminal while it was live. */
+	onClose(): void;
+}
+
+/** The writable side of a terminal from {@link RpcTerminalHost.openVirtual}. */
+export interface VirtualTerminalHandle {
+	readonly terminalId: string;
+	readonly cols: number;
+	readonly rows: number;
+	write(data: string): void;
+	/** The screen's owner finished; the terminal stays, read-only, until the host closes it. */
+	finish(): void;
+}
+
 interface TerminalEntry {
 	info: RpcTerminalInfo;
-	session: PtySession;
+	/** Absent for a virtual terminal, whose screen comes from {@link virtual}'s owner. */
+	session: PtySession | undefined;
+	virtual?: VirtualTerminalCallbacks;
 	pending: string;
 	/** Characters sent in `terminal_output` frames so far (the last frame's `seq`). */
 	emitted: number;
@@ -144,7 +167,7 @@ export class RpcTerminalHost {
 		let spawned = false;
 		let run: Promise<PtyRunResult>;
 		try {
-			run = entry.session.startArgv(
+			run = (entry.session as PtySession).startArgv(
 				{ application: environment.shell, args: environment.args, cwd, env: environment.env, cols, rows },
 				(err, chunk) => {
 					if (!err && chunk) this.#append(entry, chunk);
@@ -193,6 +216,87 @@ export class RpcTerminalHost {
 	}
 
 	/**
+	 * Run one argv command the host asked for (an omp subcommand with its own
+	 * terminal UI) in a revealed terminal; resolves once it is spawned.
+	 */
+	async runArgv(request: { title: string; application: string; args: string[] }): Promise<RpcTerminalInfo> {
+		if (this.#disposed) throw new Error("Terminal host is shut down");
+		const environment = await this.#environment();
+		const { cols, rows } = clampSize(undefined, undefined);
+		const entry = this.#create({ kind: "command", title: request.title, cwd: environment.cwd, cols, rows });
+		const session = entry.session as PtySession;
+		const started = Promise.withResolvers<void>();
+		let spawned = false;
+		let run: Promise<PtyRunResult>;
+		try {
+			run = session.startArgv(
+				{
+					application: request.application,
+					args: request.args,
+					cwd: environment.cwd,
+					env: environment.env,
+					cols,
+					rows,
+				},
+				(err, chunk) => {
+					if (!err && chunk) this.#append(entry, chunk);
+				},
+				(err, pid) => {
+					if (err) return;
+					spawned = true;
+					entry.info.pid = pid;
+					started.resolve();
+				},
+			);
+		} catch (error) {
+			this.#terminals.delete(entry.info.terminalId);
+			throw error;
+		}
+		run.then(
+			result => {
+				started.resolve();
+				this.#exited(entry, result);
+			},
+			(error: unknown) => {
+				if (!spawned) {
+					this.#terminals.delete(entry.info.terminalId);
+					started.reject(error);
+					return;
+				}
+				this.#append(entry, `\r\n[terminal failed: ${error instanceof Error ? error.message : String(error)}]\r\n`);
+				this.#exited(entry, { exitCode: undefined, cancelled: false, timedOut: false });
+			},
+		);
+		await started.promise;
+		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, reveal: true });
+		return { ...entry.info };
+	}
+
+	/**
+	 * Open a revealed terminal with no process behind it: the caller paints it
+	 * through the returned handle and receives the host's input and size.
+	 */
+	openVirtual(title: string, callbacks: VirtualTerminalCallbacks): VirtualTerminalHandle {
+		if (this.#disposed) throw new Error("Terminal host is shut down");
+		const { cols, rows } = clampSize(undefined, undefined);
+		const entry = this.#create({ kind: "command", title, cwd: "", cols, rows }, callbacks);
+		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, reveal: true });
+		return {
+			terminalId: entry.info.terminalId,
+			get cols() {
+				return entry.info.cols;
+			},
+			get rows() {
+				return entry.info.rows;
+			},
+			write: data => {
+				if (entry.info.running) this.#append(entry, data);
+			},
+			finish: () => this.#exited(entry, { exitCode: 0, cancelled: false, timedOut: false }),
+		};
+	}
+
+	/**
 	 * Start a long-lived command the agent launched (a dev server, a watcher)
 	 * where the host can show it. Resolves once the process is spawned; it runs
 	 * on, independent of any tool call, until it exits or {@link kill}.
@@ -219,7 +323,7 @@ export class RpcTerminalHost {
 	): { entry: TerminalEntry; run: Promise<PtyRunResult> } {
 		const { cols, rows } = clampSize(undefined, undefined);
 		const entry = this.#create({ kind, title: commandTitle(request.command), cwd: request.cwd, cols, rows });
-		const run = entry.session
+		const run = (entry.session as PtySession)
 			.start(
 				{
 					command: request.command,
@@ -261,8 +365,12 @@ export class RpcTerminalHost {
 	input(terminalId: string, data: string): void {
 		const entry = this.#require(terminalId);
 		if (!entry.info.running) return;
+		if (entry.virtual) {
+			entry.virtual.onInput(data);
+			return;
+		}
 		try {
-			entry.session.write(data);
+			entry.session?.write(data);
 		} catch {
 			// The process exited between the check and the write.
 		}
@@ -274,8 +382,12 @@ export class RpcTerminalHost {
 		entry.info.cols = size.cols;
 		entry.info.rows = size.rows;
 		if (!entry.info.running) return;
+		if (entry.virtual) {
+			entry.virtual.onResize(size.cols, size.rows);
+			return;
+		}
 		try {
-			entry.session.resize(size.cols, size.rows);
+			entry.session?.resize(size.cols, size.rows);
 		} catch {
 			// Not started yet or already exited; the next resize applies.
 		}
@@ -289,8 +401,14 @@ export class RpcTerminalHost {
 			return;
 		}
 		entry.closeRequested = true;
+		if (entry.virtual) {
+			// The owner's cleanup finishes the entry, which then forgets it.
+			entry.virtual.onClose();
+			this.#exited(entry, { exitCode: undefined, cancelled: true, timedOut: false });
+			return;
+		}
 		try {
-			entry.session.kill();
+			entry.session?.kill();
 		} catch {
 			// Already gone; the exit path forgets it.
 		}
@@ -300,8 +418,13 @@ export class RpcTerminalHost {
 	kill(terminalId: string): void {
 		const entry = this.#require(terminalId);
 		if (!entry.info.running) return;
+		if (entry.virtual) {
+			entry.virtual.onClose();
+			this.#exited(entry, { exitCode: undefined, cancelled: true, timedOut: false });
+			return;
+		}
 		try {
-			entry.session.kill();
+			entry.session?.kill();
 		} catch {
 			// Already gone; the exit path records it.
 		}
@@ -387,8 +510,12 @@ export class RpcTerminalHost {
 		for (const entry of this.#terminals.values()) {
 			if (entry.flushTimer) clearTimeout(entry.flushTimer);
 			if (!entry.info.running) continue;
+			if (entry.virtual) {
+				entry.virtual.onClose();
+				continue;
+			}
 			try {
-				entry.session.kill();
+				entry.session?.kill();
 			} catch {
 				// Already gone.
 			}
@@ -396,12 +523,16 @@ export class RpcTerminalHost {
 		this.#terminals.clear();
 	}
 
-	#create(info: Pick<RpcTerminalInfo, "kind" | "title" | "cwd" | "cols" | "rows">): TerminalEntry {
+	#create(
+		info: Pick<RpcTerminalInfo, "kind" | "title" | "cwd" | "cols" | "rows">,
+		virtual?: VirtualTerminalCallbacks,
+	): TerminalEntry {
 		const terminalId = `term-${this.#idPrefix}-${this.#nextId++}`;
 		const entry: TerminalEntry = {
 			info: { terminalId, ...info, running: true },
 			emitted: 0,
-			session: new PtySession(),
+			session: virtual ? undefined : new PtySession(),
+			virtual,
 			pending: "",
 			flushTimer: undefined,
 			scrollback: "",

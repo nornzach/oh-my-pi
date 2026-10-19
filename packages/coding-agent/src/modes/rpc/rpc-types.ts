@@ -153,6 +153,10 @@ export type RpcCommand =
 	| { id?: string; type: "dictation_cancel" }
 	// Interactive terminals (host-rendered PTYs; see rpc-terminal.ts)
 	| { id?: string; type: "terminal_open"; cols?: number; rows?: number; cwd?: string }
+	/** Run an omp subcommand that brings its own terminal UI in a revealed terminal. */
+	| { id?: string; type: "terminal_run_cli"; subcommand: RpcTerminalCliSubcommand; args?: string[] }
+	/** Open a TUI-only screen in a revealed terminal; resolves once it is showing. */
+	| { id?: string; type: "tui_open"; surface: RpcTuiSurface }
 	| { id?: string; type: "terminal_input"; terminalId: string; data: string }
 	| { id?: string; type: "terminal_resize"; terminalId: string; cols: number; rows: number }
 	| { id?: string; type: "terminal_close"; terminalId: string }
@@ -252,6 +256,10 @@ export type RpcCommand =
 	| { id?: string; type: "branch"; entryId: string }
 	| { id?: string; type: "fork"; entryId?: string }
 	| { id?: string; type: "get_branch_messages" }
+	| { id?: string; type: "get_config_warnings" }
+	| { id?: string; type: "get_advisor_status" }
+	| { id?: string; type: "list_reset_credits" }
+	| { id?: string; type: "redeem_reset_credit"; target: RpcResetCreditTarget; label: string }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "get_copy_targets" }
 	| {
@@ -921,6 +929,60 @@ export type RpcDictationFrame =
 // ============================================================================
 
 /** One host-rendered terminal. */
+/** `get_advisor_status`: the roster behind the TUI's advisor eye badge, plus advisor spend. */
+export interface RpcAdvisorStatus {
+	/** `advisor.enabled` is on; `advisors` lists the configured roster either way. */
+	configured: boolean;
+	advisors: Array<{
+		name: string;
+		status: "running" | "paused" | "quota_exhausted" | "error" | "no_model";
+		/** Every comment on the yielded primary turn is in; none arrive until the next turn. */
+		yielded: boolean;
+	}>;
+	/** Cumulative advisor cost recorded for this session, in USD. */
+	cost: number;
+	usingSubscription: boolean;
+}
+
+/** A saved-reset option bound to one stored credential; pass back unchanged to `redeem_reset_credit`. */
+export interface RpcResetCreditTarget {
+	provider: string;
+	credentialId: number;
+	creditId?: string;
+	accountId?: string;
+	email?: string;
+	orgId?: string;
+}
+
+/** One provider account row of `list_reset_credits`, active account first. */
+export interface RpcResetCreditAccount {
+	label: string;
+	provider: string;
+	providerLabel: string;
+	/** Banked resets, including grants that cannot be spent right now. */
+	availableCount: number;
+	/** Resets the provider currently permits this account to spend. */
+	redeemableCount: number;
+	target: RpcResetCreditTarget;
+	active: boolean;
+	error?: string;
+	unavailableReason?: string;
+	expiresAt?: string;
+}
+
+/** `redeem_reset_credit`: whether a reset was applied, plus the TUI's human-facing summary. */
+export interface RpcResetCreditRedeemResult {
+	ok: boolean;
+	code: string;
+	message: string;
+}
+
+/** omp subcommands `terminal_run_cli` may launch: each renders its own full-screen terminal UI. */
+export type RpcTerminalCliSubcommand = "git" | "cleanse";
+
+/** TUI-only screens `tui_open` hosts in a terminal view. */
+export type RpcTuiSurface = "advisor_config";
+
 export interface RpcTerminalInfo {
 	terminalId: string;
 	/**
@@ -2601,6 +2663,34 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "get_config_warnings";
+			success: true;
+			data: { warnings: string[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_advisor_status";
+			success: true;
+			data: RpcAdvisorStatus;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_reset_credits";
+			success: true;
+			data: { accounts: RpcResetCreditAccount[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "redeem_reset_credit";
+			success: true;
+			data: RpcResetCreditRedeemResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "get_last_assistant_text";
 			success: true;
 			data: { text: string | null };
@@ -2683,6 +2773,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "dictation_cancel"; success: true }
 	// Interactive terminals
 	| { id?: string; type: "response"; command: "terminal_open"; success: true; data: RpcTerminalInfo }
+	| { id?: string; type: "response"; command: "terminal_run_cli"; success: true; data: RpcTerminalInfo }
+	| { id?: string; type: "response"; command: "tui_open"; success: true }
 	| { id?: string; type: "response"; command: "terminal_input"; success: true }
 	| { id?: string; type: "response"; command: "terminal_resize"; success: true }
 	| { id?: string; type: "response"; command: "terminal_close"; success: true }

@@ -1911,6 +1911,9 @@ export async function runRootCommand(
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// RPC hosts have no stderr reader for startup warnings; collect them like the TUI
+		// does and hand them to the session, where `get_config_warnings` reports them.
+		const collectsStartupNotices = isInteractive || mode === "rpc" || mode === "rpc-ui";
 		// Before session resolution: resume, fork, and import act on these same
 		// startup-parse flags, so rejecting later would leave forked or imported
 		// transcripts (or an opened picker) behind a usage error.
@@ -2325,7 +2328,7 @@ export async function runRootCommand(
 		sessionOptions.autoTitle = isInteractive;
 		sessionOptions.settings = settingsInstance;
 		sessionOptions.onPrewalkWarning = warning => {
-			if (isInteractive) notifs.push({ kind: "warn", message: warning });
+			if (collectsStartupNotices) notifs.push({ kind: "warn", message: warning });
 			else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 		};
 
@@ -2443,7 +2446,7 @@ export async function runRootCommand(
 				);
 			}
 			for (const message of formatExtensionLoadNotifications(extensionsResult.errors)) {
-				if (isInteractive) {
+				if (collectsStartupNotices) {
 					notifs.push({ kind: "warn", message });
 				} else {
 					process.stderr.write(`${chalk.yellow(`${message}\n`)}`);
@@ -2636,7 +2639,7 @@ export async function runRootCommand(
 
 			const modelRegistryError = modelRegistry.getError();
 			for (const warning of modelRegistry.drainConfigWarnings()) {
-				if (isInteractive) notifs.push({ kind: "warn", message: warning });
+				if (collectsStartupNotices) notifs.push({ kind: "warn", message: warning });
 				else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 			}
 			if (modelRegistryError) {
@@ -2687,6 +2690,15 @@ export async function runRootCommand(
 			if (mode === "rpc" || mode === "rpc-ui") {
 				// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
 				const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+				const advisorConfigWarnings = session.getAdvisorConfigWarnings();
+				if (advisorConfigWarnings.length > 0) {
+					session.configWarnings.push(
+						`WATCHDOG.yml: ${sanitizeDisplayWarnings(advisorConfigWarnings).join("; ")}`,
+					);
+				}
+				for (const notify of notifs) {
+					if (notify && notify.kind !== "info") session.configWarnings.push(notify.message);
+				}
 				stopStartupWatchdog();
 				logger.endTiming();
 				await runRpcMode(session, {

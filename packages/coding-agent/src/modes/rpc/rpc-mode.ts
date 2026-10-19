@@ -39,6 +39,7 @@ import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
 	type ExtensionAskDialogSubmitResult,
+	type ExtensionCustomOptions,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
@@ -67,6 +68,7 @@ import { setSessionPinned } from "../../session/session-pins";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
+import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { sttClient } from "../../stt/asr-client";
 import { resolveSttModelSpec } from "../../stt/models";
 import type { ToolSession } from "../../tools";
@@ -117,6 +119,8 @@ import { RpcGoalController } from "./rpc-goal";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcTerminalHost, resolveTerminalShell } from "./rpc-terminal";
+import { resolveCliEntryCmd } from "../../subprocess/worker-client";
+import { createAdvisorConfigOverlay } from "../advisor-config-overlay";
 import { TerminalTool } from "./rpc-terminal-tool";
 import { RpcBrowserHost } from "./rpc-browser-host";
 import { applyRpcMarketplaceAction } from "./rpc-marketplace";
@@ -206,6 +210,7 @@ import { buildRpcSessionTree } from "./rpc-session-tree";
 import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
+import { type HostedComponentFactory, showHostedComponent } from "./rpc-custom-ui";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableModelsResult,
@@ -229,6 +234,7 @@ import type {
 	RpcSessionState,
 	RpcSettingProvenance,
 	RpcSubagentSubscriptionLevel,
+	RpcTerminalCliSubcommand,
 } from "./rpc-types";
 import {
 	applyRpcAddDirectory,
@@ -585,6 +591,9 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
  * `btw` still starting or a long serial command.
  * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
+/** omp subcommands `terminal_run_cli` launches; a Set so untrusted input never reaches prototype keys. */
+const TERMINAL_CLI_SUBCOMMANDS: ReadonlySet<string> = new Set<RpcTerminalCliSubcommand>(["git", "cleanse"]);
+
 const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"bash",
 	"collab_join",
@@ -614,6 +623,9 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"pr_list",
 	"pr_repo",
 	"predict_word",
+	// Both reach the provider's reset-credit API.
+	"list_reset_credits",
+	"redeem_reset_credit",
 	"security_start",
 	"ssh_test",
 	"synthesize_speech",
@@ -631,6 +643,8 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"terminal_list",
 	"terminal_open",
 	"terminal_resize",
+	"terminal_run_cli",
+	"tui_open",
 	"terminal_snapshot",
 ]);
 
@@ -1882,9 +1896,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			} as RpcExtensionUIRequest);
 		}
 
-		async custom(): Promise<never> {
-			// Custom UI not supported in RPC mode
-			return undefined as never;
+		custom<T>(factory: HostedComponentFactory<T>, options?: ExtensionCustomOptions): Promise<T> {
+			// A host that renders terminals (the GUI) shows the component in one;
+			// any other host still resolves without running the factory.
+			if (!this.interactiveTerminal) return Promise.resolve(undefined as T);
+			return showHostedComponent(terminalHost, "Extension", factory, options);
 		}
 
 		pasteToEditor(text: string): void {
@@ -2802,6 +2818,70 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				terminalHost.close(command.terminalId);
 				return success(id, "terminal_close");
 
+			case "terminal_run_cli": {
+				if (!TERMINAL_CLI_SUBCOMMANDS.has(command.subcommand)) {
+					return error(id, "terminal_run_cli", `Unsupported subcommand: ${String(command.subcommand)}`);
+				}
+				const args = Array.isArray(command.args) ? command.args.filter(arg => typeof arg === "string") : [];
+				const [application, ...entryArgs] = resolveCliEntryCmd();
+				return success(
+					id,
+					"terminal_run_cli",
+					await terminalHost.runArgv({
+						title: ["omp", command.subcommand, ...args].join(" "),
+						application: application as string,
+						args: [...entryArgs, command.subcommand, ...args],
+					}),
+				);
+			}
+
+			case "tui_open": {
+				if (command.surface !== "advisor_config") {
+					return error(id, "tui_open", `Unknown surface: ${String(command.surface)}`);
+				}
+				const shown = Promise.withResolvers<void>();
+				const notify = (level: "info" | "warning") => (message: string) =>
+					session.emitNotice(level, message, "advisor");
+				void showHostedComponent<void>(
+					terminalHost,
+					"Advisor configuration",
+					async (ui, _theme, _keybindings, done) => {
+						try {
+							return await createAdvisorConfigOverlay(
+								ui,
+								{
+									session,
+									settings: session.settings,
+									cwd: session.sessionManager.getCwd(),
+									status: notify("info"),
+									warn: notify("warning"),
+									advisorsChanged: () => {},
+									requestRender: () => ui.requestRender(),
+								},
+								() => done(undefined),
+							);
+						} finally {
+							shown.resolve();
+						}
+					},
+					{
+						overlay: true,
+						overlayOptions: {
+							anchor: "bottom-center",
+							width: "100%",
+							maxHeight: "100%",
+							margin: 0,
+							fullscreen: true,
+						},
+					},
+				).catch((cause: unknown) => {
+					shown.resolve();
+					session.emitNotice("error", cause instanceof Error ? cause.message : String(cause), "advisor");
+				});
+				await shown.promise;
+				return success(id, "tui_open");
+			}
+
 			case "terminal_list":
 				return success(id, "terminal_list", { terminals: terminalHost.list() });
 
@@ -3305,6 +3385,45 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "get_branch_messages": {
 				const messages = session.getUserMessagesForBranching();
 				return success(id, "get_branch_messages", { messages });
+			}
+
+			case "get_config_warnings": {
+				return success(id, "get_config_warnings", { warnings: [...session.configWarnings] });
+			}
+
+			case "get_advisor_status": {
+				const overview = session.getAdvisorStatusOverview();
+				return success(id, "get_advisor_status", {
+					configured: overview.configured,
+					advisors: overview.advisors.map(({ name, status, yielded }) => ({ name, status, yielded })),
+					cost: session.getAdvisorCost(),
+					usingSubscription: session.isAdvisorUsingSubscription(),
+				});
+			}
+
+			case "list_reset_credits": {
+				const accounts = toResetUsageAccounts(await session.listResetCredits()).map(account => ({
+					label: account.label,
+					provider: account.provider,
+					providerLabel: account.providerLabel,
+					availableCount: account.availableCount,
+					redeemableCount: account.redeemableCount,
+					target: account.target,
+					active: account.active,
+					error: account.error,
+					unavailableReason: account.unavailableReason,
+					expiresAt: account.expiresAt,
+				}));
+				return success(id, "list_reset_credits", { accounts });
+			}
+
+			case "redeem_reset_credit": {
+				const outcome = await session.redeemResetCredit(command.target);
+				return success(id, "redeem_reset_credit", {
+					ok: outcome.ok,
+					code: outcome.code,
+					message: describeRedeemOutcome(outcome, command.label),
+				});
 			}
 
 			case "get_session_tree": {

@@ -1191,6 +1191,14 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get configuration problems the session collected.
+	 */
+	async getConfigWarnings(): Promise<string[]> {
+		const response = await this.#send({ type: "get_config_warnings" });
+		return this.#getData<{ warnings: string[] }>(response).warnings;
+	}
+
+	/**
 	 * Get text of last assistant message.
 	 */
 	async getLastAssistantText(): Promise<string | null> {
