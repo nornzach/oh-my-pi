@@ -207,6 +207,8 @@ describe("ModelRegistry", () => {
 		const refreshSpy = vi.spyOn(registry, "refresh").mockReturnValue(promise);
 
 		registry.refreshInBackground();
+		// The refresh body starts on a microtask (see refreshInBackground).
+		await Promise.resolve();
 		expect(refreshSpy).toHaveBeenCalledTimes(1);
 
 		let settled = false;
@@ -277,10 +279,14 @@ describe("ModelRegistry", () => {
 		const refreshSpy = vi.spyOn(registry, "refresh").mockReturnValueOnce(promise).mockReturnValueOnce(second.promise);
 
 		registry.refreshInBackground();
+
+		// The drain starts on a microtask: calls landing before that tick merge
+		// into the pending strategy; only calls after the drain started queue a
+		// trailing refresh.
+		await Promise.resolve();
+		expect(refreshSpy).toHaveBeenCalledTimes(1);
 		registry.refreshInBackground();
 		registry.refreshInBackground("online");
-
-		expect(refreshSpy).toHaveBeenCalledTimes(1);
 
 		resolve();
 		for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -293,6 +299,9 @@ describe("ModelRegistry", () => {
 		const { promise: secondPromise, resolve: secondResolve } = Promise.withResolvers<void>();
 		refreshSpy.mockReturnValue(secondPromise);
 		registry.refreshInBackground();
+		// The drain starts on a microtask, so the new cycle's refresh call lands
+		// after one tick rather than synchronously.
+		await Promise.resolve();
 		expect(refreshSpy).toHaveBeenCalledTimes(3);
 
 		secondResolve();

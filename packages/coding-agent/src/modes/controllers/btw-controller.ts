@@ -42,6 +42,7 @@ export function assistantMessageWithReplyText(assistantMessage: AssistantMessage
 				type: "thinking",
 				thinking: part.thinking,
 				...(part.summary !== undefined && { summary: part.summary }),
+				...(part.narration && { narration: true }),
 			});
 			continue;
 		}

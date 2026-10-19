@@ -387,6 +387,7 @@ import {
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
 	cfgTuiResizeScrollback,
+	cfgTuiCompleteScrollback,
 	cfgTuiTextSizing,
 	cfgTuiTight,
 	cfgTuiTitleSpinner,
@@ -423,6 +424,7 @@ const cfgLiveUiSettings = combine({
 	showHardwareCursor: cfgShowHardwareCursor,
 	"tui.maxInlineImages": cfgTuiMaxInlineImages,
 	"tui.resizeScrollback": cfgTuiResizeScrollback,
+	"tui.completeScrollback": cfgTuiCompleteScrollback,
 	"tui.imeSafeCursor": cfgTuiImeSafeCursor,
 	autocompleteMaxVisible: cfgAutocompleteMaxVisible,
 	"spelling.typoDetection": cfgSpellingTypoDetection,
@@ -2109,7 +2111,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// signal arriving mid-Ctrl+C no-ops instead of racing a second dispose.
 		this.#signalTeardown = createSessionTeardown({
 			getDraftText: () => this.#inputController.getDraftText(),
-			beginDispose: () => this.session.beginDispose(),
+			beginDispose: () => {
+				this.session.beginDispose();
+				this.statusLine.dispose();
+			},
 			saveDraft: text => this.sessionManager.saveDraft(text),
 			disposeSession: async reason => {
 				await this.#btwController.dispose();
@@ -3496,6 +3501,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			showHardwareCursor: cfgShowHardwareCursor.get(this.settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(this.settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),
+			completeScrollback: cfgTuiCompleteScrollback.get(this.settings),
 			imeSafeCursor: cfgTuiImeSafeCursor.get(this.settings),
 			autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(this.settings),
 			spellingTypoDetection: cfgSpellingTypoDetection.get(this.settings),
@@ -3537,6 +3543,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"showHardwareCursor",
 				"tui.maxInlineImages",
 				"tui.resizeScrollback",
+				"tui.completeScrollback",
 				"tui.imeSafeCursor",
 				"autocompleteMaxVisible",
 				"spelling.typoDetection",
@@ -7240,7 +7247,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		const cmd = [...resolveCliEntryCmd(), ...restartArgv(process.argv.slice(2), this.#resumableSessionId())];
+		const sessionFile = this.sessionManager.isSessionOnDisk() ? this.sessionManager.getSessionFile() : undefined;
+		const cmd = [
+			...resolveCliEntryCmd(),
+			...restartArgv(process.argv.slice(2), sessionFile ? path.resolve(sessionFile) : undefined),
+		];
 		await postmortem.cleanup();
 		await postmortem.drainStdout();
 		if (process.platform !== "win32") {

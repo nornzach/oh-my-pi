@@ -9,6 +9,7 @@ import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
 import { AgentBusyError, EventLoopKeepalive, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
+import { isCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
 import type { Rule } from "../capability/rule";
@@ -1453,14 +1454,10 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	let terminalError: string | undefined;
 	let consecutiveYieldToolErrors = 0;
 	let lastAssistantSalvageText: string | undefined;
-	// Text of the most recent assistant turn that READ AS A REPORT: it carried
-	// prose and started no further work (no tool call, or only the terminal
-	// `yield`). This — not merely the last assistant message — is what a
-	// data-less `yield` finalize harvests. Both the idle reminder and the
-	// budget wrap-up tell a finished subagent to finalize "from last assistant
-	// turn", and models routinely comply one turn later, so the finalize turn
-	// itself is usually text-less. Turns that started more work are excluded on
-	// purpose: mid-run narration must never surface as a final result.
+	// The latest prose that can describe completed work. Locally runnable work
+	// invalidates it; after tools Cursor already ran server-side, only text
+	// following the last such call qualifies. A text-less yield turn may still
+	// finalize the preceding report.
 	let lastReportTurnText: string | undefined;
 	let activeSessionAbortPromise: Promise<void> | undefined;
 
@@ -1809,6 +1806,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		}
 	>();
 	let visibleToolCallId: string | undefined;
+	// Providers that run the tool loop server-side (Cursor) execute tools while
+	// the assistant message is still streaming. Each such tool result feeds
+	// another model step that never surfaces as its own message, so it counts
+	// as a request; otherwise one message could run hundreds of steps unbudgeted.
+	// Parallel calls of one step count separately: Cursor's stream does not mark
+	// step boundaries, so such a turn reaches its budget early.
+	let assistantStreaming = false;
 
 	/**
 	 * Soft request budget: steer at the budget, stop the free-running turn at
@@ -1861,6 +1865,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		switch (event.type) {
 			case "message_start":
 				if (event.message?.role === "assistant") {
+					assistantStreaming = true;
 					resetRecentOutput();
 				}
 				// An async-result follow-up injected after a recorded yield
@@ -1961,6 +1966,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
 				const eventRecord: unknown = event;
 				const eventArgs = isRecord(eventRecord) && isRecord(eventRecord.args) ? eventRecord.args : {};
+				let endsRun = false;
 				if (handler) {
 					// Extract data using handler
 					if (handler.extractData) {
@@ -1999,7 +2005,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 							isError: event.isError,
 						}) === true;
 					const forcedFinalYield = event.toolName === "yield" && finalYieldForced && yieldCalled;
-					if (wantsTerminate || forcedFinalYield) {
+					endsRun = wantsTerminate || forcedFinalYield;
+					if (endsRun) {
 						if (event.toolName === "yield" && sessionHasPendingAsyncWork()) {
 							// Terminal yield with owner jobs still pending: park the
 							// run behind the quiescence barrier instead of completing
@@ -2042,6 +2049,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					}
 				}
 				flushProgress = true;
+				if (assistantStreaming && !endsRun) {
+					progress.requests += 1;
+					// A sibling yield still validating may be the run's terminal
+					// report; checking now could abort the response before it lands.
+					if (yieldCallPending) budgetCheckDeferred = true;
+					else evaluateSoftRequestBudget();
+				}
 				break;
 			}
 
@@ -2088,12 +2102,14 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				// Extract text from assistant and toolResult messages (not user prompts)
 				const role = event.message?.role;
 				if (role === "assistant") {
+					assistantStreaming = false;
 					progress.requests += 1;
 					const eventContent = isRecord(event) && "content" in event ? event.content : undefined;
 					const messageContent = getMessageContent(event.message) || eventContent;
 					if (messageContent && Array.isArray(messageContent)) {
 						const turnText: string[] = [];
 						let startedMoreWork = false;
+						let completedServerWork = false;
 						for (const block of messageContent) {
 							if (!isRecord(block)) continue;
 							if (block.type === "text" && typeof block.text === "string") {
@@ -2109,18 +2125,18 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 								}
 								continue;
 							}
-							startedMoreWork = true;
+							if (isCursorExecResolved(block)) completedServerWork = true;
+							else startedMoreWork = true;
+							turnText.length = 0;
 						}
-						// Only the report turn immediately preceding the finalize is
-						// harvestable. A turn that started more work invalidates any
-						// earlier candidate: the model took the reminder's "resume
-						// work" path, so that prose predates the work and is no longer
-						// a description of the finished assignment. Skipping the
-						// update alone would leave it harvestable and hand the parent
-						// stale narration as the completed result.
+						// Locally runnable calls make all prose in or before this turn
+						// mid-work narration. Cursor exec-resolved calls already ran, so
+						// text after the last one is a report; without such text, prior
+						// prose predates that work and is invalidated.
 						const text = turnText.join("\n");
 						if (startedMoreWork) lastReportTurnText = undefined;
 						else if (text.trim()) lastReportTurnText = text;
+						else if (completedServerWork) lastReportTurnText = undefined;
 					}
 					// A yield awaiting validation suppresses the budget check for
 					// its own turn (#5006). Defer it rather than drop it: every
