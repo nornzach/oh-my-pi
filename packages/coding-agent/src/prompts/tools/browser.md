@@ -15,7 +15,7 @@ Drive real Chromium tabs from JavaScript or Python Eval with the global `browser
   - Screenshot options: `screenshot({selector?, fullPage?, silent?, annotate?, format?, quality?, ifChanged?, threshold?})`; `diffScreenshot(baselinePath, {threshold?, output?})`; `pdf({path?, format?, landscape?, scale?, printBackground?, margin?, pageRanges?})`.
   - Extraction options: `extract(format?, {selector?, outline?, filter?})`.
   - Interaction: `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `type`, `fill`, `press`, `keyDown`, `keyUp`, `mouseMove`, `mouseDown`, `mouseUp`, `clickAt`, `wheel`, `scroll`, `drag`, `highlight`, `scrollIntoView`, `select`, `uploadFile`.
-  - Waiting: `waitFor`, `waitForSelector`, `waitForUrl`, `waitForText`.
+  - Waiting: `waitFor`, `waitForSelector`, `waitForUrl`, `waitForText`. They resolve as soon as the condition holds; after a click or navigation, wait for the expected text, URL, or selector instead of a fixed sleep.
   - Frames: `frames()` lists the frame tree; `frame(selectorOrNameOrUrl)` returns a scoped handle with `click`, `fill`, `type`, `press`, `text`, `html`, `value`, `attr`, `count`, `isVisible`, `ariaSnapshot`, `evaluate`, `waitFor`, `waitForSelector`, and `screenshot`.
   - Dialogs: `dialog`, `handleDialog`, `setDialogs`. Without a policy, alerts and beforeunload prompts are accepted automatically; confirms and prompts remain pending for `handleDialog`.
   - Emulation: `emulate(options?)` merges device/viewport, geolocation, offline/network, media, headers/auth, UA, timezone/locale, and CPU overrides; `devices()` lists valid device names.
@@ -42,23 +42,24 @@ Drive real Chromium tabs from JavaScript or Python Eval with the global `browser
 Application modes:
 
 {{#if panel}}
+
 - This session runs in the omp app, whose browser panel replaces the managed Chromium: every open without `app.path`, `app.cdp_url`, or `app.relay` creates a page there, beside the user's own pages, where the user watches and can take over. `headed: false` opens it in the background without changing what the user sees; prefer that for work the user did not ask to watch.
 - The panel keeps the user's sign-ins across sessions: sites attribute actions to the user, as with the relay.
 - `browser.targets()` lists the panel's pages (`shown`: the one on screen). When the user refers to a page they have open ("this page", "the docs I'm on"), adopt it with `app.target` set to its URL or a title substring instead of opening a copy. It is the user's page: opening with `url` navigates it, so do that only when asked. Closing releases it without closing it.
-{{/if}}
-- Omit `app` for default automation; no executable path required. Managed Chromium installs automatically on first use.
+  {{/if}}
+- Omit `app` → settings pick the browser: the user's Chrome through the relay when `browser.relay` is on (`PI_BROWSER_RELAY=1` turns it on even with the setting off, `=0` off), else `browser.cdpUrl`, else Tern inside a Tern pane, else cmux, else managed Chromium (installs on first use).
 - `headed` picks a visible or hidden managed browser per open. `allow_file_access` is a launch flag and cannot change an already-running shared Chromium; use a dedicated `app.path` with `app.args`. `ignore_https_errors` applies per tab through CDP.
 - `app.path`: launch the specified browser or Electron executable. Chromium-family browsers use an omp-owned profile unless `args` supplies `--user-data-dir`.
 - `app.cdp_url`: attach to an existing CDP endpoint.
-- `app.relay: true`: drive the user's Chrome through the omp relay. Without `app.target`, a new name opens omp's own background tab, leaving the user's tab alone (an outdated relay extension selects it instead); `url` navigates that tab. `app.target` borrows an existing tab by URL/title substring. Reopening an open name keeps its tab.
+- `app.relay: true`: drive the user's Chrome through the omp relay. Without `app.target`, a new name opens omp's own background tab, leaving the user's tab alone (an outdated relay extension selects it instead); `url` navigates that tab. `app.target` borrows an existing tab by URL/title substring. Reopening an open name keeps its tab. `app.relay: false` skips the relay however the setting or `PI_BROWSER_RELAY` enables it, falling through to the next default.
 - Relay sessions are the user's real logged-in browser. Sites attribute actions to the user. NEVER navigate a borrowed tab without authorization.
 - Inside a Tern pane, a tab opens as a browser picture-in-picture (PiP; native WKWebView, not Chromium) floating over your own pane. While the user looks at another Tern tab, it shows as a passive card in the corner of their current tab: it never takes focus or input, and clicking it takes them to your pane. The open result still says when it is not on screen (the user hid pictures in picture); then tell the user where it is. Explicit `app` options, the relay, and a configured CDP URL win over Tern.
 - `app.target` inside Tern adopts a browser block the user already has open (block id, or URL/title substring; no match lists the window's blocks). It is the user's page and signed-in session: opening with `url` navigates it, so do that only when asked. Closing releases it without closing it.
-- `app.tern: false` opens Chromium instead (e.g. parallel scraping by subagents, where PiPs would pile up over one pane); `app.tern: true` requires Tern; `headed` never chooses between Tern and Chromium. When no Tern window can host a PiP, the open falls back to Chromium and says so.
+- `app.tern: false` skips Tern only: with the relay on it still opens the user's Chrome, so pass `app: { tern: false, relay: false }` to skip both (e.g. parallel scraping by subagents, where PiPs would pile up over one pane); a configured `browser.cdpUrl` or cmux still comes before managed Chromium. `app.tern: true` requires Tern; `headed` never chooses between Tern and Chromium. When no Tern window can host a PiP, the open falls back to Chromium and says so.
 - Tern tabs: input is trusted native mouse/keyboard events at element centres; `tab.evaluate` runs in the page world. Console, `requests`, `route`, and HAR cover the page's `fetch`/XHR plus navigation responses only (no images/scripts/styles; `route` accepts only `resourceType` `fetch`/`xhr`); request bodies exist only for the current document. Frames inside CSS-scaled/rotated elements cannot be driven. `emulate` supports viewport/device, userAgent, colorScheme, credentials, geolocation, locale, offline (JS-visible); timezone, headers, any reducedMotion, CPU and network throttling throw. Clipboard helpers use the system clipboard. `pdf` supports only `path`. `a11y`, `webmcp*` cover the main frame; `loadState` restores storage for the current origin only. `traceStart`/`traceStop`/`profileStart`/`profileStop` are unsupported; raw `page`/`browser` in `tab.run` are a Puppeteer-like subset (`goto`, `evaluate`, `content`, `$`, `$$`, `locator`, waits, `screenshot`, `keyboard`, `mouse`, `cookies`).
 - Closing releases the managed tab and closes tabs omp opened in the relay. It never closes borrowed relay tabs, CDP-attached pages, or adopted Tern blocks. `kill: true` terminates only applications spawned by this process, never reused browser processes.
 - Idle tabs auto-freeze at turn settle (animated pages stop burning CPU/GPU) and unfreeze on next use; tabs idle past the idle-close timeout are closed. Pass `persist: true` on `open` to keep a tab live across turns (e.g. multi-step login); `browser.close` still releases explicitly.
- </instruction>
+  </instruction>
 
 <examples>
 ```javascript
@@ -76,6 +77,7 @@ await tab.id(observed["elements"][0]["id"]).click()
 title = await tab.run("return await tab.title();", timeout=30)
 await tab.close()
 ```
+
 </examples>
 
 <critical>

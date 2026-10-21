@@ -79,6 +79,7 @@ import { DEFAULT_TTS_VOICE } from "../../tts/models";
 import { ttsClient } from "../../tts/tts-client";
 import { resolveLocalSpeechModelId } from "../../tts/vocalizer";
 import { decodeWav, encodeWav } from "../../tts/wav";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import {
@@ -2735,9 +2736,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "set_todos": {
 				session.setTodoPhases(command.phases);
-				return success(id, "set_todos", {
-					todoPhases: session.getTodoPhases(),
-				});
+				const phases = session.getTodoPhases();
+				session.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
+				return success(id, "set_todos", { todoPhases: phases });
 			}
 
 			case "set_host_tools": {
