@@ -192,7 +192,7 @@ import type { GoalModeState, GoalTokenUsage } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
-import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
+import type { JobWidgetEntry, JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { DaemonCompletionNotification } from "../launch/protocol";
 import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "../memory-backend/recall-entry";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
@@ -483,7 +483,11 @@ const DEFERRED_TITLE_MIN_WORDS = 40;
 const TITLE_FORK_TIMEOUT_MS = 15_000;
 
 /** The public summary of `job` (see {@link AsyncJobSnapshotItem}); `includeResults` adds bounded result/error previews. */
-function jobSnapshotItem(job: AsyncJob, options?: { includeResults?: boolean }): AsyncJobSnapshotItem {
+function jobSnapshotItem(
+	job: AsyncJob,
+	options?: { includeResults?: boolean },
+	widget?: JobWidgetView,
+): AsyncJobSnapshotItem {
 	return {
 		id: job.id,
 		type: job.type,
@@ -503,6 +507,7 @@ function jobSnapshotItem(job: AsyncJob, options?: { includeResults?: boolean }):
 					previewTruncated: (job.resultText?.length ?? 0) > 20_000 || (job.errorText?.length ?? 0) > 20_000,
 				}
 			: {}),
+		...(widget ? { widget } : {}),
 	};
 }
 
@@ -3181,7 +3186,7 @@ export class AgentSession implements SettingsScope {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
-		const summarize = (job: AsyncJob) => jobSnapshotItem(job, options);
+		const summarize = (job: AsyncJob) => jobSnapshotItem(job, options, manager.widgets?.view(job));
 		const running = manager.getRunningJobs(ownerFilter).map(summarize);
 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(summarize);
 		const delivery = manager.getDeliveryState(ownerFilter);
@@ -3229,8 +3234,8 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		return {
-			running: running.map(job => jobSnapshotItem(job, options)),
-			recent: recent.map(job => jobSnapshotItem(job, options)),
+			running: running.map(job => jobSnapshotItem(job, options, manager.widgets?.view(job))),
+			recent: recent.map(job => jobSnapshotItem(job, options, manager.widgets?.view(job))),
 			rootId,
 			agents: [...agents.values()],
 		};

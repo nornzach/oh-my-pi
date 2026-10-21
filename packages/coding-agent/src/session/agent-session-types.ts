@@ -85,6 +85,8 @@ export type AsyncJobSnapshotItem = Pick<
 	previewTruncated?: boolean;
 	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
 	command?: string;
+	/** The job's live widget (frozen once it settles), when a spec or fallback exists. */
+	widget?: JobWidgetView;
 };
 
 /** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */
