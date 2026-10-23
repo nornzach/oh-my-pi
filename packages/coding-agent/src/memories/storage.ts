@@ -121,13 +121,29 @@ export function closeMemoryDb(db: Database): void {
 	db.close();
 }
 
-export function clearMemoryData(db: Database): void {
-	db.exec(`
-DELETE FROM stage1_outputs;
-DELETE FROM threads;
-DELETE FROM jobs WHERE kind IN ('memory_stage1', 'memory_consolidate_global');
-DELETE FROM forgotten_threads;
-`);
+/**
+ * Clear the persisted memory state of a single project.
+ *
+ * The agent database is shared by every project that uses the same agent
+ * directory, so the deletes are scoped to `cwd`: other projects keep their
+ * thread rows, stage 1 outputs and jobs. `threads.cwd` holds the normalized
+ * project scope, stage 1 outputs and stage 1 jobs are keyed by thread id, and
+ * the consolidation job is keyed by `global:<cwd>`; forgotten sessions are
+ * keyed by the same normalized scope.
+ */
+export function clearMemoryData(db: Database, cwd: string): void {
+	const scope = normalizeScopeCwd(cwd);
+	const clear = db.transaction(() => {
+		db.prepare("DELETE FROM stage1_outputs WHERE thread_id IN (SELECT id FROM threads WHERE cwd = ?)").run(scope);
+		db.prepare("DELETE FROM jobs WHERE kind = ? AND job_key IN (SELECT id FROM threads WHERE cwd = ?)").run(
+			STAGE1_KIND,
+			scope,
+		);
+		db.prepare("DELETE FROM jobs WHERE kind = ? AND job_key = ?").run(GLOBAL_KIND, globalJobKey(cwd));
+		db.prepare("DELETE FROM threads WHERE cwd = ?").run(scope);
+		db.prepare("DELETE FROM forgotten_threads WHERE cwd = ?").run(scope);
+	});
+	clear();
 }
 
 export function upsertThreads(db: Database, threads: MemoryThread[]): void {
