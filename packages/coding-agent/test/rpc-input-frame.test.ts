@@ -399,6 +399,59 @@ describe("RpcInputDispatcher", () => {
 		expect((outputs[1] as RpcResponse).command).toBe("get_state");
 	});
 
+	test("a long manual compact starts in order but does not hold later commands", async () => {
+		const releaseFirst = Promise.withResolvers<void>();
+		const releaseCompact = Promise.withResolvers<void>();
+		const started: string[] = [];
+		const { deps, outputs } = makeDeps(async command => {
+			started.push(command.type);
+			if (command.type === "abort_retry") await releaseFirst.promise;
+			if (command.type === "compact") await releaseCompact.promise;
+			return { id: command.id, type: "response", command: command.type, success: true } as RpcResponse;
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "first", type: "abort_retry" });
+		dispatcher.dispatch({ id: "compact", type: "compact" });
+		dispatcher.dispatch({ id: "abort", type: "abort" });
+		await flushMicrotasks();
+		// Still behind the earlier ordinary command.
+		expect(started).toEqual(["abort_retry"]);
+
+		releaseFirst.resolve();
+		await flushMicrotasks();
+		// The abort that cancels a compaction must not wait for it to finish.
+		expect(started).toEqual(["abort_retry", "compact", "abort"]);
+		expect(outputs.map(frame => (frame as RpcResponse).id)).toEqual(["first", "abort"]);
+
+		releaseCompact.resolve();
+		await dispatcher.drain();
+		expect(outputs.map(frame => (frame as RpcResponse).id)).toEqual(["first", "abort", "compact"]);
+	});
+
+	test("plan approval leaves the serial tail only when it compacts", async () => {
+		const release = Promise.withResolvers<void>();
+		const started: string[] = [];
+		const { deps } = makeDeps(async command => {
+			started.push(command.id ?? command.type);
+			if (command.type === "plan_approval") await release.promise;
+			return { id: command.id, type: "response", command: command.type, success: true } as RpcResponse;
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "compact-plan", type: "plan_approval", approved: true, option: "compact" });
+		dispatcher.dispatch({ id: "state-1", type: "get_state" });
+		dispatcher.dispatch({ id: "fresh-plan", type: "plan_approval", approved: true, option: "execute" });
+		dispatcher.dispatch({ id: "state-2", type: "get_state" });
+		await flushMicrotasks();
+		// A fresh-session approval still holds later commands; a compacting one does not.
+		expect(started).toEqual(["compact-plan", "state-1", "fresh-plan"]);
+
+		release.resolve();
+		await dispatcher.drain();
+		expect(started).toEqual(["compact-plan", "state-1", "fresh-plan", "state-2"]);
+	});
+
 	test("a steer_subagent waiting for the subagent to accept does not block a later abort", async () => {
 		const accepted = Promise.withResolvers<void>();
 		const started: string[] = [];

@@ -36,6 +36,19 @@ describe("RpcGoalModeController guided interview", () => {
 		expect(fixture.followUp).not.toHaveBeenCalled();
 	});
 
+	it("answers once the interview turn is admitted, without waiting for the turn to end", async () => {
+		const turn = Promise.withResolvers<boolean>();
+		const prompt = vi.fn(async (_message: string, options?: { onPromptAdmitted?: () => void }) => {
+			options?.onPromptAdmitted?.();
+			return turn.promise;
+		});
+		const fixture = createSession({ prompt });
+		const controller = new RpcGoalModeController({ session: fixture.session, onError: vi.fn() });
+
+		expect(await controller.startGuidedInterview("ship reliable sync")).toEqual({ started: true });
+		turn.resolve(true);
+	});
+
 	it("restores the prior tool set when the interview cannot be dispatched", async () => {
 		const prompt = vi.fn(async () => {
 			throw new Error("dispatch failed");

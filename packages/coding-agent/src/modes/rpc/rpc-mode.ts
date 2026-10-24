@@ -636,6 +636,17 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"worktree_create",
 	"worktree_remove",
 	"btw_cancel",
+	// Network or user waits that never touch the conversation: an OAuth login
+	// waits on the browser, MCP and marketplace changes on connects and git,
+	// usage and share on provider and upload round-trips. Plugin and MCP
+	// reloads serialize among themselves.
+	"get_usage",
+	"login",
+	"marketplace_action",
+	"mcp_action",
+	"mcp_add",
+	"reload_plugins",
+	"share_session",
 	// Terminal handlers are synchronous up to the PTY call, so backgrounded
 	// keystrokes keep their arrival order and never wait behind a slow command.
 	"browser_host_start",
@@ -650,6 +661,31 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"tui_open",
 	"terminal_snapshot",
 ]);
+
+/**
+ * Commands that start in order behind earlier ordinary commands but never hold
+ * later ones. A manual `compact` or `handoff` is one model call over the whole
+ * context — minutes on a large session — and on the serial tail it stalled
+ * every `get_state`, transcript read and `abort` behind it. The session already
+ * tolerates input during either, as the TUI relies on: prompts park until the
+ * pass commits, steers/follow-ups wait in the preserved queues, `abort` cancels
+ * it, and a second pass is refused. `omfg` runs an ephemeral side turn that
+ * never writes the conversation. Plan approval is detached only when it
+ * compacts: its fresh-session options must still hold later prompts.
+ * `switch_leaf` stays serial: a branch summary has no prompt barrier.
+ */
+function isDetachedSerialCommand(command: RpcCommand): boolean {
+	switch (command.type) {
+		case "compact":
+		case "handoff":
+		case "omfg":
+			return true;
+		case "plan_approval":
+			return command.approved && command.option === "compact";
+		default:
+			return false;
+	}
+}
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.
@@ -828,7 +864,9 @@ export class RpcInputDispatcher {
 				() => this.#dispatchSerialCommand(command),
 				() => this.#dispatchSerialCommand(command),
 			);
-			this.#tail = task.catch(() => {});
+			// A detached command leaves the tail where it was: later commands
+			// queue behind what preceded it, not behind its whole run.
+			if (!isDetachedSerialCommand(command)) this.#tail = task.catch(() => {});
 			this.#tasks.add(task);
 			void task.finally(() => {
 				this.#tasks.delete(task);
@@ -2169,10 +2207,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		buildAvailableSlashCommands(session, undefined, {
 			includeTuiOnlyBuiltins: true,
 		});
-	const reloadPluginState = async (): Promise<RpcReloadPluginsResult> => {
-		return applyRpcReloadPlugins(session, commands => {
-			output({ type: "available_commands_update", commands });
-		});
+	// Plugin mutations and `reload_plugins` run off the serial tail; one reload at
+	// a time, in arrival order, so an older reload never lands after a newer one.
+	let pluginReloadChain: Promise<unknown> = Promise.resolve();
+	const reloadPluginState = (): Promise<RpcReloadPluginsResult> => {
+		const reload = () =>
+			applyRpcReloadPlugins(session, commands => {
+				output({ type: "available_commands_update", commands });
+			});
+		const result = pluginReloadChain.then(reload, reload);
+		pluginReloadChain = result.catch(() => {});
+		return result;
 	};
 	const emitAvailableCommandsUpdate = async () => {
 		output({
@@ -2561,6 +2606,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				// fork() repeats the check after each of its own awaits.
 				if (command.type === "fork" && session.isBusyForSnapshot) {
 					return error(id, "fork", new SessionBusyError("fork the session").message, "session_busy");
+				}
+				// A manual compaction or handoff no longer holds the queue; branching under it would
+				// land its write in the new session file.
+				if (command.type === "branch" && (session.isCompacting || session.isGeneratingHandoff)) {
+					return error(id, "branch", new SessionBusyError("branch the session").message, "session_busy");
 				}
 				const requestedModel =
 					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
@@ -3490,6 +3540,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return success(id, "switch_leaf", result);
 				} catch (err) {
 					askReanswerAwaitingResumeLeafId = undefined;
+					if (err instanceof SessionBusyError) return error(id, "switch_leaf", err.message, "busy");
 					return error(id, "switch_leaf", err instanceof Error ? err.message : String(err));
 				}
 			}

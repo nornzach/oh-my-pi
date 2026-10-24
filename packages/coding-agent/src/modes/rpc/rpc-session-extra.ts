@@ -13,7 +13,7 @@
  */
 
 import type { ExtensionUIContext } from "../../extensibility/extensions";
-import type { AgentSession } from "../../session/agent-session";
+import { type AgentSession, SessionBusyError } from "../../session/agent-session";
 import { runAskReanswer } from "../../session/ask-reanswer";
 import type { RpcSwitchLeafResult } from "./rpc-types";
 
@@ -33,6 +33,9 @@ export async function applyRpcSwitchLeaf(
 	command: { entryId: string; summarize?: boolean; customInstructions?: string },
 	uiContext?: ExtensionUIContext,
 ): Promise<RpcSwitchLeafResult> {
+	// A manual compaction or handoff runs beside the serial queue and writes from the
+	// leaf it started on; moving the leaf under it would graft that write onto the new branch.
+	if (session.isCompacting || session.isGeneratingHandoff) throw new SessionBusyError("move to another point");
 	let result = await session.navigateTree(command.entryId, {
 		summarize: command.summarize,
 		customInstructions: command.customInstructions,

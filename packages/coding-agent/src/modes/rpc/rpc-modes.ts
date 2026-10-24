@@ -10,7 +10,7 @@ import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
  * controller.
  */
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { formatModelString } from "../../config/model-resolver";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
 import { cfgLoopMode } from "../settings";
@@ -240,12 +240,20 @@ export class RpcGoalModeController {
 			if (session.isStreaming) {
 				await session.followUp(kickoff, undefined, { synthetic: true });
 			} else {
+				// Answer once the interview turn is admitted, not when it ends: the
+				// whole turn (the user's answers included) ran on the RPC serial tail.
+				const admitted = Promise.withResolvers<void>();
+				const run = session.prompt(kickoff, { synthetic: true, onPromptAdmitted: () => admitted.resolve() });
 				try {
-					await session.prompt(kickoff, { synthetic: true });
+					await Promise.race([admitted.promise, run]);
 				} catch (error) {
 					if (!(error instanceof AgentBusyError)) throw error;
 					await session.followUp(kickoff, undefined, { synthetic: true });
 				}
+				run.catch(error => {
+					if (error instanceof AgentBusyError) return;
+					logger.warn("Guided goal interview turn failed", { error: String(error) });
+				});
 			}
 			return { started: true };
 		} catch (error) {
