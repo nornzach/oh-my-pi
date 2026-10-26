@@ -1936,6 +1936,8 @@ export interface RpcSubagentSnapshot {
 	assignment?: string;
 	sessionFile?: string;
 	lastUpdate: number;
+	/** When the agent first started, ms since the epoch; a revival keeps the first start. */
+	spawnedAt?: number;
 	progress?: AgentProgress;
 	parentToolCallId?: string;
 	/** Registry id of the spawning subagent for nested spawns; absent at the root. */

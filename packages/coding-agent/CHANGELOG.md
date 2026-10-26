@@ -12,12 +12,14 @@
 - RPC hosts can dictate from their own microphone (`dictation_start`, `dictation_audio`, `dictation_stop`, `dictation_cancel`): words come back as `dictation_*` frames while the user speaks, with the TUI's dictation models (local streaming, local, and cloud), model download progress, and `stt.submitTrigger`
 - RPC `get_jobs` also returns `tree`: this agent's and its subagents' jobs nested as `/jobs` shows them
 - `/seance <session id|path> [--model selector]` works in RPC and ACP hosts, using the session's saved model unless `--model` is given
+- RPC subagent rows carry `spawnedAt`, when the agent first started, including agents read back from a reopened session
 
 ### Fixed
 
 - Interactive bash commands (`pty: true`) in RPC and ACP hosts now run without a terminal and say so, instead of failing the call
 - An auto-cleared todo list is hidden rather than erased, so `/todo` can show it again and the agent keeps its finished plan; RPC hosts still see it cleared, including after a reload
 - RPC `cancel_subagent` and `steer_subagent` act only on subagents the session itself started, never on another session's live subagent with the same id
+- RPC `get_subagents` lists subagents in spawn order instead of mixing the agents of separate task calls
 - RPC `get_subagents` lists a reopened session's earlier subagents, with their label, outcome, model and usage, and `get_subagent_messages` reads their transcripts, instead of an empty roster after a restart; a subagent's generated label is now also its transcript's title
 - Slow RPC commands no longer hold every later command until they finish: `get_state`, transcript reads and `abort` answer during `compact`, `handoff`, a compacting plan approval, `/omfg`, an OAuth `login`, MCP and marketplace changes, plugin reloads, usage and share requests, and `guided_goal` answers once its interview turn starts; `switch_leaf` and `branch` refuse while a compaction or handoff is still writing ([nornzach/oh-my-pi-gui#19](https://github.com/nornzach/oh-my-pi-gui/issues/19))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))

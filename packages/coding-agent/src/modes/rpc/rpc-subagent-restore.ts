@@ -30,8 +30,8 @@ const TERMINAL: Record<string, AgentStatus> = {
 	cancelled: "aborted",
 };
 
-/** Cheap line filters: only these lines can name a spawn or a job outcome. */
-const RELEVANT_MARKERS = ['"toolName":"task"', '"jobs":['];
+/** Cheap line filters: only these lines can name a spawn, the call that made it, or a job outcome. */
+const RELEVANT_MARKERS = ['"toolName":"task"', '"name":"task"', '"jobs":['];
 
 function recordOf(value: unknown): JsonRecord | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonRecord) : undefined;
@@ -72,6 +72,9 @@ export function subagentsFromEntries(
 	parentSubagentId?: string,
 ): RpcSubagentSnapshot[] {
 	const spawns = new Map<string, Spawn>();
+	// When each `task` call was made: its agents start then, while a blocking
+	// call's result is saved only once they all finish.
+	const calledAt = new Map<string, number>();
 	const settle = (id: string, status: AgentStatus | undefined, at: number, durationMs?: number) => {
 		const spawn = spawns.get(id);
 		if (!spawn || !status) return;
@@ -92,6 +95,13 @@ export function subagentsFromEntries(
 		if (!entry) continue;
 		const at = timestampOf(entry);
 		const message = recordOf(entry.message);
+		if (entry.type === "message" && message?.role === "assistant" && Array.isArray(message.content)) {
+			for (const part of message.content.map(recordOf)) {
+				const callId = stringOf(part?.id);
+				if (part?.type === "toolCall" && part.name === "task" && callId) calledAt.set(callId, at);
+			}
+			continue;
+		}
 		const details = recordOf(entry.type === "message" ? message?.details : entry.details);
 		if (!details) continue;
 
@@ -114,6 +124,7 @@ export function subagentsFromEntries(
 						task: stringOf(item.task),
 						assignment: stringOf(item.assignment),
 						lastUpdate: at,
+						spawnedAt: (parentToolCallId && calledAt.get(parentToolCallId)) || at,
 						progress: last ? ({ ...last } as unknown as AgentProgress) : undefined,
 						parentToolCallId,
 						parentSubagentId,

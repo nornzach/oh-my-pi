@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -413,6 +413,40 @@ describe("RPC subagent registry", () => {
 		]);
 		expect(registry.resolveSessionFile({ subagentId: "SubagentA" })).toBe(sessionFile);
 		expect(registry.resolveSessionFile({ sessionFile })).toBe(sessionFile);
+		registry.dispose();
+	});
+
+	test("lists agents in spawn order across task calls, and a revived agent keeps its place", () => {
+		const eventBus = new EventBus();
+		const registry = new RpcSubagentRegistry(eventBus, () => {});
+		const lifecycle = (id: string, index: number, callId: string, status: "started" | "completed") =>
+			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+				id,
+				index,
+				agent: "task",
+				agentSource: "bundled",
+				status,
+				parentToolCallId: callId,
+			} satisfies SubagentLifecyclePayload);
+		const now = spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000);
+			lifecycle("Zed", 0, "call-1", "started");
+			lifecycle("Yew", 1, "call-1", "started");
+			now.mockReturnValue(2_000);
+			lifecycle("Amy", 0, "call-2", "started");
+			lifecycle("Zed", 0, "call-1", "completed");
+			now.mockReturnValue(3_000);
+			lifecycle("Zed", 0, "call-1", "started");
+		} finally {
+			now.mockRestore();
+		}
+
+		expect(registry.getSubagents().map(row => [row.id, row.spawnedAt])).toEqual([
+			["Zed", 1_000],
+			["Yew", 1_000],
+			["Amy", 2_000],
+		]);
 		registry.dispose();
 	});
 

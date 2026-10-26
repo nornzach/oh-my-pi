@@ -36,6 +36,15 @@ function taskResult(callId: string, second: number, details: Record<string, unkn
 	};
 }
 
+/** The assistant message that made a task call, as the session file stores it. */
+function taskCall(callId: string, second: number) {
+	return {
+		type: "message",
+		timestamp: at(second),
+		message: { role: "assistant", content: [{ type: "toolCall", id: callId, name: "task", arguments: {} }] },
+	};
+}
+
 /** A session file: header lines, then `entries`, one per line. */
 function writeSession(file: string, entries: unknown[]): string {
 	const header = [
@@ -202,6 +211,42 @@ describe("RpcSubagentRegistry saved agents", () => {
 
 		expect(registry.getSubagents().map(row => [row.id, row.status])).toEqual([["Rain", "completed"]]);
 		expect(registry.resolveSessionFile({ subagentId: "Rain" })).toBe(transcript);
+	});
+
+	test("lists saved agents in spawn order, timed by the call that spawned them", async () => {
+		const dir = tempDir();
+		const session = path.join(dir, "main.jsonl");
+		// Two blocking calls, two agents each; a call's result is saved only once its agents finish.
+		writeSession(session, [
+			taskCall("call-1", 1),
+			taskResult("call-1", 9, {
+				results: [
+					{ ...spawned("Lead", 0), exitCode: 0 },
+					{ ...spawned("Kit", 1), exitCode: 0 },
+				],
+			}),
+			taskCall("call-2", 10),
+			taskResult("call-2", 12, {
+				results: [
+					{ ...spawned("Bay", 0), exitCode: 0 },
+					{ ...spawned("Ash", 1), exitCode: 0 },
+				],
+			}),
+		]);
+		const registry = new RpcSubagentRegistry(
+			new EventBus(),
+			() => {},
+			() => session,
+		);
+
+		await registry.restorePersisted();
+
+		expect(registry.getSubagents().map(row => [row.id, row.spawnedAt])).toEqual([
+			["Lead", Date.parse(at(1))],
+			["Kit", Date.parse(at(1))],
+			["Bay", Date.parse(at(10))],
+			["Ash", Date.parse(at(10))],
+		]);
 	});
 
 	test("keeps what this process saw over the saved row, and drops the old session's rows on a switch", async () => {

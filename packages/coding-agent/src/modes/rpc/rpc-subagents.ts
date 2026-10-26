@@ -290,6 +290,7 @@ export class RpcSubagentRegistry {
 				assignment: existing?.assignment,
 				sessionFile: ref.sessionFile ?? existing?.sessionFile,
 				lastUpdate: ref.lastActivity,
+				spawnedAt: existing?.spawnedAt ?? ref.createdAt,
 				progress: existing?.progress,
 				parentToolCallId: existing?.parentToolCallId,
 				parentSubagentId:
@@ -297,7 +298,10 @@ export class RpcSubagentRegistry {
 				kind: ref.kind,
 			});
 		}
-		return [...snapshots.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+		// Spawn order: `index` is only an agent's place within its own task call.
+		return [...snapshots.values()].sort(
+			(a, b) => (a.spawnedAt ?? 0) - (b.spawnedAt ?? 0) || a.index - b.index || a.id.localeCompare(b.id),
+		);
 	}
 
 	#rememberTranscriptSession(subagentId: string, sessionFile: string | undefined): void {
@@ -325,6 +329,7 @@ export class RpcSubagentRegistry {
 		const existing = this.#subagents.get(payload.id);
 		if (existing && !hasSameOwner(payload, existing)) return;
 		if (!existing && payload.status !== "started") return;
+		const spawnedAt = existing?.spawnedAt ?? this.#terminalSubagents.get(payload.id)?.spawnedAt ?? Date.now();
 		if (payload.status === "started") {
 			this.#staleSubagentIds.delete(payload.id);
 			// Revival: the live row (set below) replaces the finished one outright.
@@ -344,6 +349,7 @@ export class RpcSubagentRegistry {
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
 			parentSubagentId: payload.parentSubagentId ?? existing?.parentSubagentId,
 			lastUpdate: Date.now(),
+			spawnedAt,
 			progress: existing?.progress,
 		};
 		this.#rememberTranscriptSession(payload.id, sessionFile);
@@ -385,6 +391,7 @@ export class RpcSubagentRegistry {
 			lastUpdate: Date.now(),
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
 			parentSubagentId: payload.parentSubagentId ?? existing?.parentSubagentId,
+			spawnedAt: existing.spawnedAt,
 			progress,
 		});
 		if (this.#subscriptionLevel !== "off") {
