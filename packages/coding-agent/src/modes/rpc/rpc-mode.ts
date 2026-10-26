@@ -1787,7 +1787,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	let terminalTool: TerminalTool | undefined;
 	const refreshRpcTools = () =>
 		session.refreshRpcHostTools(terminalTool ? [...hostTools, terminalTool as AgentTool] : hostTools);
-	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
+	const subagentRegistry = subagentEventBus
+		? new RpcSubagentRegistry(subagentEventBus, output, () => session.sessionFile)
+		: undefined;
 	const planApprovalController = new RpcPlanApprovalController({
 		session,
 		output,
@@ -3067,6 +3069,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (!subagentRegistry) {
 					return error(id, "get_subagents", "Subagent event bus is unavailable");
 				}
+				await subagentRegistry.restorePersisted();
 				return success(id, "get_subagents", {
 					subagents: subagentRegistry.getSubagents(),
 				});
@@ -3080,6 +3083,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
 						return error(id, "get_subagent_messages", "fromByte must be a finite number");
 					}
+					await subagentRegistry.restorePersisted();
 					const sessionFile = subagentRegistry.resolveSessionFile(command);
 					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
 					return success(id, "get_subagent_messages", transcript);

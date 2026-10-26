@@ -37,7 +37,7 @@ interface PersistedAgentMetadata {
 	incomplete?: boolean;
 }
 
-interface PersistedTranscript {
+export interface PersistedTranscript {
 	id: string;
 	sessionFile: string;
 	createdAt?: number;
@@ -144,7 +144,7 @@ function isFilesystemError(error: unknown): boolean {
 	return typeof code === "string" && code !== "ENOENT";
 }
 
-async function readPersistedAgentHistory(
+export async function readPersistedAgentHistory(
 	transcript: PersistedTranscript,
 	shouldContinue: () => boolean,
 ): Promise<AgentHistorySummary> {

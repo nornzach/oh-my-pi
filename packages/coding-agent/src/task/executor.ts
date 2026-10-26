@@ -1429,6 +1429,23 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortController = new AbortController();
 	const abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
+	// The label also titles the agent's transcript, so a host that rebuilds its
+	// roster from disk (an RPC session reopened in a new process) shows it too.
+	// An existing title wins: a follow-up turn re-attaches an already named
+	// session. Best-effort like the label itself: a fault never fails the run.
+	const nameSession = (session: AgentSession | null): void => {
+		const label = progress.description;
+		if (!session || !label) return;
+		(async () => {
+			if (session.sessionManager.getSessionName()) return;
+			await session.sessionManager.setSessionName(label, "auto", "task-label");
+		})().catch(err => {
+			logger.debug("Subagent transcript title failed", {
+				id,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+	};
 	let completionProbeStarted = false;
 	let yieldCalled = false;
 	let yieldCallPending = false;
@@ -1710,6 +1727,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
 				progress.description = label;
+				nameSession(activeSession);
 				if (!resolved) scheduleProgress();
 			})
 			.catch(err => {
@@ -2397,6 +2415,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		resolveAbortReasonText,
 		setActiveSession: session => {
 			activeSession = session;
+			nameSession(session);
 			publishAdvisorState(session);
 			if (session && completionProbe && !completionProbeStarted) {
 				completionProbeStarted = true;

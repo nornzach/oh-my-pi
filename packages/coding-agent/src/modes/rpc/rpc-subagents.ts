@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
@@ -21,6 +21,7 @@ import type {
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
 } from "./rpc-types";
+import { readPersistedSubagents } from "./rpc-subagent-restore";
 
 export interface RpcSubagentTranscriptSelector {
 	subagentId?: string;
@@ -134,10 +135,18 @@ export class RpcSubagentRegistry {
 	#observabilityBus: EventBus | undefined;
 	#output: RpcSubagentOutput;
 	#subscriptionLevel: RpcSubagentSubscriptionLevel = "off";
+	#sessionFile: () => string | undefined;
+	/** The session file whose saved agents were read back, and that read. */
+	#restored: { sessionFile: string; done: Promise<void> } | undefined;
 
-	constructor(observabilityBus: EventBus, output: RpcSubagentOutput) {
+	constructor(
+		observabilityBus: EventBus,
+		output: RpcSubagentOutput,
+		sessionFile: () => string | undefined = () => undefined,
+	) {
 		this.#observabilityBus = observabilityBus;
 		this.#output = output;
+		this.#sessionFile = sessionFile;
 		this.#unsubscribers.push(
 			observabilityBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
 				this.handleLifecycle(data as SubagentLifecyclePayload);
@@ -158,6 +167,7 @@ export class RpcSubagentRegistry {
 		this.#terminalSubagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
 		this.#staleSubagentIds.clear();
+		this.#restored = undefined;
 	}
 
 	clear(): void {
@@ -181,6 +191,39 @@ export class RpcSubagentRegistry {
 		this.#subagents.clear();
 		this.#terminalSubagents.clear();
 		this.#transcriptSessionFilesBySubagentId.clear();
+		this.#restored = undefined;
+	}
+
+	/**
+	 * Read the current session's finished subagents back from its transcripts,
+	 * once per session file, so a session opened in this process lists the
+	 * agents an earlier process ran and can read their transcripts. Rows this
+	 * process already reports win: they are newer.
+	 */
+	restorePersisted(): Promise<void> {
+		const sessionFile = this.#sessionFile();
+		if (!sessionFile) return Promise.resolve();
+		if (this.#restored?.sessionFile === sessionFile) return this.#restored.done;
+		const restored = {
+			sessionFile,
+			done: readPersistedSubagents(sessionFile, MAX_RETAINED_TERMINAL_SUBAGENTS).then(
+				rows => {
+					if (this.#restored !== restored) return;
+					for (const row of rows) {
+						if (this.#subagents.has(row.id) || this.#terminalSubagents.has(row.id)) continue;
+						// Ids this session reuses from the one before are its own again.
+						this.#staleSubagentIds.delete(row.id);
+						this.#terminalSubagents.set(row.id, row);
+						this.#rememberTranscriptSession(row.id, row.sessionFile);
+					}
+				},
+				error => {
+					logger.warn("Reading saved subagents failed", { sessionFile, error: String(error) });
+				},
+			),
+		};
+		this.#restored = restored;
+		return restored.done;
 	}
 
 	setSubscriptionLevel(level: RpcSubagentSubscriptionLevel): void {
