@@ -15,7 +15,6 @@ import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
 import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
-import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
@@ -31,6 +30,7 @@ import type {
 	RpcAvailableCommandsUpdateFrame,
 	RpcAvailableSlashCommand,
 	RpcBtwDeltaFrame,
+	RpcBtwHistoryRecord,
 	RpcBtwRecordFrame,
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -333,7 +333,7 @@ export class RpcClient {
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
 	#btwDeltaListeners = new Set<(frame: RpcBtwDeltaFrame) => void>();
-	#btwRecordListeners = new Set<(record: BtwHistoryRecord) => void>();
+	#btwRecordListeners = new Set<(record: RpcBtwHistoryRecord) => void>();
 	#promptResultListeners = new Set<RpcPromptResultListener>();
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
 	#liveListeners = new Set<RpcLiveListener>();
@@ -650,7 +650,7 @@ export class RpcClient {
 	}
 
 	/** Subscribe to `btw_record` frames: a side question's full record on every lifecycle change. */
-	onBtwRecord(listener: (record: BtwHistoryRecord) => void): () => void {
+	onBtwRecord(listener: (record: RpcBtwHistoryRecord) => void): () => void {
 		this.#btwRecordListeners.add(listener);
 		return () => this.#btwRecordListeners.delete(listener);
 	}
@@ -1106,13 +1106,9 @@ export class RpcClient {
 	 * Ask a side question (`/btw`), or a follow-up in topic `recordId`. Resolves with the
 	 * running record; the answer streams via {@link onBtwDelta} and {@link onBtwRecord}.
 	 */
-	async btw(question: string, recordId?: string): Promise<BtwHistoryRecord> {
-		const response = await this.#send({
-			type: "btw",
-			question,
-			...(recordId === undefined ? {} : { recordId }),
-		});
-		return this.#getData<{ record: BtwHistoryRecord }>(response).record;
+	async btw(question: string, recordId?: string): Promise<RpcBtwHistoryRecord> {
+		const response = await this.#send({ type: "btw", question, ...(recordId === undefined ? {} : { recordId }) });
+		return this.#getData<{ record: RpcBtwHistoryRecord }>(response).record;
 	}
 
 	/** Cancel the running side question (only if it is `recordId`, when given). */
@@ -1125,9 +1121,9 @@ export class RpcClient {
 	}
 
 	/** This session's side questions, newest first. */
-	async getBtwHistory(): Promise<readonly BtwHistoryRecord[]> {
+	async getBtwHistory(): Promise<readonly RpcBtwHistoryRecord[]> {
 		const response = await this.#send({ type: "get_btw_history" });
-		return this.#getData<{ records: readonly BtwHistoryRecord[] }>(response).records;
+		return this.#getData<{ records: readonly RpcBtwHistoryRecord[] }>(response).records;
 	}
 
 	/**
