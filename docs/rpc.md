@@ -258,6 +258,14 @@ authorization URL. Prompts marked `secret: true` are always rejected with a
 failed `login` response directing the user to the terminal UI; no ordinary
 `input` request is emitted. RPC does not negotiate secret-input support.
 
+Answering a login's `open_url`, or one of its prompts, with `cancelled: true`
+cancels the login: the provider stops waiting for its browser callback, open
+login prompts receive a `cancel` request, and `login` fails with
+`code: "login_cancelled"`. A prompt that times out fails the login without that
+code. Any other `open_url` answer, or none, leaves the login running. When the
+login ends, omp sends a `cancel` request for every `open_url` the host has not
+answered.
+
 Logout works per stored credential, as `/logout` does in the TUI, because one
 provider can hold several accounts. `get_logout_accounts` lists them (`credentialId`,
 `provider`, `label`, `detail`, `type`, and `active` for credentials the session may
@@ -1287,7 +1295,8 @@ Example:
 `select` and `input` resolve to `undefined`, and `confirm` to `false`, on
 cancellation, timeout, or signal abort. Signal abort emits a `cancel` request
 with `targetId`. `editor` supports cancellation and signal abort but has no wire timeout.
-Presentation methods and `open_url` are fire-and-forget and require no response.
+Presentation methods and `open_url` are fire-and-forget and require no response;
+answering a `login` command's `open_url` with `cancelled: true` cancels that login (see Login).
 
 If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires, and emits
 `{ method: "cancel", targetId }` so the host closes the dialog; a later answer to it is ignored. For `ask`, a timeout

@@ -3811,6 +3811,7 @@ export type RpcExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
+			/** Answering with `cancelled: true` cancels the `login` that emitted it. */
 			method: "open_url";
 			url: string;
 			/**

@@ -4055,12 +4055,46 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return error(id, "login", `Unknown login provider: ${command.providerId}`);
 				}
 				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
+				// A host that dismisses the authorization URL or a login prompt cancels
+				// the login: the provider stops waiting on its callback and open prompts close.
+				const cancel = new AbortController();
+				let promptTimedOut = false;
+				const dialogOptions = {
+					timeout: 600_000,
+					signal: cancel.signal,
+					onTimeout: () => {
+						promptTimedOut = true;
+					},
+				};
+				const promptClosed = (): LoginCancelledError => {
+					if (promptTimedOut) return new LoginCancelledError("Login prompt timed out");
+					cancel.abort(new LoginCancelledError());
+					return new LoginCancelledError();
+				};
+				// open_url frames the host has not answered; hosts may never answer.
+				const openUrlRequests = new Set<string>();
 				try {
 					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
+						signal: cancel.signal,
 						onAuth: info => {
+							const requestId = Snowflake.next() as string;
+							openUrlRequests.add(requestId);
+							pendingExtensionRequests.set(requestId, {
+								resolve: response => {
+									openUrlRequests.delete(requestId);
+									pendingExtensionRequests.delete(requestId);
+									if ("cancelled" in response && response.cancelled) {
+										cancel.abort(new LoginCancelledError());
+									}
+								},
+								reject: reason => {
+									openUrlRequests.delete(requestId);
+									cancel.abort(reason);
+								},
+							});
 							output({
 								type: "extension_ui_request",
-								id: Snowflake.next() as string,
+								id: requestId,
 								method: "open_url",
 								url: info.url,
 								launchUrl: info.launchUrl,
@@ -4079,8 +4113,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						// would silently take the prompt's default branch.
 						onPrompt: async prompt => {
 							if (prompt.options?.length) {
-								const picked = await uiCtx.select(prompt.message, prompt.options, { timeout: 600_000 });
-								if (picked === undefined) throw new LoginCancelledError();
+								const picked = await uiCtx.select(prompt.message, prompt.options, dialogOptions);
+								if (picked === undefined) throw promptClosed();
 								return String(prompt.options.indexOf(picked) + 1);
 							}
 							if (prompt.secret) {
@@ -4089,8 +4123,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 										"which is not supported in RPC mode. Use the terminal UI to log in.",
 								);
 							}
-							const value = await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 });
-							if (value === undefined) throw new LoginCancelledError();
+							const value = await uiCtx.input(prompt.message, prompt.placeholder, dialogOptions);
+							if (value === undefined) throw promptClosed();
 							return value;
 						},
 					});
@@ -4104,7 +4138,22 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					emitModelCatalogUpdate();
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
+					// After a host cancel, whichever rejection reaches here first is the cancel.
+					if (cancel.signal.aborted) {
+						return error(id, "login", new LoginCancelledError().message, "login_cancelled");
+					}
 					return error(id, "login", err instanceof Error ? err.message : String(err));
+				} finally {
+					// Close authorization-URL dialogs the login no longer needs.
+					for (const requestId of openUrlRequests) {
+						pendingExtensionRequests.delete(requestId);
+						output({
+							type: "extension_ui_request",
+							id: Snowflake.next() as string,
+							method: "cancel",
+							targetId: requestId,
+						} as RpcExtensionUIRequest);
+					}
 				}
 			}
 

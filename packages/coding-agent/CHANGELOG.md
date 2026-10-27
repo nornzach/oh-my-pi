@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed RPC `login` running on after the host dismissed the authorization URL: answering `open_url` with `cancelled: true` now cancels the sign-in and closes its prompts, and a cancelled login (URL or prompt dismissed) fails with code `login_cancelled`
 - Fixed advisors dropping their review and showing a rate-limit error when the provider returns a timed 429 such as Codex's `turn_rate_limit_exceeded`; the advisor now waits out the Retry-After (within `retry.maxDelayMs`) and retries like the main agent ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.0] - 2026-10-26
