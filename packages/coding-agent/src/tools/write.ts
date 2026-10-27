@@ -25,6 +25,8 @@ import {
 import {
 	type ArchiveMemberContent,
 	archiveFormatFromPath,
+	assertInMemorySize,
+	DEFAULT_ARCHIVE_LIMITS,
 	isWritableArchiveFormat,
 	parseArchivePathCandidates,
 	readArchiveEntries,
@@ -758,6 +760,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				const entries = new Map<string, ArchiveMemberContent>();
 				if (exists) {
 					try {
+						// A plain tar indexes lazily, so nothing upstream bounds its size; the
+						// rewrite holds every member in memory, so reject before reading any.
+						if (format === "tar") assertInMemorySize((await fs.stat(finalPath)).size, DEFAULT_ARCHIVE_LIMITS);
 						const existing = await readArchiveEntries({ path: finalPath, format });
 						for (const [entryPath, data] of existing) {
 							entries.set(entryPath, data);

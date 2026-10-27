@@ -13,7 +13,16 @@ export interface RpcSettingProvenance {
  */
 import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessageEvent, Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	Effort,
+	ImageContent,
+	Model,
+	TextContent,
+	ThinkingContent,
+	ToolExample,
+} from "@oh-my-pi/pi-ai";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
@@ -56,7 +65,10 @@ import type { RpcMessagesPage } from "./rpc-messages";
 // RPC Commands (stdin)
 // ============================================================================
 
-/** `set_event_filter` projection: `"full"` keeps both accumulated snapshots in `message_update`, `"delta"` sends only the increment. */
+/**
+ * `set_event_filter` projection: `"full"` keeps both accumulated snapshots in `message_update`, `"delta"` replaces them
+ * with the block a start event opens or an end event closes (see {@link RpcDeltaAssistantMessageEvent}).
+ */
 export type RpcMessageUpdates = "full" | "delta";
 
 export type RpcCommand =
@@ -145,12 +157,12 @@ export type RpcCommand =
 	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
 	| { id?: string; type: "live_stop" }
 	| { id?: string; type: "live_mute"; muted?: boolean }
-	// Live dictation (the host's microphone feeding the dictation model; see rpc-dictation.ts).
-	// `dictation_audio.pcm16Base64` is little-endian PCM16 mono at 16 kHz.
-	| { id?: string; type: "dictation_start" }
-	| { id?: string; type: "dictation_audio"; pcm16Base64: string }
-	| { id?: string; type: "dictation_stop" }
-	| { id?: string; type: "dictation_cancel" }
+	// Host-fed dictation (the host's microphone feeding the dictation model; see rpc-host-dictation.ts).
+	// `host_dictation_audio.pcm16Base64` is little-endian PCM16 mono at 16 kHz.
+	| { id?: string; type: "host_dictation_start" }
+	| { id?: string; type: "host_dictation_audio"; pcm16Base64: string }
+	| { id?: string; type: "host_dictation_stop" }
+	| { id?: string; type: "host_dictation_cancel" }
 	// Interactive terminals (host-rendered PTYs; see rpc-terminal.ts)
 	| { id?: string; type: "terminal_open"; cols?: number; rows?: number; cwd?: string }
 	/** Run an omp subcommand that brings its own terminal UI in a revealed terminal. */
@@ -172,6 +184,10 @@ export type RpcCommand =
 	/** Serve a private browser relay the host dials as its extension; browser opens go to the host's panel. */
 	| { id?: string; type: "browser_host_start" }
 	| { id?: string; type: "browser_host_stop" }
+
+	// Draft-only speech-to-text
+	| { id?: string; type: "dictation_start"; captureId: string }
+	| { id?: string; type: "dictation_stop" }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -255,6 +271,9 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "branch"; entryId: string }
 	| { id?: string; type: "fork"; entryId?: string }
+	| { id?: string; type: "navigate_tree"; entryId: string; summarize?: boolean; customInstructions?: string }
+	| { id?: string; type: "abort_branch_summary" }
+	| { id?: string; type: "set_label"; entryId: string; label?: string }
 	| { id?: string; type: "get_branch_messages" }
 	| { id?: string; type: "get_config_warnings" }
 	| { id?: string; type: "get_advisor_status" }
@@ -879,18 +898,18 @@ export interface RpcLiveEndFrame {
 export type RpcLiveFrame = RpcLivePhaseFrame | RpcLiveLevelsFrame | RpcLiveTranscriptFrame | RpcLiveEndFrame;
 
 // ============================================================================
-// Dictation Frames (stdout, unsolicited; see rpc-dictation.ts)
+// Host Dictation Frames (stdout, unsolicited; see rpc-host-dictation.ts)
 // ============================================================================
 
 /**
  * `preparing`: loading (or downloading) the model, microphone audio is not yet consumed;
- * `recording`: `dictation_audio` is transcribed live; `transcribing`: finishing after stop.
+ * `recording`: `host_dictation_audio` is transcribed live; `transcribing`: finishing after stop.
  */
-export type RpcDictationState = "preparing" | "recording" | "transcribing" | "idle";
+export type RpcHostDictationState = "preparing" | "recording" | "transcribing" | "idle";
 
-export interface RpcDictationStateFrame {
-	type: "dictation_state";
-	state: RpcDictationState;
+export interface RpcHostDictationStateFrame {
+	type: "host_dictation_state";
+	state: RpcHostDictationState;
 }
 
 /**
@@ -899,32 +918,32 @@ export interface RpcDictationStateFrame {
  * them; `trim` deletes `count` characters before the dictation point (a spoken submit command);
  * `submit` sends the message, per the `stt.submitTrigger` setting.
  */
-export type RpcDictationTextFrame =
-	| { type: "dictation_text"; op: "volatile"; text: string }
-	| { type: "dictation_text"; op: "commit"; text: string }
-	| { type: "dictation_text"; op: "clear" }
-	| { type: "dictation_text"; op: "trim"; count: number }
-	| { type: "dictation_text"; op: "submit" };
+export type RpcHostDictationTextFrame =
+	| { type: "host_dictation_text"; op: "volatile"; text: string }
+	| { type: "host_dictation_text"; op: "commit"; text: string }
+	| { type: "host_dictation_text"; op: "clear" }
+	| { type: "host_dictation_text"; op: "trim"; count: number }
+	| { type: "host_dictation_text"; op: "submit" };
 
 /** A warning (the capture failed or cannot start) or a status line (e.g. "No speech detected."). */
-export interface RpcDictationNoticeFrame {
-	type: "dictation_notice";
+export interface RpcHostDictationNoticeFrame {
+	type: "host_dictation_notice";
 	level: "warning" | "status";
 	message: string;
 }
 
 /** Download progress of the dictation model while preparing, as an integer percent. */
-export interface RpcDictationDownloadFrame {
-	type: "dictation_download";
+export interface RpcHostDictationDownloadFrame {
+	type: "host_dictation_download";
 	label: string;
 	percent: number;
 }
 
-export type RpcDictationFrame =
-	| RpcDictationStateFrame
-	| RpcDictationTextFrame
-	| RpcDictationNoticeFrame
-	| RpcDictationDownloadFrame;
+export type RpcHostDictationFrame =
+	| RpcHostDictationStateFrame
+	| RpcHostDictationTextFrame
+	| RpcHostDictationNoticeFrame
+	| RpcHostDictationDownloadFrame;
 
 // ============================================================================
 // Terminal Frames (stdout, unsolicited; see rpc-terminal.ts)
@@ -1047,12 +1066,45 @@ export interface RpcTerminalSnapshot {
 	seq: number;
 }
 
+/** Draft-only dictation frames bypass the session event filter. */
+export interface RpcDictationStateFrame {
+	type: "dictation_state";
+	captureId: string;
+	state: "starting" | "recording" | "transcribing";
+}
+
+/** Full accumulated preview, replacing the previous preview for this capture. */
+export interface RpcDictationTranscriptFrame {
+	type: "dictation_transcript";
+	captureId: string;
+	text: string;
+}
+
+/** Exactly one terminal frame per capture, including any failure. */
+export interface RpcDictationEndFrame {
+	type: "dictation_end";
+	captureId: string;
+	text: string;
+	error?: string;
+}
+
+export type RpcDictationFrame = RpcDictationStateFrame | RpcDictationTranscriptFrame | RpcDictationEndFrame;
+
 /** `open_session` result: `resumed` is false when a fresh session was started in the directory. */
 export interface RpcOpenSessionResult {
 	cancelled: boolean;
 	resumed: boolean;
 	sessionId: string;
 	sessionFile?: string;
+}
+
+/** `navigate_tree` result. */
+export interface RpcNavigateTreeResult {
+	cancelled: boolean;
+	/** Only ever `true`: `abort_branch_summary` stopped the summary; nothing moved. */
+	aborted?: boolean;
+	/** The target was a user message: its text, for the editor (the leaf moved to its parent). */
+	editorText?: string;
 }
 
 /** `remove_queued_message` result. */
@@ -2657,6 +2709,9 @@ export type RpcResponse =
 			command: "resume_after_ask_reanswer";
 			success: true;
 	  }
+	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
+	| { id?: string; type: "response"; command: "abort_branch_summary"; success: true }
+	| { id?: string; type: "response"; command: "set_label"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -2764,17 +2819,17 @@ export type RpcResponse =
 			data: { voice: string };
 	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
-	// Live dictation
+	// Host-fed dictation (the host's microphone; see rpc-host-dictation.ts)
 	| {
 			id?: string;
 			type: "response";
-			command: "dictation_start";
+			command: "host_dictation_start";
 			success: true;
-			data: { state: RpcDictationState };
+			data: { state: RpcHostDictationState };
 	  }
-	| { id?: string; type: "response"; command: "dictation_audio"; success: true }
-	| { id?: string; type: "response"; command: "dictation_stop"; success: true }
-	| { id?: string; type: "response"; command: "dictation_cancel"; success: true }
+	| { id?: string; type: "response"; command: "host_dictation_audio"; success: true }
+	| { id?: string; type: "response"; command: "host_dictation_stop"; success: true }
+	| { id?: string; type: "response"; command: "host_dictation_cancel"; success: true }
 	// Interactive terminals
 	| { id?: string; type: "response"; command: "terminal_open"; success: true; data: RpcTerminalInfo }
 	| { id?: string; type: "response"; command: "terminal_run_cli"; success: true; data: RpcTerminalInfo }
@@ -2813,6 +2868,10 @@ export type RpcResponse =
 			success: true;
 			data: { muted: boolean };
 	  }
+	// Draft-only speech-to-text
+	| { id?: string; type: "response"; command: "dictation_start"; success: true }
+	| { id?: string; type: "response"; command: "dictation_stop"; success: true; data: { text: string } }
+	| { id?: string; type: "response"; command: "handoff"; success: true; data: RpcHandoffResult | null }
 
 	// Messages
 	| {
@@ -3677,14 +3736,33 @@ export type RpcMessageEventType = "message_start" | "message_update" | "message_
 export type RpcMessageEventFrame = Extract<AgentSessionEvent, { type: RpcMessageEventType }> & { messageId: string };
 
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
+type DeltaOf<Type extends AssistantMessageEvent["type"]> = WithoutPartial<
+	Extract<AssistantMessageEvent, { type: Type }>
+>;
 
-/** Raw-protocol opt-in projection; terminal subtype fields are preserved. */
+/**
+ * `assistantMessageEvent` of a delta `message_update`: `*_delta` carries only the increment; a `*_start` carries the
+ * shell of the block it opened (`partial.content[contentIndex]` with its text, thinking, or tool arguments emptied, so
+ * the deltas that follow apply cleanly); `text_end`/`thinking_end` carry the rest of the block (everything but the text
+ * their `content` already holds); `image_end` and `toolcall_end` carry the whole block as `content` / `toolCall`. A
+ * re-`start` carries the whole message it restarts from; that snapshot may already be ahead of the stream, so each
+ * block's `*_end` is authoritative. `block` is absent only if the provider's `contentIndex` points at no block.
+ */
+export type RpcDeltaAssistantMessageEvent =
+	| DeltaOf<"text_delta" | "thinking_delta" | "toolcall_delta" | "image_end" | "toolcall_end">
+	| (DeltaOf<"text_start" | "thinking_start" | "toolcall_start"> & { block?: AssistantMessage["content"][number] })
+	| (DeltaOf<"text_end"> & { block?: Omit<TextContent, "text"> })
+	| (DeltaOf<"thinking_end"> & { block?: Omit<ThinkingContent, "thinking"> })
+	| (DeltaOf<"start"> & { message: AssistantMessage })
+	| Extract<AssistantMessageEvent, { type: "done" | "error" }>;
+
+/** Opt-in projection (`messageUpdates: "delta"`): enough to rebuild the message client-side; terminal subtypes pass through. */
 export type RpcDeltaMessageUpdateFrame = Omit<
 	Extract<RpcMessageEventFrame, { type: "message_update" }>,
 	"message" | "assistantMessageEvent"
 > & {
 	message: Pick<AgentMessage, "role">;
-	assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
+	assistantMessageEvent: RpcDeltaAssistantMessageEvent;
 };
 
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
@@ -3756,6 +3834,7 @@ export type RpcExtensionUIRequest =
 			 * browser callback signs in first.
 			 */
 			authCodeFor?: string;
+			secret?: boolean;
 	  }
 	| {
 			type: "extension_ui_request";
