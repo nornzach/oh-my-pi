@@ -3749,6 +3749,13 @@ export type RpcExtensionUIRequest =
 			title: string;
 			placeholder?: string;
 			timeout?: number;
+			/**
+			 * Set when the prompt asks for a pasted OAuth authorization code: the id
+			 * of the `open_url` request it belongs to, so hosts can show the field
+			 * inside that dialog. omp closes the prompt (`cancel` frame) when the
+			 * browser callback signs in first.
+			 */
+			authCodeFor?: string;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -3811,7 +3818,11 @@ export type RpcExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
-			/** Answering with `cancelled: true` cancels the `login` that emitted it. */
+			/**
+			 * Answering with `cancelled: true` cancels the `login` or `mcp_reauth`
+			 * that emitted it. omp closes a dialog the host has not answered
+			 * (`cancel` frame) when that flow ends.
+			 */
 			method: "open_url";
 			url: string;
 			/**

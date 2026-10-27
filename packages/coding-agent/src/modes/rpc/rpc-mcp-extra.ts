@@ -300,14 +300,23 @@ export async function applyRpcMcpTest(
  * EXISTING `method:"input"` dialog plumbing.
  */
 export interface RpcMcpOAuthUi {
-	openUrl(info: { url: string; launchUrl?: string; instructions?: string }): void;
+	/**
+	 * Shows the authorization URL and returns its dialog id. A host that
+	 * dismisses the dialog calls `onDismiss`; aborting `signal` closes it when
+	 * the flow ends.
+	 */
+	openUrl(
+		info: { url: string; launchUrl?: string; instructions?: string },
+		options: { signal: AbortSignal; onDismiss: () => void },
+	): string;
 	notify(message: string): void;
 	/**
 	 * `signal` is the reauth cancel channel: aborting dismisses the remote
 	 * input dialog (method:"cancel" frame) and resolves the pending extension
-	 * request instead of leaking it.
+	 * request instead of leaking it. `authCodeFor` names the URL dialog a
+	 * pasted-code prompt belongs to.
 	 */
-	input(title: string, placeholder?: string, signal?: AbortSignal): Promise<string | undefined>;
+	input(title: string, placeholder?: string, signal?: AbortSignal, authCodeFor?: string): Promise<string | undefined>;
 }
 
 /** Refused concurrency: a second mcp_reauth claimed while one is in flight. */
@@ -342,10 +351,19 @@ let activeReauth: ActiveReauth | undefined;
  * (mcp-command-controller.ts:784-789): at most one MCP manual-code prompt
  * outstanding. The claim's promise is driven by the `input` dialog bridge.
  */
-type RpcManualInputClaim = { promise: Promise<string>; clear: (reason?: string) => void };
+type RpcManualInputClaim = {
+	promise: Promise<string>;
+	clear: (reason?: string) => void;
+	/** The prompt was answered, dismissed, or cleared; a retry needs a new one. */
+	readonly settled: boolean;
+};
 let pendingManualInput: { reject: (error: Error) => void } | undefined;
 
-function tryClaimRpcManualInput(ui: RpcMcpOAuthUi, signal?: AbortSignal): RpcManualInputClaim | undefined {
+function tryClaimRpcManualInput(
+	ui: RpcMcpOAuthUi,
+	signal?: AbortSignal,
+	authCodeFor?: string,
+): RpcManualInputClaim | undefined {
 	if (pendingManualInput) return undefined;
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
 	const pending = { reject };
@@ -357,22 +375,27 @@ function tryClaimRpcManualInput(ui: RpcMcpOAuthUi, signal?: AbortSignal): RpcMan
 			pendingManualInput = undefined;
 			reject(new Error(reason));
 		},
+		get settled() {
+			return pendingManualInput !== pending;
+		},
 	};
-	void ui.input("MCP OAuth authorization", "Paste the authorization code (or full redirect URL):", signal).then(
-		value => {
-			if (pendingManualInput !== pending) return;
-			pendingManualInput = undefined;
-			// Dialog dismissed without a value: treat as a user cancel, matching
-			// the TUI's neutral-cancel semantics rather than a flow failure.
-			if (value === undefined) reject(new RpcMcpOAuthCancelledError());
-			else resolve(value);
-		},
-		error => {
-			if (pendingManualInput !== pending) return;
-			pendingManualInput = undefined;
-			reject(error instanceof Error ? error : new Error(String(error)));
-		},
-	);
+	void ui
+		.input("MCP OAuth authorization", "Paste the authorization code (or full redirect URL):", signal, authCodeFor)
+		.then(
+			value => {
+				if (pendingManualInput !== pending) return;
+				pendingManualInput = undefined;
+				// Dialog dismissed without a value: treat as a user cancel, matching
+				// the TUI's neutral-cancel semantics rather than a flow failure.
+				if (value === undefined) reject(new RpcMcpOAuthCancelledError());
+				else resolve(value);
+			},
+			error => {
+				if (pendingManualInput !== pending) return;
+				pendingManualInput = undefined;
+				reject(error instanceof Error ? error : new Error(String(error)));
+			},
+		);
 	return claim;
 }
 
@@ -615,6 +638,9 @@ async function runRpcMcpOAuthFlow(
 		);
 	}
 	let manualInputClaim: RpcManualInputClaim | undefined;
+	// Closes the authorization-URL dialog when the flow ends, however it ends.
+	const flowDone = new AbortController();
+	let authUrlId: string | undefined;
 	const oauthTimeout = new AbortController();
 	// External cancels and the timeout path both abort; the flag distinguishes
 	// "user cancelled" (neutral result) from "deadline elapsed" (error).
@@ -651,14 +677,20 @@ async function runRpcMcpOAuthFlow(
 			},
 			{
 				onAuth: (info: { url: string; launchUrl?: string; instructions?: string }) => {
-					ui.openUrl(info);
+					// Dismissing the URL is the same cancel as mcp_reauth_cancel.
+					authUrlId = ui.openUrl(info, {
+						signal: flowDone.signal,
+						onDismiss: () => requestUserCancel("Reauthorization cancelled by user"),
+					});
 				},
 				onProgress: (message: string) => {
 					ui.notify(message);
 				},
-				onManualCodeInput: () => {
-					if (manualInputClaim) return manualInputClaim.promise;
-					const claim = tryClaimRpcManualInput(ui, externalSignal);
+				onManualCodeInput: (signal?: AbortSignal) => {
+					if (manualInputClaim && !manualInputClaim.settled) return manualInputClaim.promise;
+					// The wait's signal closes the prompt once the browser callback wins.
+					const claimSignal = signal ? AbortSignal.any([externalSignal, signal]) : externalSignal;
+					const claim = tryClaimRpcManualInput(ui, claimSignal, authUrlId);
 					if (!claim) {
 						throw new Error(
 							"OAuth login already in progress for another provider. Complete or cancel it before starting MCP OAuth.",
@@ -735,6 +767,7 @@ async function runRpcMcpOAuthFlow(
 	} finally {
 		externalSignal.removeEventListener("abort", onExternalAbort);
 		manualInputClaim?.clear("Manual MCP OAuth input cleared");
+		flowDone.abort();
 	}
 }
 

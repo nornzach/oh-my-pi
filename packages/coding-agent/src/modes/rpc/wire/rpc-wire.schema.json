@@ -4977,6 +4977,10 @@
 				},
 				"timeout": {
 					"type": "integer"
+				},
+				"authCodeFor": {
+					"type": "string",
+					"description": "Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in."
 				}
 			},
 			"required": [

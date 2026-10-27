@@ -585,9 +585,8 @@ export default function(pi) {
 
 	it("cancels a login when the host dismisses its authorization URL", async () => {
 		await using temp = await TempDir.create("@rpc-login-cancel-");
-		const extensionPath = temp.join("login.mjs");
-		await Bun.write(
-			extensionPath,
+		await using fixture = await startLoginFixture(
+			temp,
 			`
 export default function(pi) {
   globalThis.fetch = async () => { throw new Error("Offline login fixture refuses network"); };
@@ -622,123 +621,186 @@ export default function(pi) {
 }
 `,
 		);
-		const child = Bun.spawn(
-			[
-				process.execPath,
-				path.join(import.meta.dir, "..", "src", "cli.ts"),
-				"--trusted-extension",
-				extensionPath,
-				"--mode",
-				"rpc",
-				"--provider",
-				"anthropic",
-				"--model",
-				"claude-sonnet-4-5",
-			],
-			{
-				cwd: temp.path(),
-				env: {
-					PATH: Bun.env.PATH,
-					HOME: temp.join("home"),
-					PI_CODING_AGENT_DIR: temp.join("agent"),
-					XDG_CONFIG_HOME: temp.join("config"),
-					XDG_DATA_HOME: temp.join("data"),
-					XDG_CACHE_HOME: temp.join("cache"),
-					CI: "true",
-					PI_NO_TITLE: "1",
-				},
-				stdin: "pipe",
-				stdout: "pipe",
-				stderr: "pipe",
-				timeout: 20_000,
-			},
+		const { login, idOf } = fixture;
+
+		// Done acknowledges the URL; it must not cancel the login.
+		const acknowledged = await login("rpc-paste", request =>
+			request.method === "open_url" ? { value: "done" } : request.method === "input" ? { value: "code" } : undefined,
 		);
-		const stdout = new Response(child.stdout).body;
-		if (!stdout) throw new Error("RPC login fixture did not expose stdout");
-		const stderr = new Response(child.stderr).text();
-		const frames = readJsonl<unknown>(stdout)[Symbol.asyncIterator]();
-		const send = async (frame: object) => {
-			child.stdin.write(`${JSON.stringify(frame)}\n`);
-			await child.stdin.flush();
-		};
-		/** Runs one login, answering its UI requests with `answer`, and returns the requests it emitted. */
-		const login = async (providerId: string, answer: (request: Record<string, unknown>) => object | undefined) => {
-			const id = crypto.randomUUID();
-			await send({ type: "login", providerId, id });
-			const requests: Record<string, unknown>[] = [];
-			while (true) {
-				const next = await frames.next();
-				if (next.done) throw new Error(`RPC login fixture exited during ${providerId}: ${await stderr}`);
-				const frame = next.value;
-				if (!isRecord(frame)) continue;
-				if (frame.type === "response" && frame.id === id) return { requests, response: frame };
-				if (frame.type !== "extension_ui_request") continue;
-				requests.push(frame);
-				const payload = answer(frame);
-				if (payload) await send({ type: "extension_ui_response", id: frame.id, ...payload });
-			}
-		};
-		const idOf = (requests: Record<string, unknown>[], method: string) =>
-			requests.find(request => request.method === method)?.id;
+		expect(acknowledged.response).toMatchObject({ command: "login", success: true });
+		expect(acknowledged.requests.some(request => request.method === "cancel")).toBe(false);
 
-		try {
-			// Done acknowledges the URL; it must not cancel the login.
-			const acknowledged = await login("rpc-paste", request =>
-				request.method === "open_url"
-					? { value: "done" }
-					: request.method === "input"
-						? { value: "code" }
-						: undefined,
-			);
-			expect(acknowledged.response).toMatchObject({ command: "login", success: true });
-			expect(acknowledged.requests.some(request => request.method === "cancel")).toBe(false);
+		// A host that never answers the URL gets its dialog closed when the login ends.
+		const unanswered = await login("rpc-paste", request =>
+			request.method === "input" ? { value: "code" } : undefined,
+		);
+		expect(unanswered.response).toMatchObject({ command: "login", success: true });
+		expect(unanswered.requests).toContainEqual(
+			expect.objectContaining({ method: "cancel", targetId: idOf(unanswered.requests, "open_url") }),
+		);
 
-			// A host that never answers the URL gets its dialog closed when the login ends.
-			const unanswered = await login("rpc-paste", request =>
-				request.method === "input" ? { value: "code" } : undefined,
-			);
-			expect(unanswered.response).toMatchObject({ command: "login", success: true });
-			expect(unanswered.requests).toContainEqual(
-				expect.objectContaining({ method: "cancel", targetId: idOf(unanswered.requests, "open_url") }),
-			);
+		// The paste-code prompt closes with the login instead of waiting out its timeout.
+		const pasteCancelled = await login("rpc-paste", request =>
+			request.method === "open_url" ? { cancelled: true } : undefined,
+		);
+		expect(pasteCancelled.response).toMatchObject({
+			command: "login",
+			success: false,
+			error: "Login cancelled",
+			code: "login_cancelled",
+		});
+		expect(pasteCancelled.requests).toContainEqual(
+			expect.objectContaining({ method: "cancel", targetId: idOf(pasteCancelled.requests, "input") }),
+		);
 
-			// The paste-code prompt closes with the login instead of waiting out its timeout.
-			const pasteCancelled = await login("rpc-paste", request =>
-				request.method === "open_url" ? { cancelled: true } : undefined,
-			);
-			expect(pasteCancelled.response).toMatchObject({
-				command: "login",
-				success: false,
-				error: "Login cancelled",
-				code: "login_cancelled",
-			});
-			expect(pasteCancelled.requests).toContainEqual(
-				expect.objectContaining({ method: "cancel", targetId: idOf(pasteCancelled.requests, "input") }),
-			);
+		// A provider waiting on its callback is stopped through the login signal.
+		const waitCancelled = await login("rpc-wait", request =>
+			request.method === "open_url" ? { cancelled: true } : undefined,
+		);
+		expect(waitCancelled.response).toMatchObject({ command: "login", success: false, code: "login_cancelled" });
 
-			// A provider waiting on its callback is stopped through the login signal.
-			const waitCancelled = await login("rpc-wait", request =>
-				request.method === "open_url" ? { cancelled: true } : undefined,
-			);
-			expect(waitCancelled.response).toMatchObject({ command: "login", success: false, code: "login_cancelled" });
+		// Dismissing the paste-code prompt is the same cancel; a prompt that timed out is a failure.
+		const promptCancelled = await login("rpc-paste", request =>
+			request.method === "input" ? { cancelled: true } : undefined,
+		);
+		expect(promptCancelled.response).toMatchObject({ command: "login", success: false, code: "login_cancelled" });
+		const promptTimedOut = await login("rpc-paste", request =>
+			request.method === "input" ? { cancelled: true, timedOut: true } : undefined,
+		);
+		expect(promptTimedOut.response).toMatchObject({ command: "login", success: false });
+		expect(promptTimedOut.response).not.toHaveProperty("code");
+	}, 30_000);
 
-			// Dismissing the paste-code prompt is the same cancel; a prompt that timed out is a failure.
-			const promptCancelled = await login("rpc-paste", request =>
-				request.method === "input" ? { cancelled: true } : undefined,
-			);
-			expect(promptCancelled.response).toMatchObject({ command: "login", success: false, code: "login_cancelled" });
-			const promptTimedOut = await login("rpc-paste", request =>
-				request.method === "input" ? { cancelled: true, timedOut: true } : undefined,
-			);
-			expect(promptTimedOut.response).toMatchObject({ command: "login", success: false });
-			expect(promptTimedOut.response).not.toHaveProperty("code");
-		} finally {
+	it("shows Anthropic's paste-code prompt with its URL dialog and closes both when the browser signs in", async () => {
+		await using temp = await TempDir.create("@rpc-login-paste-");
+		// Offline token endpoint: it accepts the codes this test hands out and
+		// refuses every other request (identity and model discovery fail quietly).
+		await using fixture = await startLoginFixture(
+			temp,
+			`
+export default function() {
+  globalThis.fetch = async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith("https://api.anthropic.com/v1/oauth/token")) {
+      const { code } = JSON.parse(String(init?.body));
+      if (code === "browser-code" || code === "pasted-code") {
+        return Response.json({ access_token: "at-" + code, refresh_token: "rt", expires_in: 3600 });
+      }
+      return new Response("bad code", { status: 400 });
+    }
+    throw new Error("Offline login fixture refuses network");
+  };
+}
+`,
+		);
+		const { login, idOf } = fixture;
+		const authorizeParams = (requests: Record<string, unknown>[]) =>
+			new URL(String(requests.find(request => request.method === "open_url")?.url)).searchParams;
+
+		// The browser reaches the callback first: the unanswered paste prompt and URL dialog close.
+		const browser: Promise<Response>[] = [];
+		const viaBrowser = await login("anthropic", request => {
+			if (request.method !== "open_url") return undefined;
+			const params = new URL(String(request.url)).searchParams;
+			const callback = new URL(params.get("redirect_uri") ?? "");
+			callback.searchParams.set("code", "browser-code");
+			callback.searchParams.set("state", params.get("state") ?? "");
+			browser.push(fetch(callback));
+			return undefined;
+		});
+		await Promise.all(browser);
+		expect(viaBrowser.response).toMatchObject({ command: "login", success: true });
+		const urlId = idOf(viaBrowser.requests, "open_url");
+		const promptId = idOf(viaBrowser.requests, "input");
+		expect(viaBrowser.requests).toContainEqual(expect.objectContaining({ method: "input", authCodeFor: urlId }));
+		expect(viaBrowser.requests).toContainEqual(expect.objectContaining({ method: "cancel", targetId: promptId }));
+		expect(viaBrowser.requests).toContainEqual(expect.objectContaining({ method: "cancel", targetId: urlId }));
+
+		// Pasting the code completes the sign-in the same way.
+		let state = "";
+		const viaPaste = await login("anthropic", request => {
+			if (request.method === "open_url") state = authorizeParams([request]).get("state") ?? "";
+			return request.method === "input" ? { value: `pasted-code#${state}` } : undefined;
+		});
+		expect(viaPaste.response).toMatchObject({ command: "login", success: true });
+	}, 30_000);
+});
+
+/**
+ * Starts omp in RPC mode with `extensionSource` loaded as a trusted extension.
+ * `login` runs one login, answering each UI request with `answer`'s payload,
+ * and returns the requests it emitted with the final response.
+ */
+async function startLoginFixture(temp: TempDir, extensionSource: string) {
+	const extensionPath = temp.join("login.mjs");
+	await Bun.write(extensionPath, extensionSource);
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			path.join(import.meta.dir, "..", "src", "cli.ts"),
+			"--trusted-extension",
+			extensionPath,
+			"--mode",
+			"rpc",
+			"--provider",
+			"anthropic",
+			"--model",
+			"claude-sonnet-4-5",
+		],
+		{
+			cwd: temp.path(),
+			env: {
+				PATH: Bun.env.PATH,
+				HOME: temp.join("home"),
+				PI_CODING_AGENT_DIR: temp.join("agent"),
+				XDG_CONFIG_HOME: temp.join("config"),
+				XDG_DATA_HOME: temp.join("data"),
+				XDG_CACHE_HOME: temp.join("cache"),
+				CI: "true",
+				PI_NO_TITLE: "1",
+			},
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 20_000,
+		},
+	);
+	const stdout = new Response(child.stdout).body;
+	if (!stdout) throw new Error("RPC login fixture did not expose stdout");
+	const stderr = new Response(child.stderr).text();
+	const frames = readJsonl<unknown>(stdout)[Symbol.asyncIterator]();
+	const send = async (frame: object) => {
+		child.stdin.write(`${JSON.stringify(frame)}\n`);
+		await child.stdin.flush();
+	};
+	const login = async (providerId: string, answer: (request: Record<string, unknown>) => object | undefined) => {
+		const id = crypto.randomUUID();
+		await send({ type: "login", providerId, id });
+		const requests: Record<string, unknown>[] = [];
+		while (true) {
+			const next = await frames.next();
+			if (next.done) throw new Error(`RPC login fixture exited during ${providerId}: ${await stderr}`);
+			const frame = next.value;
+			if (!isRecord(frame)) continue;
+			if (frame.type === "response" && frame.id === id) return { requests, response: frame };
+			if (frame.type !== "extension_ui_request") continue;
+			requests.push(frame);
+			const payload = answer(frame);
+			if (payload) await send({ type: "extension_ui_response", id: frame.id, ...payload });
+		}
+	};
+	const idOf = (requests: Record<string, unknown>[], method: string) =>
+		requests.find(request => request.method === method)?.id;
+	return {
+		login,
+		idOf,
+		async [Symbol.asyncDispose]() {
 			child.stdin.end();
 			child.kill();
 			await child.exited;
-		}
-	}, 30_000);
-});
+		},
+	};
+}
 
 describe("RPC ask dialog", () => {
 	it("sends every question in one ask frame and returns the validated answers", async () => {

@@ -5457,6 +5457,8 @@ type InputUiRequest struct {
 	Title       string  `json:"title"`
 	Placeholder *string `json:"placeholder,omitempty"`
 	Timeout     *int64  `json:"timeout,omitempty"`
+	// Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.
+	AuthCodeFor *string `json:"authCodeFor,omitempty"`
 }
 
 func (v *InputUiRequest) UnmarshalJSON(data []byte) error {
@@ -5472,6 +5474,7 @@ func (v *InputUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("title", &out.Title)
 	d.optional("placeholder", &out.Placeholder)
 	d.optional("timeout", &out.Timeout)
+	d.optional("authCodeFor", &out.AuthCodeFor)
 	if d.err != nil {
 		return d.err
 	}

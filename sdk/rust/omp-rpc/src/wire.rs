@@ -4404,6 +4404,9 @@ pub struct InputUiRequest {
 	pub placeholder: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub timeout: Option<i64>,
+	/// Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.
+	#[serde(rename = "authCodeFor", default, skip_serializing_if = "Option::is_none")]
+	pub auth_code_for: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

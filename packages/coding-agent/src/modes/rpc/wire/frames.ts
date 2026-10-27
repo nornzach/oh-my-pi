@@ -167,6 +167,10 @@ export const frameDefs = {
 		title: "string",
 		"placeholder?": "string",
 		"timeout?": "number.integer",
+		"authCodeFor?": doc(
+			"string",
+			"Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.",
+		),
 	},
 	EditorUiRequest: {
 		type: UI,

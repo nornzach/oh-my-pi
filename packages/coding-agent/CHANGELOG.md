@@ -5,6 +5,9 @@
 ### Fixed
 
 - Fixed RPC `login` running on after the host dismissed the authorization URL: answering `open_url` with `cancelled: true` now cancels the sign-in and closes its prompts, and a cancelled login (URL or prompt dismissed) fails with code `login_cancelled`
+- Fixed RPC `mcp_reauth` ignoring a dismissed authorization URL: answering its `open_url` with `cancelled: true` now cancels the reauthorization and frees its callback port, and the URL dialog closes when the reauthorization ends
+- Fixed the RPC paste-code prompt for Anthropic, Codex, and MCP sign-ins staying open after the browser finished the sign-in; it now closes, and carries `authCodeFor` so hosts can show it inside the authorization-URL dialog
+- Fixed MCP reauthorization in RPC mode hanging the agent when a pasted value was not a usable code; it now asks again
 - Fixed advisors dropping their review and showing a rate-limit error when the provider returns a timed 429 such as Codex's `turn_rate_limit_exceeded`; the advisor now waits out the Retry-After (within `retry.maxDelayMs`) and retries like the main agent ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.0] - 2026-10-26

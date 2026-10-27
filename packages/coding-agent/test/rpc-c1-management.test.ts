@@ -1,9 +1,12 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import * as marketplaceModule from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import * as mcpClient from "@oh-my-pi/pi-coding-agent/mcp/client";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { applyRpcPluginEnabled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-actions";
 import { buildRpcMcpServersResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-domains";
@@ -180,6 +183,153 @@ describe("applyRpcMcpReauth mutex", () => {
 	it("mcp_reauth_cancel reports false when nothing is in flight", () => {
 		expect(applyRpcMcpReauthCancel("server-a")).toEqual({ cancelled: false });
 	});
+});
+
+describe("applyRpcMcpReauth dialogs", () => {
+	const authStores: AuthStorage[] = [];
+	beforeEach(() => {
+		// A finished reauth reloads through the process-wide manager; another
+		// test file may have left one behind.
+		vi.spyOn(MCPManager, "instance").mockReturnValue(undefined);
+	});
+	afterEach(() => {
+		while (authStores.length > 0) authStores.pop()?.close();
+	});
+
+	/** A loopback port nothing listens on, for the OAuth callback server. */
+	function freePort(): number {
+		const server = Bun.serve({ port: 0, fetch: () => new Response() });
+		const port = server.port;
+		server.stop(true);
+		if (!port) throw new Error("no free port");
+		return port;
+	}
+
+	function portIsFree(port: number): boolean {
+		try {
+			Bun.serve({ port, fetch: () => new Response() }).stop(true);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * An OAuth-protected MCP server whose token endpoint accepts `code`.
+	 * Returns the session and the codes the token endpoint was sent.
+	 */
+	function setupOAuthServer(callbackPort: number) {
+		const { userPath } = spyMcpConfigPaths();
+		writeMcpConfig(userPath, {
+			srv: { type: "http", url: "https://mcp.example.com/mcp", oauth: { clientId: "client-1", callbackPort } },
+		});
+		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(
+			new Error(
+				'HTTP 401: {"authorization_url":"https://auth.example.com/authorize","token_url":"https://auth.example.com/token"}',
+			),
+		);
+		const realFetch = globalThis.fetch;
+		const exchanged: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation((async (input: Request | string | URL, init?: RequestInit) => {
+			const url = input instanceof Request ? input.url : String(input);
+			if (url !== "https://auth.example.com/token") return realFetch(input, init);
+			exchanged.push(new URLSearchParams(String(init?.body)).get("code") ?? "");
+			return Response.json({ access_token: "at", token_type: "Bearer", expires_in: 3600, refresh_token: "rt" });
+		}) as typeof fetch);
+		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
+		authStores.push(authStorage);
+		const session = {
+			sessionManager: { getCwd: () => tmpRoot },
+			modelRegistry: { authStorage },
+			settings: { get: () => undefined },
+			refreshMCPTools: vi.fn(async () => {}),
+			setMCPPromptCommands: vi.fn(),
+		} as unknown as AgentSession;
+		return { session, exchanged, realFetch };
+	}
+
+	type Prompt = { authCodeFor?: string; signal?: AbortSignal; answer: (value: string | undefined) => void };
+
+	/** Records the URL dialog and paste prompts the flow opens; `onPrompt` plays the user. */
+	function recordingUi(handlers: {
+		onUrl?: (info: { url: string }, options: { onDismiss: () => void }) => void;
+		onPrompt?: (prompt: Prompt, index: number) => void;
+	}) {
+		const urls: Array<{ url: string; signal: AbortSignal }> = [];
+		const prompts: Prompt[] = [];
+		const ui: RpcMcpOAuthUi = {
+			openUrl: (info, options) => {
+				urls.push({ url: info.url, signal: options.signal });
+				handlers.onUrl?.(info, options);
+				return `url-${urls.length}`;
+			},
+			notify: () => {},
+			input: (_title, _placeholder, signal, authCodeFor) => {
+				const { promise, resolve } = Promise.withResolvers<string | undefined>();
+				signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+				const prompt = { authCodeFor, signal, answer: resolve };
+				prompts.push(prompt);
+				handlers.onPrompt?.(prompt, prompts.length - 1);
+				return promise;
+			},
+		};
+		return { ui, urls, prompts };
+	}
+
+	it("cancels when the user dismisses the authorization URL, closing the paste prompt and freeing the port", async () => {
+		const port = freePort();
+		const { session } = setupOAuthServer(port);
+		let dismiss: (() => void) | undefined;
+		const { ui, urls, prompts } = recordingUi({
+			onUrl: (_info, options) => {
+				dismiss = options.onDismiss;
+			},
+			// The user gives up on the browser step while the paste prompt is showing.
+			onPrompt: () => queueMicrotask(() => dismiss?.()),
+		});
+
+		expect(await applyRpcMcpReauth(session, "srv", ui)).toEqual({ ok: false, error: "cancelled" });
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]?.authCodeFor).toBe("url-1");
+		expect(prompts[0]?.signal?.aborted).toBe(true);
+		expect(urls[0]?.signal.aborted).toBe(true);
+		expect(portIsFree(port)).toBe(true);
+	}, 15_000);
+
+	it("finishes through the browser callback and closes the paste prompt and URL dialog", async () => {
+		const { session, exchanged, realFetch } = setupOAuthServer(freePort());
+		const { ui, urls, prompts } = recordingUi({
+			// The browser lands on the redirect URI with the code.
+			onUrl: info => {
+				const authorize = new URL(info.url);
+				const callback = new URL(authorize.searchParams.get("redirect_uri") ?? "");
+				callback.searchParams.set("code", "browser-code");
+				callback.searchParams.set("state", authorize.searchParams.get("state") ?? "");
+				void realFetch(callback);
+			},
+		});
+
+		expect(await applyRpcMcpReauth(session, "srv", ui)).toEqual({ ok: true });
+		expect(exchanged).toEqual(["browser-code"]);
+		expect(prompts[0]?.authCodeFor).toBe("url-1");
+		// The paste prompt would otherwise sit open after the browser signed in.
+		expect(prompts[0]?.signal?.aborted).toBe(true);
+		expect(urls[0]?.signal.aborted).toBe(true);
+	}, 15_000);
+
+	it("asks again when a pasted value is not a usable code", async () => {
+		const { session, exchanged } = setupOAuthServer(freePort());
+		const { ui, prompts } = recordingUi({
+			onPrompt: (prompt, index) =>
+				queueMicrotask(() =>
+					prompt.answer(index === 0 ? "https://example.invalid/callback?code=x&state=wrong" : "pasted-code"),
+				),
+		});
+
+		expect(await applyRpcMcpReauth(session, "srv", ui)).toEqual({ ok: true });
+		expect(prompts).toHaveLength(2);
+		expect(exchanged).toEqual(["pasted-code"]);
+	}, 15_000);
 });
 
 describe("serializeMcpReload", () => {

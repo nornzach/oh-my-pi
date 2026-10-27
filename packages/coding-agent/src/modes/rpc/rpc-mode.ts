@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AgentTool, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { type ImageContent, type Model, PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -1568,6 +1568,54 @@ export function requestRpcDialog<T>(
 	return promise;
 }
 /**
+ * Shows an OAuth authorization URL. A host that answers `cancelled: true`, or
+ * a channel that closes, calls `onDismiss`; aborting `signal` closes a dialog
+ * the host has not answered once the flow that opened it ends. Returns the
+ * request id, which pasted-code prompts carry as `authCodeFor`.
+ */
+export function requestRpcOpenUrl(
+	pendingRequests: Map<string, PendingExtensionRequest>,
+	output: RpcOutput,
+	info: { url: string; launchUrl?: string; instructions?: string },
+	options: { signal: AbortSignal; onDismiss: (reason?: Error) => void },
+): string {
+	const id = Snowflake.next() as string;
+	const close = () => {
+		pendingRequests.delete(id);
+		output({
+			type: "extension_ui_request",
+			id: Snowflake.next() as string,
+			method: "cancel",
+			targetId: id,
+		} as RpcExtensionUIRequest);
+	};
+	const settle = () => {
+		options.signal.removeEventListener("abort", close);
+		pendingRequests.delete(id);
+	};
+	pendingRequests.set(id, {
+		resolve: response => {
+			settle();
+			if ("cancelled" in response && response.cancelled) options.onDismiss();
+		},
+		reject: reason => {
+			settle();
+			options.onDismiss(reason);
+		},
+	});
+	options.signal.addEventListener("abort", close, { once: true });
+	output({
+		type: "extension_ui_request",
+		id,
+		method: "open_url",
+		url: info.url,
+		launchUrl: info.launchUrl,
+		instructions: info.instructions,
+	} as RpcExtensionUIRequest);
+	return id;
+}
+
+/**
  * Applies a queue-mode RPC command to the calling session only. Owns the
  * `persist: false` contract (#11555) in one place so no dispatcher arm can
  * silently restore machine-global writes.
@@ -1737,15 +1785,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// notify, and the manual code paste-back rides the EXISTING input dialog
 	// plumbing (requestRpcDialog over pendingExtensionRequests).
 	const rpcMcpOAuthUi: RpcMcpOAuthUi = {
-		openUrl: info =>
-			output({
-				type: "extension_ui_request",
-				id: Snowflake.next() as string,
-				method: "open_url",
-				url: info.url,
-				launchUrl: info.launchUrl,
-				instructions: info.instructions,
-			} as RpcExtensionUIRequest),
+		openUrl: (info, options) => requestRpcOpenUrl(pendingExtensionRequests, output, info, options),
 		notify: message =>
 			output({
 				type: "extension_ui_request",
@@ -1754,7 +1794,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				message,
 				notifyType: "info",
 			} as RpcExtensionUIRequest),
-		input: (title, placeholder, signal) =>
+		input: (title, placeholder, signal, authCodeFor) =>
 			requestRpcDialog<string | undefined>(
 				pendingExtensionRequests,
 				output,
@@ -1763,7 +1803,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				// request instead of leaking it.
 				signal ? { signal } : undefined,
 				undefined,
-				{ method: "input", title, placeholder },
+				{ method: "input", title, placeholder, ...(authCodeFor ? { authCodeFor } : {}) },
 				response => parseValueDialogResponse(response, undefined),
 			),
 	};
@@ -4071,36 +4111,46 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					cancel.abort(new LoginCancelledError());
 					return new LoginCancelledError();
 				};
-				// open_url frames the host has not answered; hosts may never answer.
-				const openUrlRequests = new Set<string>();
+				// Closes the authorization-URL dialogs the host has not answered once the login ends.
+				const loginDone = new AbortController();
+				let authUrlId: string | undefined;
 				try {
 					await session.modelRegistry.authStorage.oauth.login(command.providerId, {
 						signal: cancel.signal,
 						onAuth: info => {
-							const requestId = Snowflake.next() as string;
-							openUrlRequests.add(requestId);
-							pendingExtensionRequests.set(requestId, {
-								resolve: response => {
-									openUrlRequests.delete(requestId);
-									pendingExtensionRequests.delete(requestId);
-									if ("cancelled" in response && response.cancelled) {
-										cancel.abort(new LoginCancelledError());
-									}
-								},
-								reject: reason => {
-									openUrlRequests.delete(requestId);
-									cancel.abort(reason);
-								},
+							authUrlId = requestRpcOpenUrl(pendingExtensionRequests, output, info, {
+								signal: loginDone.signal,
+								onDismiss: reason => cancel.abort(reason ?? new LoginCancelledError()),
 							});
-							output({
-								type: "extension_ui_request",
-								id: requestId,
-								method: "open_url",
-								url: info.url,
-								launchUrl: info.launchUrl,
-								instructions: info.instructions,
-							} as RpcExtensionUIRequest);
 						},
+						// Paste-code providers also accept the code by hand while the browser
+						// step is pending. The prompt names its URL dialog so hosts can show
+						// both together, and it closes when the browser callback wins.
+						...(PASTE_CODE_LOGIN_PROVIDERS.has(command.providerId)
+							? {
+									onManualCodeInput: async (signal?: AbortSignal) => {
+										const value = await requestRpcDialog<string | undefined>(
+											pendingExtensionRequests,
+											output,
+											{
+												...dialogOptions,
+												signal: signal ? AbortSignal.any([cancel.signal, signal]) : cancel.signal,
+											},
+											undefined,
+											{
+												method: "input",
+												title: "Paste the authorization code (or full redirect URL):",
+												...(authUrlId ? { authCodeFor: authUrlId } : {}),
+											},
+											response => parseValueDialogResponse(response, dialogOptions),
+										);
+										if (value !== undefined) return value;
+										// The callback race already settled (the browser signed in first); this answer is moot.
+										if (signal?.aborted && !cancel.signal.aborted) throw new LoginCancelledError();
+										throw promptClosed();
+									},
+								}
+							: {}),
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
@@ -4144,16 +4194,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					}
 					return error(id, "login", err instanceof Error ? err.message : String(err));
 				} finally {
-					// Close authorization-URL dialogs the login no longer needs.
-					for (const requestId of openUrlRequests) {
-						pendingExtensionRequests.delete(requestId);
-						output({
-							type: "extension_ui_request",
-							id: Snowflake.next() as string,
-							method: "cancel",
-							targetId: requestId,
-						} as RpcExtensionUIRequest);
-					}
+					loginDone.abort();
 				}
 			}
 

@@ -1229,6 +1229,8 @@ export interface InputUiRequest {
 	title: string;
 	placeholder?: string;
 	timeout?: number;
+	/** Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in. */
+	authCodeFor?: string;
 }
 
 export interface EditorUiRequest {

@@ -266,6 +266,18 @@ code. Any other `open_url` answer, or none, leaves the login running. When the
 login ends, omp sends a `cancel` request for every `open_url` the host has not
 answered.
 
+Paste-code providers (Anthropic, OpenAI Codex, and others whose login also
+accepts a pasted authorization code) send an `input` prompt for the code while
+the browser step is pending. It carries `authCodeFor`, the id of its `open_url`
+request, so a host can show the field inside that dialog instead of as a second
+one. omp closes the prompt with a `cancel` request once the browser callback
+signs in.
+
+`mcp_reauth` follows the same rules. Answering its `open_url` with
+`cancelled: true` cancels the reauthorization, which resolves
+`{ ok: false, error: "cancelled" }`; its pasted-code prompt carries
+`authCodeFor`; and omp closes both when the reauthorization ends.
+
 Logout works per stored credential, as `/logout` does in the TUI, because one
 provider can hold several accounts. `get_logout_accounts` lists them (`credentialId`,
 `provider`, `label`, `detail`, `type`, and `active` for credentials the session may
