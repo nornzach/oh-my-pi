@@ -1,15 +1,6 @@
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import {
-	replaceTabs,
-	shortenEmbeddedPaths,
-	shortenPath,
-	TRUNCATE_LENGTHS,
-	truncateToWidth,
-} from "@oh-my-pi/pi-tui/render/render-utils";
-import { type ConfiguredThinkingLevel, prewalkWouldBeNoop } from "@oh-my-pi/pi-tui/thinking";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AutoPrewalkDecision } from "../auto-prewalk/classifier";
 import type { Settings } from "../config/settings";
@@ -22,10 +13,20 @@ import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with 
 import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
 import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
 import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
+import { type ConfiguredThinkingLevel, prewalkWouldBeNoop } from "@oh-my-pi/pi-tui/thinking";
 import { isMCPToolName } from "../tools/builtin-names";
+import {
+	replaceTabs,
+	shortenEmbeddedPaths,
+	shortenPath,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
+} from "@oh-my-pi/pi-tui/render/render-utils";
 import type { PlanProposalHandler } from "../tools/resolve";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { PlanYolo, Prewalk } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
+import { PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import { cfgPrewalkAuto } from "./settings";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
@@ -79,11 +80,7 @@ export interface PrewalkCoordinatorHost {
 	/** Judges a new task for `prewalk.auto`; undefined when there is nothing to judge. */
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	setModelTemporary(
-		model: Model,
-		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
-	): Promise<void>;
+	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
 	setActiveToolsByName(names: string[]): Promise<void>;
 	restoreNonMCPToolPresentation(
 		nonMCPToolNames: string[],
@@ -141,7 +138,17 @@ export class PrewalkCoordinator {
 
 	constructor(host: PrewalkCoordinatorHost, options: PrewalkCoordinatorOptions = {}) {
 		this.#host = host;
-		this.#prewalk = options.prewalk;
+		const prewalk = options.prewalk;
+		const handoff = prewalk ? host.sessionManager.getSessionLocalModelChange() : undefined;
+		// A revived session still on the target its recorded handoff switched to has spent this prewalk;
+		// one that starts elsewhere (an explicit startup model, a fallback) keeps the arm.
+		const target = prewalk ? `${prewalk.target.provider}/${prewalk.target.id}` : undefined;
+		const current = host.model();
+		const spent =
+			handoff?.role === PREWALK_MODEL_CHANGE_ROLE &&
+			handoff.model === target &&
+			`${current?.provider}/${current?.id}` === target;
+		this.#prewalk = spent ? undefined : prewalk;
 		this.#planYolo = options.planYolo;
 		this.#autoSuppressed = options.suppressAutoPrewalk === true;
 	}
@@ -216,7 +223,7 @@ export class PrewalkCoordinator {
 
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
 		try {
-			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel, { ephemeral: true });
+			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel);
 			// Temporary selection treats undefined as "keep/default"; restoration must preserve
 			// the original selector, including auto or an explicitly inherited effort.
 			this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
@@ -368,7 +375,7 @@ export class PrewalkCoordinator {
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		await this.#host.setModelTemporary(target, prewalk.thinkingLevel);
 		this.#clearPrewalkState();
 		if (source) {
 			this.#handoff = {
@@ -476,9 +483,7 @@ export class PrewalkCoordinator {
 			return "rejected";
 		}
 
-		await this.#host.setModelTemporary(source, sourceThinkingLevel, {
-			ephemeral: true,
-		});
+		await this.#host.setModelTemporary(source, sourceThinkingLevel);
 		if (!active) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();
@@ -566,10 +571,7 @@ export class PrewalkCoordinator {
 					localProtocolOptions: this.#host.localProtocolOptions(),
 					cwd: this.#host.sessionManager.getCwd(),
 				}),
-			listPlanFiles: () =>
-				listPlanFiles({
-					localProtocolOptions: this.#host.localProtocolOptions(),
-				}),
+			listPlanFiles: () => listPlanFiles({ localProtocolOptions: this.#host.localProtocolOptions() }),
 		});
 		let autosavedPlan: string | null = null;
 		try {
@@ -616,7 +618,7 @@ export class PrewalkCoordinator {
 		this.#host.setPlanProposalHandler(null);
 		this.#planYolo = undefined;
 		this.#planYoloPreviousNonMCPPresentation = undefined;
-		await this.#host.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
+		await this.#host.setModelTemporary(planYolo.target, planYolo.thinkingLevel);
 		this.#host.emitNotice(
 			"info",
 			`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${resolvedTitle}".`,
@@ -625,21 +627,13 @@ export class PrewalkCoordinator {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-			content: prompt.render(planYoloHandoffPrompt, {
-				planFilePath,
-				title: resolvedTitle,
-			}),
+			content: prompt.render(planYoloHandoffPrompt, { planFilePath, title: resolvedTitle }),
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
 		});
 		return {
-			content: [
-				{
-					type: "text",
-					text: `Plan approved. Implementing now with ${planYolo.target.id}.`,
-				},
-			],
+			content: [{ type: "text", text: `Plan approved. Implementing now with ${planYolo.target.id}.` }],
 			details: { planFilePath, title: resolvedTitle, planExists: true },
 		};
 	}
