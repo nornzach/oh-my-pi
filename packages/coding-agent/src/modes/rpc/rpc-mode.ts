@@ -146,7 +146,7 @@ import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
 	RpcMessagesPageError,
 } from "./rpc-messages";
-import { buildRpcModelRoleMetadata, buildRpcModelRoles } from "./rpc-model-roles";
+import { buildRpcModelRoleMetadata, buildRpcModelRoles, rpcModelRoleValue } from "./rpc-model-roles";
 import { RpcGoalModeController, RpcLoopModeController, RpcVibeModeController } from "./rpc-modes";
 import { runRpcOmfg } from "./rpc-omfg";
 import {
@@ -4658,7 +4658,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "set_model_role": {
 				try {
-					session.settings.setModelRole(command.role, command.modelId ?? undefined);
+					const roleValue = rpcModelRoleValue(
+						command.role,
+						command.modelId,
+						command.thinkingLevel,
+						session.settings,
+						session.modelRegistry,
+					);
+					session.settings.setModelRole(command.role, roleValue);
 					await session.settings.flush();
 					output({
 						type: "config_update",
@@ -4667,7 +4674,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					});
 					return success(id, "set_model_role", {
 						role: command.role,
-						modelId: command.modelId,
+						modelId: roleValue ?? null,
 					});
 				} catch (err: unknown) {
 					return error(id, "set_model_role", err instanceof Error ? err.message : String(err));

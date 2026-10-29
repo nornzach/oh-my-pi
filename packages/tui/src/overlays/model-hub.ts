@@ -46,7 +46,12 @@ import type {
 	ModelRoleLookup,
 	ResolvedModelRoleValue,
 } from "./model-browser";
-import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	getConfiguredThinkingLevelMetadata,
+	roleThinkingLevels,
+} from "../thinking";
 import { sanitizeDisplayWarning, thinkingLevelGlyph } from "../render/render-utils";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
@@ -1275,7 +1280,7 @@ export class ModelHubComponent implements Component {
 	/**
 	 * Persist `role → item`, preserving a still-supported thinking level, then
 	 * open the thinking strip — skipped for models with no reasoning surface,
-	 * where every chip would be a no-op ({@link #thinkingOptionsFor}).
+	 * where every chip would be a no-op ({@link roleThinkingLevels}).
 	 */
 	#assignRole(item: ModelBrowserItem, role: string, returnToRoles: boolean, scope?: ModelRoleSelectionScope): void {
 		if (this.#settings.modelRoleStorage === "project" && scope === undefined) {
@@ -1290,7 +1295,7 @@ export class ModelHubComponent implements Component {
 		} else if (current && !current.autoSelected) {
 			level = current.thinkingLevel;
 		}
-		const supported = this.#thinkingOptionsFor(item.model);
+		const supported = roleThinkingLevels(item.model);
 		if (!supported.includes(level)) level = ThinkingLevel.Inherit;
 		const result = this.#callbacks.onAssign(item.model, role, level, item.selector, scope);
 		this.#finishAssignment(result, () => {
@@ -1319,20 +1324,6 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
-	 * Thinking levels a role assignment can actually apply. A model that does
-	 * not reason gets none: no request path sends reasoning for it, and
-	 * `applyAutoThinkingLevel` early-returns on `!model.reasoning`, so
-	 * `inherit`/`off`/`auto` would all be no-ops. Reasoners without an effort
-	 * dial (`thinking: undefined`, e.g. `xai/grok-code-fast-1`) keep the three
-	 * always-on levels — their thinking is real, only the ladder is absent.
-	 */
-	#thinkingOptionsFor(model: Model): ConfiguredThinkingLevel[] {
-		if (!model.reasoning) return [];
-		if (model.thinking?.unverified) return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
-		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
-	}
-
-	/**
 	 * Resolve what `t` on a role row would edit: the role's model in its
 	 * persisted scope. Undefined when the role is unassigned or its model has
 	 * no thinking levels to offer, which makes both `t` and its footer hint
@@ -1345,7 +1336,7 @@ export class ModelHubComponent implements Component {
 			this.#settings.modelRoleStorage === "project" ? this.#settings.getModelRoleSource(role) : "default";
 		const scope = source === "project" || source === "global" ? source : undefined;
 		const model = scope ? this.#roleForScope(role, scope).model : assignment.model;
-		if (!model || this.#thinkingOptionsFor(model).length === 0) return undefined;
+		if (!model || roleThinkingLevels(model).length === 0) return undefined;
 		return {
 			item: { provider: model.provider, id: model.id, model, selector: `${model.provider}/${model.id}` },
 			scope,
@@ -1418,7 +1409,7 @@ export class ModelHubComponent implements Component {
 		scope?: ModelRoleSelectionScope,
 		committedLevel?: ConfiguredThinkingLevel,
 	): void {
-		const options = this.#thinkingOptionsFor(item.model);
+		const options = roleThinkingLevels(item.model);
 		const current =
 			committedLevel ??
 			(this.#settings.modelRoleStorage === "project" && scope !== undefined

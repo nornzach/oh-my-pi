@@ -363,6 +363,8 @@ export type RpcCommand =
 			type: "set_model_role";
 			role: string;
 			modelId: string | null;
+			/** Stored as `modelId`'s `:level` suffix; must be one of the candidate's `thinkingLevels`. */
+			thinkingLevel?: ConfiguredThinkingLevel;
 	  }
 	| { id?: string; type: "get_model_role_metadata" }
 
@@ -1453,11 +1455,23 @@ export interface RpcModelRoleCandidate {
 	id: string;
 	name: string;
 	kind: ModelKind;
+	/** Thinking selectors a role assignment can apply to this model, in menu order; empty when it does not reason. */
+	thinkingLevels: ConfiguredThinkingLevel[];
+}
+
+/** The candidate a role's configured selector names directly, with its `:level` suffix split off. */
+export interface RpcModelRoleSelection {
+	provider: string;
+	id: string;
+	/** Explicit `:level` suffix; absent when the selector carries none. */
+	thinkingLevel?: ConfiguredThinkingLevel;
 }
 
 export interface RpcModelRoleEntry extends RpcModelRoleMetadata {
 	/** Configured selector, preserved verbatim even when absent from candidates. */
 	model?: string;
+	/** Set when `model` names one of `candidates`; absent for aliases, fallback chains and other models. */
+	selected?: RpcModelRoleSelection;
 	source: string;
 	/** Available models accepted by this role, including keyless/local runners. */
 	candidates: RpcModelRoleCandidate[];
@@ -3059,6 +3073,7 @@ export type RpcResponse =
 			type: "response";
 			command: "set_model_role";
 			success: true;
+			/** `modelId` is the stored role value, `:level` suffix included. */
 			data: { role: string; modelId: string | null };
 	  }
 	| {

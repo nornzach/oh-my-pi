@@ -151,6 +151,21 @@ export const AUTO_THINKING = "auto" as const;
 /** A thinking selector as configured by the user — a concrete level or `auto`. */
 export type { ConfiguredThinkingLevel } from "./render/render-utils";
 
+/**
+ * Thinking selectors a model-role assignment can apply to `model`, in menu
+ * order. A model that does not reason gets none: no request path sends
+ * reasoning for it, and `applyAutoThinkingLevel` early-returns on
+ * `!model.reasoning`, so `inherit`/`off`/`auto` would all be no-ops. Reasoners
+ * without an effort dial (`thinking: undefined`, e.g. `xai/grok-code-fast-1`)
+ * keep the three always-on levels — their thinking is real, only the ladder is
+ * absent. Unverified ladders offer no `auto`.
+ */
+export function roleThinkingLevels(model: Model): ConfiguredThinkingLevel[] {
+	if (!model.reasoning) return [];
+	if (model.thinking?.unverified) return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
+	return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
+}
+
 /** Maps the session-level `auto` sentinel to `undefined`; concrete levels pass through. */
 export function concreteThinkingLevel(level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined {
 	return level === AUTO_THINKING ? undefined : level;
