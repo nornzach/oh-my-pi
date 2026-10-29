@@ -340,6 +340,7 @@ import {
 import { renderAttachmentSourceNotice } from "./attachment-source-notice";
 import { BashRunner, type BashRunnerHost } from "./bash-runner";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus, PromptCacheEntry } from "./cache-warmer";
+import { chatHistoryLimit } from "./chat-session";
 import {
 	checkpointStartedAtFromEntry,
 	completedRewindFromEntry,
@@ -2789,6 +2790,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration: () => this.#promptGeneration,
 			sessionId: () => this.sessionId,
 			messages: () => this.messages,
+			historyTurnLimit: () => chatHistoryLimit(this.sessionManager, this.settings),
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
 			goalModeState: () => this.#goalModeState,
 			planReferencePath: () => this.#planReferencePath,

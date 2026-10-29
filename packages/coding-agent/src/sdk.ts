@@ -341,6 +341,7 @@ import {
 	cfgSessionToolGates,
 } from "./tools/settings";
 import { cfgToolsFormat } from "./session/context-settings";
+import { chatHistoryLimit, chatSystemPrompt, limitChatHistory } from "./session/chat-session";
 import { cfgAutolearnEnabled } from "./autolearn/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
 import {
@@ -4107,6 +4108,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
+			// So does a chat session's `chat.systemPrompt` preset, read live so an edit
+			// applies from the next message.
+			const chatPreset = chatSystemPrompt(sessionManager, settings);
+			if (chatPreset !== undefined) return { systemPrompt: [chatPreset] };
 
 			// Build combined append prompt: memory instructions + auto-learn guidance
 			// + mounted MCP route guidance + optional MCP server instructions. For UI
@@ -4456,6 +4461,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
 		};
+		// The main loop's requests: a chat session may send only its latest turns
+		// (`chat.history`). Side requests and compaction still read the whole history.
+		const transformTurnContext = (messages: AgentMessage[], signal?: AbortSignal) => {
+			const historyLimit = chatHistoryLimit(sessionManager, settings);
+			return transformContext(
+				historyLimit === undefined ? messages : limitChatHistory(messages, historyLimit),
+				signal,
+			);
+		};
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames. Clamp
 		// to the provider budget before normalizing decoder-incompatible images so
@@ -4654,7 +4668,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			sessionId: providerSessionId,
 			promptCacheKey: providerPromptCacheKey,
 			deadline: options.deadline,
-			transformContext,
+			transformContext: transformTurnContext,
 			transformProviderContext,
 			steeringMode: cfgSteeringMode.get(settings),
 			followUpMode: cfgFollowUpMode.get(settings),

@@ -420,6 +420,8 @@ export interface SessionMaintenanceHost {
 	promptGeneration(): number;
 	sessionId(): string;
 	messages(): AgentMessage[];
+	/** Earlier turns each request carries (a chat's `chat.history`), or `undefined` for the whole history. */
+	historyTurnLimit?(): number | undefined;
 	baseSystemPrompt(): string[];
 	goalModeState(): GoalModeState | undefined;
 	planReferencePath(): string;
@@ -589,7 +591,17 @@ export class SessionMaintenance {
 
 	/** Compaction policy in force for the active model (its `compaction.modelThresholds` entry applied). */
 	get #compactionSettings(): CompactionSettings {
-		return resolveModelCompactionSettings(this.#host.settings, this.#model);
+		const settings = resolveModelCompactionSettings(this.#host.settings, this.#model);
+		if (this.#sendsLatestTurnsOnly()) return { ...settings, enabled: false };
+		return settings;
+	}
+
+	/**
+	 * A chat that sends only its latest turns (`chat.history`) never replays the rest:
+	 * compacting its stored history would not shrink a request, only fold the transcript.
+	 */
+	#sendsLatestTurnsOnly(): boolean {
+		return this.#host.historyTurnLimit?.() !== undefined;
 	}
 
 	get #tokenizer() {
@@ -2160,6 +2172,8 @@ export class SessionMaintenance {
 	/** Trigger idle compaction through the auto-compaction flow (with UI events). */
 	async runIdleCompaction(): Promise<void> {
 		if (this.#host.isStreaming() || this.isCompacting || this.#idleCompactionCleanup) return;
+		// Idle compaction runs whether or not Auto-Compact is on, so this gate is its own.
+		if (this.#sendsLatestTurnsOnly()) return;
 		const cleanup = Promise.withResolvers<void>();
 		this.#idleCompactionCleanup = cleanup.promise;
 		try {

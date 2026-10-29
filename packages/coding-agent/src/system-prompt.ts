@@ -50,6 +50,7 @@ import { cfgEvalAutoBackgroundEnabled } from "./eval/settings";
 import { cfgTtsrBuiltinRules, cfgTtsrDisabledRules, cfgTtsrEnabled } from "./export/ttsr-settings";
 import { cfgTuiAutoGraph, cfgTuiReactions, cfgTuiRenderMermaid, cfgTuiRenderSvg } from "./modes/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
+import { cfgChatSystemPrompt } from "./session/chat-settings";
 import { cfgToolsFormat } from "./session/context-settings";
 import {
 	cfgIncludeModelInPrompt,
@@ -100,6 +101,8 @@ export const cfgSystemPromptInputs = combine({
 	ttsrBuiltinRules: cfgTtsrBuiltinRules,
 	ttsrDisabledRules: cfgTtsrDisabledRules,
 	secretsEnabled: cfgSecretsEnabled,
+	// Replaces the whole prompt in chat sessions.
+	chatSystemPrompt: cfgChatSystemPrompt,
 });
 
 /** Bundled personality specs, keyed by the `personality` setting value. */

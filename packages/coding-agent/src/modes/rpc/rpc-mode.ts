@@ -33,6 +33,7 @@ import { resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
+import { cfgChatSettings } from "../../session/chat-settings";
 import { cfgSttLanguage } from "../../stt/settings";
 import { cfgSpeechVoice } from "../../tts/settings";
 import {
@@ -2319,6 +2320,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			if (event.type === "agent_end") loopModeController.onAgentEnd();
 		});
+		// Every chat tab shares the chat settings: announce a change, including one another
+		// process wrote to the config file, so the host re-reads them.
+		if (session.sessionManager.getHeader()?.kind === "chat") {
+			cfgChatSettings.listen(session, () => {
+				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+			});
+		}
 		// A resumed session may already carry plan mode from the journal.
 		planApprovalController.syncArmed();
 
