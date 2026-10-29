@@ -2,8 +2,8 @@
  * Interactive terminals for RPC hosts (the GUI's terminal panel).
  *
  * Each terminal is a native PTY in this process: the user's login shell, one
- * interactive bash tool call, or a long-lived command the agent started with
- * the `terminal` tool. Output leaves as unsolicited `terminal_output`
+ * interactive bash tool call, or a long-lived command or a driven shell
+ * session the agent started with the `terminal` tool. Output leaves as unsolicited `terminal_output`
  * frames, coalesced per terminal; a bounded scrollback lets a host whose view
  * remounts (renderer reload, another window) replay recent output. Terminals
  * live until the host closes them or the process exits, so an exited one keeps
@@ -66,6 +66,27 @@ export interface VirtualTerminalCallbacks {
 	onClose(): void;
 }
 
+/** A shell session's process from {@link RpcTerminalHost.openSession}. */
+export interface SessionTerminalRequest {
+	title: string;
+	/** SSH destination, for a remote session. */
+	host?: string;
+	application: string;
+	args: string[];
+	cwd: string;
+	env: Record<string, string>;
+}
+
+/** The driver of a session terminal sees its output and the user's keystrokes. */
+export interface SessionTerminalCallbacks {
+	/** Output as it arrives, before it is coalesced into frames. */
+	onOutput(chunk: string): void;
+	/** The user typed into the terminal. */
+	onUserInput(data: string): void;
+	/** The process exited. */
+	onExit(): void;
+}
+
 /** The writable side of a terminal from {@link RpcTerminalHost.openVirtual}. */
 export interface VirtualTerminalHandle {
 	readonly terminalId: string;
@@ -81,6 +102,8 @@ interface TerminalEntry {
 	/** Absent for a virtual terminal, whose screen comes from {@link virtual}'s owner. */
 	session: PtySession | undefined;
 	virtual?: VirtualTerminalCallbacks;
+	/** A session's driver (see {@link RpcTerminalHost.openSession}). */
+	driver?: SessionTerminalCallbacks;
 	pending: string;
 	/** Characters sent in `terminal_output` frames so far (the last frame's `seq`). */
 	emitted: number;
@@ -130,6 +153,32 @@ function commandTitle(command: string): string {
 	return firstLine.length > 80 ? `${firstLine.slice(0, 79)}…` : firstLine;
 }
 
+/**
+ * `data` as a person sees it: replayed through a terminal emulator `cols` wide,
+ * so cursor moves, line edits, and redraws resolve to what is on screen. One
+ * entry per line (soft-wrapped rows joined), trailing blank lines dropped.
+ */
+export async function renderTerminalLines(data: string, cols: number, rows: number): Promise<string[]> {
+	const Terminal = await loadXtermTerminal();
+	const term = new Terminal({ cols, rows, scrollback: READ_SCROLLBACK_ROWS, allowProposedApi: true });
+	try {
+		term.write(data);
+		const buffer = term.buffer.active;
+		const logical: string[] = [];
+		for (let row = 0; row < buffer.length; row++) {
+			const line = buffer.getLine(row);
+			const text = line?.translateToString(false) ?? "";
+			if (line?.isWrapped && logical.length > 0) logical[logical.length - 1] += text;
+			else logical.push(text);
+		}
+		const lines = logical.map(text => text.trimEnd());
+		while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+		return lines;
+	} finally {
+		term.dispose();
+	}
+}
+
 /** Keep the newest `max` characters, starting at a line boundary when one is near the cut. */
 export function trimScrollback(text: string, max: number): string {
 	if (text.length <= max) return text;
@@ -163,44 +212,30 @@ export class RpcTerminalHost {
 		const cwd = options.cwd ?? environment.cwd;
 		const { cols, rows } = clampSize(options.cols, options.rows);
 		const entry = this.#create({ kind: "shell", title: path.basename(environment.shell), cwd, cols, rows });
-		const started = Promise.withResolvers<void>();
-		let spawned = false;
-		let run: Promise<PtyRunResult>;
-		try {
-			run = (entry.session as PtySession).startArgv(
-				{ application: environment.shell, args: environment.args, cwd, env: environment.env, cols, rows },
-				(err, chunk) => {
-					if (!err && chunk) this.#append(entry, chunk);
-				},
-				(err, pid) => {
-					if (err) return;
-					spawned = true;
-					entry.info.pid = pid;
-					started.resolve();
-				},
-			);
-		} catch (error) {
-			this.#terminals.delete(entry.info.terminalId);
-			throw error;
-		}
-		run.then(
-			result => {
-				started.resolve();
-				this.#exited(entry, result);
-			},
-			(error: unknown) => {
-				if (!spawned) {
-					// Never ran: the caller's open fails and no frame names it.
-					this.#terminals.delete(entry.info.terminalId);
-					started.reject(error);
-					return;
-				}
-				this.#append(entry, `\r\n[terminal failed: ${error instanceof Error ? error.message : String(error)}]\r\n`);
-				this.#exited(entry, { exitCode: undefined, cancelled: false, timedOut: false });
-			},
-		);
-		await started.promise;
+		await this.#spawnArgv(entry, {
+			application: environment.shell,
+			args: environment.args,
+			cwd,
+			env: environment.env,
+		});
 		this.#output({ type: "terminal_opened", terminal: { ...entry.info } });
+		return { ...entry.info };
+	}
+
+	/**
+	 * Open a revealed shell the agent drives command by command: `driver` sees
+	 * its output and the user's keystrokes, and types with {@link write}.
+	 * Resolves once the process is spawned.
+	 */
+	async openSession(request: SessionTerminalRequest, driver: SessionTerminalCallbacks): Promise<RpcTerminalInfo> {
+		if (this.#disposed) throw new Error("Terminal host is shut down");
+		const { cols, rows } = clampSize(undefined, undefined);
+		const entry = this.#create({ kind: "session", title: request.title, cwd: request.cwd, cols, rows });
+		entry.info.state = "starting";
+		if (request.host) entry.info.host = request.host;
+		entry.driver = driver;
+		await this.#spawnArgv(entry, request);
+		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, reveal: true });
 		return { ...entry.info };
 	}
 
@@ -224,19 +259,36 @@ export class RpcTerminalHost {
 		const environment = await this.#environment();
 		const { cols, rows } = clampSize(undefined, undefined);
 		const entry = this.#create({ kind: "command", title: request.title, cwd: environment.cwd, cols, rows });
-		const session = entry.session as PtySession;
+		await this.#spawnArgv(entry, {
+			application: request.application,
+			args: request.args,
+			cwd: environment.cwd,
+			env: environment.env,
+		});
+		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, reveal: true });
+		return { ...entry.info };
+	}
+
+	/**
+	 * Spawn `entry`'s process from argv. Resolves once it runs; a process that
+	 * never starts rejects, and its entry is dropped before any frame names it.
+	 */
+	async #spawnArgv(
+		entry: TerminalEntry,
+		request: { application: string; args: string[]; cwd: string; env: Record<string, string> },
+	): Promise<void> {
 		const started = Promise.withResolvers<void>();
 		let spawned = false;
 		let run: Promise<PtyRunResult>;
 		try {
-			run = session.startArgv(
+			run = (entry.session as PtySession).startArgv(
 				{
 					application: request.application,
 					args: request.args,
-					cwd: environment.cwd,
-					env: environment.env,
-					cols,
-					rows,
+					cwd: request.cwd,
+					env: request.env,
+					cols: entry.info.cols,
+					rows: entry.info.rows,
 				},
 				(err, chunk) => {
 					if (!err && chunk) this.#append(entry, chunk);
@@ -268,8 +320,6 @@ export class RpcTerminalHost {
 			},
 		);
 		await started.promise;
-		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, reveal: true });
-		return { ...entry.info };
 	}
 
 	/**
@@ -361,7 +411,7 @@ export class RpcTerminalHost {
 		return { entry, run };
 	}
 
-	/** Forward keystrokes; input to an exited terminal is dropped. */
+	/** Forward the user's keystrokes; input to an exited terminal is dropped. */
 	input(terminalId: string, data: string): void {
 		const entry = this.#require(terminalId);
 		if (!entry.info.running) return;
@@ -369,11 +419,35 @@ export class RpcTerminalHost {
 			entry.virtual.onInput(data);
 			return;
 		}
+		this.#write(entry, data);
+		entry.driver?.onUserInput(data);
+	}
+
+	/** Type into a terminal for the agent; the user's keystrokes go through {@link input}. */
+	write(terminalId: string, data: string): void {
+		const entry = this.#require(terminalId);
+		if (entry.info.running) this.#write(entry, data);
+	}
+
+	#write(entry: TerminalEntry, data: string): void {
 		try {
 			entry.session?.write(data);
 		} catch {
 			// The process exited between the check and the write.
 		}
+	}
+
+	/**
+	 * Change what the host shows about a session (its state, user, directory);
+	 * `reveal` asks the host to show it, as when it waits for the user.
+	 */
+	update(terminalId: string, patch: Partial<Pick<RpcTerminalInfo, "state" | "root" | "cwd">>, reveal = false): void {
+		const entry = this.#terminals.get(terminalId);
+		if (!entry?.info.running) return;
+		const changed = (Object.keys(patch) as (keyof typeof patch)[]).some(key => entry.info[key] !== patch[key]);
+		if (!changed && !reveal) return;
+		Object.assign(entry.info, patch);
+		this.#output({ type: "terminal_opened", terminal: { ...entry.info }, ...(reveal ? { reveal } : {}) });
 	}
 
 	resize(terminalId: string, cols: number, rows: number): void {
@@ -463,29 +537,8 @@ export class RpcTerminalHost {
 	async readText(terminalId: string, lines: number): Promise<string> {
 		const entry = this.#require(terminalId);
 		this.#flush(entry);
-		const Terminal = await loadXtermTerminal();
-		const term = new Terminal({
-			cols: entry.info.cols,
-			rows: entry.info.rows,
-			scrollback: READ_SCROLLBACK_ROWS,
-			allowProposedApi: true,
-		});
-		try {
-			term.write(entry.scrollback);
-			const buffer = term.buffer.active;
-			const logical: string[] = [];
-			for (let row = 0; row < buffer.length; row++) {
-				const line = buffer.getLine(row);
-				const text = line?.translateToString(false) ?? "";
-				if (line?.isWrapped && logical.length > 0) logical[logical.length - 1] += text;
-				else logical.push(text);
-			}
-			const rows = logical.map(text => text.trimEnd());
-			while (rows.length > 0 && rows[rows.length - 1] === "") rows.pop();
-			return rows.slice(-Math.max(1, lines)).join("\n");
-		} finally {
-			term.dispose();
-		}
+		const rows = await renderTerminalLines(entry.scrollback, entry.info.cols, entry.info.rows);
+		return rows.slice(-Math.max(1, lines)).join("\n");
 	}
 
 	/**
@@ -550,6 +603,7 @@ export class RpcTerminalHost {
 	}
 
 	#append(entry: TerminalEntry, chunk: string): void {
+		entry.driver?.onOutput(chunk);
 		entry.scrollback = trimScrollback(entry.scrollback + chunk, this.#scrollbackChars);
 		entry.pending += chunk;
 		if (entry.pending.length >= FLUSH_CHARS) {
@@ -577,6 +631,7 @@ export class RpcTerminalHost {
 		this.#flush(entry);
 		entry.info.running = false;
 		entry.info.exitCode = result.exitCode;
+		delete entry.info.state;
 		if (this.#terminals.has(entry.info.terminalId)) {
 			this.#output({
 				type: "terminal_exit",
@@ -586,6 +641,7 @@ export class RpcTerminalHost {
 				timedOut: result.timedOut,
 			});
 		}
+		entry.driver?.onExit();
 		if (entry.closeRequested) this.#forget(entry);
 		else this.#pruneExited();
 		logger.debug("Terminal exited", { terminalId: entry.info.terminalId, exitCode: result.exitCode });

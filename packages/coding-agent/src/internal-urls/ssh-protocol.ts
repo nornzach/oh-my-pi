@@ -34,6 +34,7 @@ import {
 } from "../ssh/file-transfer";
 import sshDoc from "../prompts/internal-urls/ssh.md" with { type: "text" };
 import { contentTypeForPath, formatDirectoryListing } from "./filesystem-resource";
+import { parseInternalUrl } from "./parse";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -251,6 +252,15 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	}
 	// Opaque OpenSSH destination (plain ~/.ssh/config alias, or any resolvable host).
 	return { name: rawAuthority, host: isIpv6Literal ? sshHost : rawAuthority };
+}
+
+/**
+ * Resolve an SSH destination as `ssh://` authorities resolve: a configured
+ * host by name, else `[user@]host[:port]` or a `~/.ssh/config` alias, with
+ * the same validation (no option-like or malformed destinations).
+ */
+export function resolveSshDestination(destination: string, cwd?: string): Promise<SSHConnectionTarget> {
+	return resolveTarget(parseInternalUrl(`ssh://${destination}/`), cwd);
 }
 
 export class SshProtocolHandler implements ProtocolHandler {

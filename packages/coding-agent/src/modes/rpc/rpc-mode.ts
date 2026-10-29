@@ -68,6 +68,8 @@ import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/m
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { setSessionPinned } from "../../session/session-pins";
+import { buildInteractiveSshArgs } from "../../ssh/connection-manager";
+import { resolveSshDestination } from "../../internal-urls/ssh-protocol";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
@@ -3198,6 +3200,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 									};
 								},
 								bashApproval: () => session.getToolByName("bash")?.approval,
+								sshCommand: async (destination, remoteCommand) => {
+									const target = await resolveSshDestination(destination, session.sessionManager.getCwd());
+									return { application: "ssh", args: await buildInteractiveSshArgs(target, remoteCommand) };
+								},
 							})
 						: undefined;
 					await refreshRpcTools();

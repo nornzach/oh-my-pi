@@ -4,6 +4,7 @@
 
 ### Added
 
+- The RPC `terminal` tool drives shell sessions on this machine or over SSH (`open`, `exec`, `send`, `wait`): commands run one at a time in a terminal the user watches, keep their directory and environment, and stop at password, passphrase, and new-host prompts for the user to answer
 - RPC `get_model_roles` reports each candidate's role thinking levels and the role's selected model, and `set_model_role` accepts a thinking level ([nornzach/oh-my-pi-gui#34](https://github.com/nornzach/oh-my-pi-gui/issues/34))
 
 ### Fixed

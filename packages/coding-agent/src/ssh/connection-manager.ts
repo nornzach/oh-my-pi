@@ -212,6 +212,31 @@ function buildCommonArgs(host: SSHConnectionTarget, owner: ControlPathOwner, opt
 }
 
 /**
+ * `ssh` arguments for an interactive login the user can watch and type into
+ * (the agent's terminal sessions), running `remoteCommand` on a forced TTY.
+ * It shares the ControlMaster socket the `ssh://` helpers use, so a password
+ * typed there once serves both, but drops `BatchMode` and the host-key
+ * override so password, passphrase, and new-host questions reach the user.
+ */
+export async function buildInteractiveSshArgs(host: SSHConnectionTarget, remoteCommand: string): Promise<string[]> {
+	ensureSshBinary();
+	const target = buildSshTarget(host.username, host.host);
+	await validateKeyPermissions(host.keyPath);
+	const args = ["-tt"];
+	if (supportsSshControlMaster()) {
+		ensureSshControlDir();
+		args.push("-o", "ControlMaster=auto");
+		if ((await resolveControlPathOwner(host)) === "omp") {
+			args.push("-o", `ControlPath=${CONTROL_PATH}`, "-o", "ControlPersist=3600");
+		}
+	}
+	if (host.port) args.push("-p", String(host.port));
+	if (host.keyPath) args.push("-i", host.keyPath);
+	args.push(target, remoteCommand);
+	return args;
+}
+
+/**
  * Per-call timeout for the pre-command SSH setup/probe helpers. These sit on
  * the `ensureHostInfo` → `probeHostInfo` / `ensureConnection` path that runs
  * *before* `SshTool.execute` applies the user-provided command timeout, so an

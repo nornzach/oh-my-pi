@@ -1011,10 +1011,12 @@ export interface RpcTerminalInfo {
 	/**
 	 * `shell`: a login shell the host opened; `command`: a `pty: true` bash tool
 	 * call the agent waits on; `background`: a long-lived command the agent
-	 * started with the `terminal` tool (a dev server, a watcher).
+	 * started with the `terminal` tool (a dev server, a watcher); `session`: a
+	 * shell the agent drives command by command with the `terminal` tool, on
+	 * this machine or over SSH.
 	 */
-	kind: "shell" | "command" | "background";
-	/** Shell name, or the command's first line. */
+	kind: "shell" | "command" | "background" | "session";
+	/** Shell name, the command's first line, or a session's label. */
 	title: string;
 	cwd: string;
 	running: boolean;
@@ -1023,6 +1025,16 @@ export interface RpcTerminalInfo {
 	pid?: number;
 	cols: number;
 	rows: number;
+	/** SSH destination of a remote session. */
+	host?: string;
+	/**
+	 * A session's state: `starting` until its shell is ready, `idle` at the
+	 * prompt, `busy` running the agent's command, `input` waiting for the user
+	 * to answer a password, passphrase, or host-key question.
+	 */
+	state?: "starting" | "idle" | "busy" | "input";
+	/** The session's shell runs as root. */
+	root?: boolean;
 }
 
 /** A terminal exists; `reveal` asks the host to show it (an agent command waits for the user). */
