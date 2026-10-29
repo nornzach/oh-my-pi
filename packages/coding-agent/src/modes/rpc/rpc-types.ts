@@ -155,6 +155,7 @@ export type RpcCommand =
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
+	| { id?: string; type: "live_connect"; sdpOffer: string; voice?: string; instructions?: string }
 	| { id?: string; type: "live_stop" }
 	| { id?: string; type: "live_mute"; muted?: boolean }
 	// Host-fed dictation (the host's microphone feeding the dictation model; see rpc-host-dictation.ts).
@@ -2843,6 +2844,13 @@ export type RpcResponse =
 			command: "live_start";
 			success: true;
 			data: { voice: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "live_connect";
+			success: true;
+			data: { voice: string; sdpAnswer: string };
 	  }
 	| { id?: string; type: "response"; command: "live_stop"; success: true }
 	// Host-fed dictation (the host's microphone; see rpc-host-dictation.ts)
