@@ -1,5 +1,5 @@
 /**
- * `/btw` side questions for RPC hosts: the `btw`, `btw_cancel` and
+ * `/btw` side questions for RPC hosts: the `btw`, `btw_cancel`, `btw_inject` and
  * `get_btw_history` commands plus the `btw_delta` / `btw_record` frames.
  *
  * Mirrors the TUI `BtwController` without its panels: one side question runs
@@ -17,9 +17,12 @@ import {
 	BtwHistoryStore,
 	type BtwHistoryTurn,
 	getBtwLatestTurn,
+	getBtwRecordInject,
+	getBtwTurnKey,
 } from "../../session/btw-history";
 import { beginBtwTurn, patchLatestBtwTurn, runBtwTurn } from "../../session/btw-turn";
-import type { RpcBtwDeltaFrame, RpcBtwHistoryRecord, RpcBtwRecordFrame } from "./rpc-types";
+import { cfgBtwInject } from "../settings";
+import type { RpcBtwDeltaFrame, RpcBtwHistoryRecord, RpcBtwInjectState, RpcBtwRecordFrame } from "./rpc-types";
 
 type RpcBtwOutputFrame =
 	| RpcBtwDeltaFrame
@@ -38,17 +41,24 @@ interface RunningBtw {
 	record: BtwHistoryRecord;
 	store: BtwHistoryStore;
 	abort: AbortController;
+	/** `btw.inject` when the question was asked: only such an answer's block can be sent. */
+	inject: boolean;
 }
+
+type BtwSession = Pick<
+	AgentSession,
+	"model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw" | "settings" | "prompt"
+>;
 
 const CANCELLED_WHILE_STARTING = "The /btw question was cancelled before it started";
 
 /** The TUI-only `title` heading stays off the wire; hosts head a topic by its question. */
-function toRpcRecord({ title: _title, ...record }: BtwHistoryRecord): RpcBtwHistoryRecord {
-	return record;
+function toRpcRecord({ title: _title, ...record }: BtwHistoryRecord, inject?: RpcBtwInjectState): RpcBtwHistoryRecord {
+	return inject ? { ...record, inject } : record;
 }
 
 export class RpcBtwController {
-	readonly #session: Pick<AgentSession, "model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw">;
+	readonly #session: BtwSession;
 	readonly #output: (frame: RpcBtwOutputFrame) => void;
 	#store: BtwHistoryStore | undefined;
 	/** `sessionId \0 artifactsDir` the store was opened for. */
@@ -64,11 +74,13 @@ export class RpcBtwController {
 	readonly #writes = new Set<Promise<void>>();
 	/** Terminal checkpoints that failed, keyed by record id (latest wins); retried before any move. */
 	readonly #unsaved = new Map<string, RunningBtw>();
+	/**
+	 * Steering prompts by turn key (TUI parity): only answers asked here with `btw.inject` on get
+	 * an entry, so history from another process or an earlier run never sends.
+	 */
+	readonly #injects = new Map<string, RpcBtwInjectState>();
 
-	constructor(
-		session: Pick<AgentSession, "model" | "runEphemeralTurn" | "sessionManager" | "branchFromBtw">,
-		output: (frame: RpcBtwOutputFrame) => void,
-	) {
+	constructor(session: BtwSession, output: (frame: RpcBtwOutputFrame) => void) {
 		this.#session = session;
 		this.#output = output;
 	}
@@ -126,6 +138,7 @@ export class RpcBtwController {
 				record,
 				store,
 				abort: new AbortController(),
+				inject: cfgBtwInject.get(this.#session.settings),
 			};
 			this.#running = running;
 			this.#output({ type: "btw_record", record: toRpcRecord(record) });
@@ -169,7 +182,59 @@ export class RpcBtwController {
 		if (running?.store === store) records.set(running.record.id, running.record);
 		return [...records.values()]
 			.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
-			.map(toRpcRecord);
+			.map(record => this.#toRpc(record));
+	}
+
+	/**
+	 * Send topic `recordId`'s steering prompt to the main session as a user message: a steer
+	 * while the agent runs, else a new turn, with templates and slash commands left unexpanded
+	 * (TUI parity). Resolves once the prompt is admitted or refused; a refused send turns back
+	 * to `ready` so it can be retried, and a sent one is never sent again.
+	 */
+	async inject(recordId: string): Promise<{ sent: boolean; reason?: string }> {
+		const store = await this.#openStore(false);
+		const record =
+			this.#unsaved.get(recordId)?.record ?? store.getRecords().find(candidate => candidate.id === recordId);
+		const text = record ? getBtwRecordInject(record) : undefined;
+		const key = record ? getBtwTurnKey(record) : undefined;
+		if (!record || !text || !key || this.#injects.get(key) === undefined) {
+			throw new Error("This /btw answer has no steering prompt to send");
+		}
+		if (this.#injects.get(key) !== "ready") return { sent: this.#injects.get(key) === "sent" };
+		const outcome = Promise.withResolvers<{ sent: boolean; reason?: string }>();
+		let settled = false;
+		let queued = false;
+		// The first outcome wins: the prompt's own promise also settles when the turn ends.
+		const settle = (sent: boolean, reason?: string): void => {
+			if (settled) return;
+			settled = true;
+			this.#injects.set(key, sent ? "sent" : "ready");
+			this.#output({ type: "btw_record", record: this.#toRpc(record) });
+			outcome.resolve(reason ? { sent, reason } : { sent });
+		};
+		this.#injects.set(key, "sending");
+		this.#output({ type: "btw_record", record: this.#toRpc(record) });
+		this.#session
+			.prompt(text, {
+				expandPromptTemplates: false,
+				streamingBehavior: "steer",
+				throwOnDrop: true,
+				onPromptQueued: () => {
+					queued = true;
+				},
+				onPromptAdmitted: () => settle(true),
+			})
+			.then(
+				// A drop while queueing resolves without admission: nothing was sent.
+				() => settle(false),
+				// Already in the steer queue: it was sent, so keep the mark.
+				(error: unknown) => (queued ? settle(true) : settle(false, toError(error).message)),
+			);
+		return outcome.promise;
+	}
+
+	#toRpc(record: BtwHistoryRecord): RpcBtwHistoryRecord {
+		return toRpcRecord(record, this.#injects.get(getBtwTurnKey(record)));
 	}
 
 	/**
@@ -260,6 +325,7 @@ export class RpcBtwController {
 			const { replyText, assistantMessage } = await runBtwTurn(this.#session, {
 				question,
 				history,
+				inject: running.inject,
 				conversationKey,
 				signal: running.abort.signal,
 				onTextDelta: delta => {
@@ -311,7 +377,11 @@ export class RpcBtwController {
 		if (this.#running !== running) return;
 		this.#running = undefined;
 		running.record = patchLatestBtwTurn(running.record, patch);
-		this.#output({ type: "btw_record", record: toRpcRecord(running.record) });
+		// Only an answer asked with the inject instruction can be sent, even if the setting is turned on later.
+		if (running.inject && getBtwRecordInject(running.record) !== undefined) {
+			this.#injects.set(getBtwTurnKey(running.record), "ready");
+		}
+		this.#output({ type: "btw_record", record: this.#toRpc(running.record) });
 		const write = running.store.upsert(running.record).then(
 			() => {
 				this.#unsaved.delete(running.record.id);

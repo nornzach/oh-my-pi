@@ -4,6 +4,7 @@
 
 ### Added
 
+- RPC hosts can send a `/btw` answer's steering prompt to the main session with `btw_inject`: with `btw.inject` on, RPC side questions ask for the `<inject>` block, and `btw_record` frames and `get_btw_history` report whether it is `ready`, `sending` or `sent`
 - The RPC `terminal` tool drives shell sessions on this machine or over SSH (`open`, `exec`, `send`, `wait`): commands run one at a time in a terminal the user watches, keep their directory and environment, and stop at password, passphrase, and new-host prompts for the user to answer
 - RPC `get_model_roles` reports each candidate's role thinking levels and the role's selected model, and `set_model_role` accepts a thinking level ([nornzach/oh-my-pi-gui#34](https://github.com/nornzach/oh-my-pi-gui/issues/34))
 - Chat sessions (`omp --chat`, GUI chat tabs) can send a preset system prompt and limit what each message carries (single turn, or a cap on earlier turns), while the transcript keeps every turn. Each chat keeps its own settings (RPC `get_chat_config` / `set_chat_config`); `chat.systemPrompt`, `chat.history` and `chat.historyTurns` are the defaults for chats that set none

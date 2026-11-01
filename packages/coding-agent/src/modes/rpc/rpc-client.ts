@@ -1205,6 +1205,15 @@ export class RpcClient {
 		return this.#getData<{ cancelled: boolean }>(response).cancelled;
 	}
 
+	/**
+	 * Send topic `recordId`'s steering prompt (`btw.inject`) to the main session: a steer
+	 * while the agent runs, else a new turn. `sent` is false when the session refused it.
+	 */
+	async btwInject(recordId: string): Promise<{ sent: boolean; reason?: string }> {
+		const response = await this.#send({ type: "btw_inject", recordId });
+		return this.#getData<{ sent: boolean; reason?: string }>(response);
+	}
+
 	/** This session's side questions, newest first. */
 	async getBtwHistory(): Promise<readonly RpcBtwHistoryRecord[]> {
 		const response = await this.#send({ type: "get_btw_history" });

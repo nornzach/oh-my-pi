@@ -134,7 +134,9 @@ describe("--chat flag → session options", () => {
 		// restrictToolNames is what makes the registry build EMPTY — without it the
 		// registry retains every built-in and `alwaysInclude` re-adds extension tools.
 		expect(options.restrictToolNames).toBe(true);
-		expect(options.appendSystemPrompt).toContain("NO tools");
+		// The chat prompt replaces the agent prompt in the session itself (chatSystemPrompt); appending it
+		// here as well would send it twice.
+		expect(options.appendSystemPrompt).toBeUndefined();
 	});
 
 	it("re-derives chat mode from the header on resume, without --chat on the argv", async () => {

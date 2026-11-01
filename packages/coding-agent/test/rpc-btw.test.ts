@@ -25,12 +25,12 @@ describe("RPC /btw", () => {
 		directory = undefined;
 	});
 
-	async function start() {
+	async function start(env: Record<string, string> = {}) {
 		directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-btw-"));
 		const rpc = new RpcClient({
 			command: [process.execPath, path.join(import.meta.dir, "fixtures", "btw-rpc-agent.ts")],
 			cwd: directory,
-			env: { PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1" },
+			env: { PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1", ...env },
 		});
 		client = rpc;
 		const deltas: string[] = [];
@@ -137,6 +137,31 @@ describe("RPC /btw", () => {
 		await rpc.btw("follow after cancel", slow.id);
 		expect((await settled(slow.id)).followUps?.[0]?.status).toBe("complete");
 	}, 30_000);
+
+	test("with btw.inject on, a drafted steering prompt is sent to the main session once", async () => {
+		const { rpc, settled } = await start({ BTW_INJECT: "1" });
+		const started = await rpc.btw("steer the main agent");
+		const done = await settled(started.id);
+		expect(done).toMatchObject({ status: "complete", inject: "ready" });
+
+		expect(await rpc.btwInject(started.id)).toEqual({ sent: true });
+		await rpc.waitForIdle();
+		const sent = (await rpc.getMessages()).filter(message => message.role === "user");
+		expect(JSON.stringify(sent)).toContain("Fix the failing build first.");
+		expect((await rpc.getBtwHistory()).find(record => record.id === started.id)?.inject).toBe("sent");
+
+		// Sent once: a second request reports it sent without sending again.
+		expect(await rpc.btwInject(started.id)).toEqual({ sent: true });
+		expect((await rpc.getMessages()).filter(message => message.role === "user")).toHaveLength(sent.length);
+	});
+
+	test("with btw.inject off, an answer carries no steering prompt to send", async () => {
+		const { rpc, settled } = await start();
+		const started = await rpc.btw("steer the main agent");
+		const done = await settled(started.id);
+		expect(done).not.toHaveProperty("inject");
+		expect((await rejectionOf(rpc.btwInject(started.id))).message).toContain("no steering prompt");
+	});
 
 	test("a failed turn is recorded with its error", async () => {
 		const { rpc, settled } = await start();

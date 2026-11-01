@@ -5,6 +5,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runRpcMode } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import { cfgBtwInject } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -14,12 +15,15 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 // `runEphemeralTurn` (the provider stream is covered by AgentSession tests): a question
 // containing "slow" streams one chunk, then waits for its abort signal, where it writes
 // `btw-aborted` and emits a late chunk that must never reach the host; "fail" rejects;
-// anything else streams two chunks naming the number of replayed context messages.
+// a question containing "steer" answers with an `<inject>` block only when its prompt carries the
+// btw.inject steering instruction (`BTW_INJECT=1` turns the setting on); anything else streams two
+// chunks naming the number of replayed context messages.
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
 const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
 const settings = await Settings.init({ inMemory: true, cwd });
+if (process.env.BTW_INJECT === "1") cfgBtwInject.set(settings, true);
 const { session } = await createAgentSession({
 	cwd,
 	agentDir: cwd,
@@ -65,6 +69,10 @@ session.runEphemeralTurn = async args => {
 			timestamp: Date.now(),
 		},
 	});
+	if (args.promptText.includes("steer")) {
+		const instructed = args.promptText.includes("<inject>");
+		return reply(instructed ? "Try this: <inject>Fix the failing build first.</inject>" : "Fix the build first.");
+	}
 	if (args.promptText.includes("fail")) throw new Error("provider exploded");
 	if (args.promptText.includes("slow")) {
 		args.onTextDelta?.("Thinking");

@@ -4469,6 +4469,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					cancelled: btw.cancel(command.recordId),
 				});
 
+			case "btw_inject":
+				return success(id, "btw_inject", await btw.inject(command.recordId));
+
 			case "get_btw_history":
 				return success(id, "get_btw_history", { records: await btw.history() });
 

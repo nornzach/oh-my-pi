@@ -690,6 +690,7 @@ export type RpcCommand =
 	// Side questions (/btw); answers stream as `btw_delta` / `btw_record` frames
 	| { id?: string; type: "btw"; question: string; recordId?: string }
 	| { id?: string; type: "btw_cancel"; recordId?: string }
+	| { id?: string; type: "btw_inject"; recordId: string }
 	| { id?: string; type: "get_btw_history" };
 
 // ============================================================================
@@ -3715,6 +3716,7 @@ export type RpcResponse =
 	// Side questions (/btw)
 	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: RpcBtwHistoryRecord } }
 	| { id?: string; type: "response"; command: "btw_cancel"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "btw_inject"; success: true; data: { sent: boolean; reason?: string } }
 	| {
 			id?: string;
 			type: "response";
@@ -3741,7 +3743,16 @@ export type RpcResponse =
  * A BTW topic as sent to RPC hosts. The TUI-only `title` heading is never on the wire,
  * which keeps the released record shape: hosts show the topic's opening question.
  */
-export type RpcBtwHistoryRecord = Omit<BtwHistoryRecord, "title">;
+export type RpcBtwHistoryRecord = Omit<BtwHistoryRecord, "title"> & {
+	/**
+	 * The latest turn's `<inject>` block (`btw.inject`): `ready` to send with `btw_inject`,
+	 * `sending`, or `sent`. Absent when the turn was not asked with the setting on or drafted none.
+	 */
+	inject?: RpcBtwInjectState;
+};
+
+/** Where a side answer's steering prompt stands; only this process's answers can be sent. */
+export type RpcBtwInjectState = "ready" | "sending" | "sent";
 
 /** Text appended to the running side question's latest answer. */
 export interface RpcBtwDeltaFrame {
