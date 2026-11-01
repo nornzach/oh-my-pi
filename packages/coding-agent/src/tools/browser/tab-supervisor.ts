@@ -16,10 +16,9 @@ import { expandPath } from "../path-utils";
 import { CELL_BUDGET_SLACK_MS } from "../run-scope";
 import { ToolAbortError, toWorkerErrorPayload } from "../tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { gracefulKillTreeOnce, pickElectronTarget } from "./attach";
+import { gracefulKillTreeOnce, isChromiumBrowserExecutable, pickElectronTarget } from "./attach";
 import type * as Cmux from "./cmux/cmux-tab";
 import { mapWaitUntil } from "./cmux/rpc";
-import type * as InProcessRun from "./in-process-run";
 import { browserConnection, DEFAULT_VIEWPORT } from "./launch";
 import {
 	closeCdpTarget,
@@ -564,9 +563,8 @@ async function acquireTabImpl(
 		// after `spawnTabWorker`'s synchronous try/catch has already returned. Fall back to
 		// the inline worker here so module-resolution failures don't poison every tab open.
 		await worker.terminate().catch(() => undefined);
-		// A headless worker that died mid-init may have already created its page in the
-		// shared browser — a killed worker can't close it, so close the target the worker
-		// reported (no-op when it never got that far).
+		// A worker that died mid-init may have created a tab in headless Chromium,
+		// the relay, or a spawned Chrome — close exactly the reported target.
 		closeAbandonedWorkerPage(browser, worker);
 		if (worker.mode === "inline" || isReportedInitFailure(error)) {
 			if (tempHold || browser.refCount === 0) await releaseBrowser(browser, { kill: false });
@@ -752,7 +750,7 @@ async function acquireCmuxTab(
 		}
 
 		// Browser-only evaluators stay out of CLI startup and worker-backed tabs.
-		const { CmuxTab }: typeof Cmux = require("./cmux/cmux-tab");
+		const { CmuxTab } = await import("./cmux/cmux-tab");
 		const cmuxTab = new CmuxTab({ client: browser.client, surfaceId, url: initialUrl });
 		if (attachedSurface && opts.url) {
 			await cmuxTab.goto(opts.url, { waitUntil: opts.waitUntil ?? "load", timeoutMs: opts.timeoutMs });
@@ -822,7 +820,8 @@ async function acquireTernTab(
 	browser: TernBrowserHandle,
 	opts: AcquireTabOptions,
 ): Promise<AcquireTabResult> {
-	const { TernTab }: typeof Tern = require("./tern/tern-tab");
+	// Tern's driver stays out of sessions that never open a Tern tab.
+	const { TernTab } = await import("./tern/tern-tab");
 	const settings = {
 		name,
 		url: opts.url,
@@ -1020,7 +1019,9 @@ async function runInTabWithSnapshot(
 	if (tab.backend === "cmux" || tab.backend === "tern") {
 		const runSignal = opts.signal ? AbortSignal.any([opts.signal, closeAc.signal]) : closeAc.signal;
 		try {
-			const { runInProcessTab }: typeof InProcessRun = require("./in-process-run");
+			// In-process runners stay out of worker-backed tabs. A close during
+			// this import aborts `runSignal` and rejects `promise` first.
+			const { runInProcessTab } = await import("./in-process-run");
 			// `runInProcessTab.then(resolve, reject)` publishes the run's real
 			// outcome to `promise`, but `releaseTab` may have already
 			// rejected it — `Promise.withResolvers` settles on the first
@@ -1845,8 +1846,11 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 	if (browser.kind.kind === "relay" && !opts.target) {
 		// A relay open without a target gets its own background tab, leaving the user's
 		// selected tab alone, in the browser of the tab omp used last on this relay.
-		// Focus emulation keeps it interactive without raising it.
 		page = { kind: "create", nearTargetId: lastUsedTargetOn(browser) };
+	} else if (browser.kind.kind === "spawned" && !opts.target && isChromiumBrowserExecutable(browser.kind.path)) {
+		// A dedicated Chrome profile can start with no pages; never navigate its
+		// welcome tab (or another user's tab on a reused endpoint).
+		page = { kind: "create" };
 	} else {
 		// A connected browser without a target adopts the tab the user is looking at
 		// rather than whichever CDP lists first; an explicit target is borrowed.

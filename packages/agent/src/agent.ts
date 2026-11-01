@@ -23,7 +23,7 @@ import {
 	type ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
-import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses-state";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -176,6 +176,11 @@ export interface AgentOptions {
 	 * Shared provider state map for session-scoped transport/session caches.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
+	/**
+	 * Tool definitions already sent, for an Agent that replays another Agent's request history
+	 * (see {@link Agent.copySentToolDefinitions}). Defaults to an empty store.
+	 */
+	sentToolDefinitions?: SentToolDefinitions;
 
 	/**
 	 * Resolves an API key or resolver dynamically for each LLM call.
@@ -581,6 +586,7 @@ export class Agent {
 		this.#deadline = opts.deadline;
 		this.#promptCacheKey = opts.promptCacheKey;
 		this.#providerSessionState = opts.providerSessionState;
+		if (opts.sentToolDefinitions) this.#sentToolDefinitions = opts.sentToolDefinitions;
 		this.#thinkingBudgets = opts.thinkingBudgets;
 		this.#temperature = opts.temperature;
 		this.#topP = opts.topP;
@@ -653,6 +659,14 @@ export class Agent {
 	 */
 	set promptCacheKey(value: string | undefined) {
 		this.#promptCacheKey = value;
+	}
+
+	/**
+	 * A detached copy of the tool definitions this agent has sent (`AgentOptions.sentToolDefinitions`), without the
+	 * names `keep` rejects.
+	 */
+	copySentToolDefinitions(keep?: (name: string) => boolean): SentToolDefinitions {
+		return this.#sentToolDefinitions.copy(keep);
 	}
 
 	/**
@@ -972,12 +986,11 @@ export class Agent {
 					pruneDescriptions: this.#pruneToolDescriptions,
 				}) ?? []);
 		let context: Context = { systemPrompt, messages, tools };
+		// Side requests reuse the main loop's sent definitions without recording their own; attached before the
+		// transform too, so a request-size clamp in it measures them.
+		context = this.#sentToolDefinitions.withInactiveTools(context);
 		if (this.#transformProviderContext) context = await this.#transformProviderContext(context, model);
-		// Side requests reuse the main loop's sent definitions without recording their own.
-		if (context.tools?.length) {
-			const inactiveTools = this.#sentToolDefinitions.inactiveFor(context.messages, context.tools);
-			if (inactiveTools) context = { ...context, inactiveTools };
-		}
+		context = this.#sentToolDefinitions.withInactiveTools(context);
 		return context;
 	}
 

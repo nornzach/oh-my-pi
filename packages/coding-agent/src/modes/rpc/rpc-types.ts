@@ -61,6 +61,7 @@ import type {
 	RestoredQueuedMessageWithDelivery,
 } from "../../session/agent-session-types";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { SessionLeaseReport } from "../../session/session-storage";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
@@ -274,6 +275,7 @@ export type RpcCommand =
 			sessionId: string;
 			pinned: boolean;
 	  }
+	| { id?: string; type: "get_session_lease"; sessionIds: string[] }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| {
 			id?: string;
@@ -2695,6 +2697,7 @@ export type RpcResponse =
 			success: true;
 			data: SessionStats;
 	  }
+	| { id?: string; type: "response"; command: "get_session_lease"; success: true; data: SessionLeaseReport }
 	| {
 			id?: string;
 			type: "response";
