@@ -4,7 +4,7 @@ import { combine, register } from "../config/registry";
 // Chat sessions (`omp --chat`, GUI chat tabs)
 // ────────────────────────────────────────────────────────────────────────
 
-/** System prompt a chat session sends in place of the generated one; blank keeps the default. */
+/** Default system prompt for chats that saved none of their own; blank keeps the built-in chat prompt. */
 export const cfgChatSystemPrompt = register({
 	id: "chat.systemPrompt",
 	type: "string",
@@ -14,7 +14,7 @@ export const cfgChatSystemPrompt = register({
 		group: "Chat",
 		label: "Chat System Prompt",
 		description:
-			"Sent as the whole system prompt in chat sessions (omp --chat, GUI chat tabs), replacing the default one. Leave empty to keep the default chat prompt",
+			"Default system prompt for chats (omp --chat, GUI chat tabs) that have not set their own; it replaces the built-in chat prompt. Leave empty to keep the built-in one",
 	},
 });
 
@@ -28,7 +28,8 @@ export const cfgChatHistory = register({
 		tab: "context",
 		group: "Chat",
 		label: "Chat History",
-		description: "What the model sees with each chat message. The transcript still shows every turn",
+		description:
+			"What the model sees with each message, for chats that have not set their own. The transcript still shows every turn",
 		options: [
 			{ value: "continuous", label: "Continuous", description: "Earlier turns go with each message" },
 			{ value: "single", label: "Single turn", description: "Each message is sent on its own" },
@@ -51,7 +52,8 @@ export const cfgChatHistoryTurns = register({
 		tab: "context",
 		group: "Chat",
 		label: "Chat History Depth",
-		description: "How many earlier turns a continuous chat sends with each message",
+		description:
+			"How many earlier turns a continuous chat sends with each message, for chats that have not set their own",
 		options: [
 			{ value: "0", label: "All turns", description: "The whole conversation" },
 			{ value: "1", label: "1 turn" },

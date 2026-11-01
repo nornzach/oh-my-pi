@@ -341,7 +341,7 @@ import {
 	cfgSessionToolGates,
 } from "./tools/settings";
 import { cfgToolsFormat } from "./session/context-settings";
-import { chatHistoryLimit, chatSystemPrompt, limitChatHistory } from "./session/chat-session";
+import { chatHistoryLimit, chatSystemPrompt, isChatSession, limitChatHistory } from "./session/chat-session";
 import { cfgAutolearnEnabled } from "./autolearn/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
 import {
@@ -4108,10 +4108,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
-			// So does a chat session's `chat.systemPrompt` preset, read live so an edit
-			// applies from the next message.
-			const chatPreset = chatSystemPrompt(sessionManager, settings);
-			if (chatPreset !== undefined) return { systemPrompt: [chatPreset] };
+			// So does a chat session's prompt — its own preset or the chat prompt — read
+			// live so an edit applies from the next message. A chat never carries the
+			// agent prompt, only an explicitly appended one.
+			const chatPrompt = chatSystemPrompt(sessionManager, settings);
+			if (chatPrompt !== undefined) {
+				return {
+					systemPrompt: options.appendSystemPrompt ? [chatPrompt, options.appendSystemPrompt] : [chatPrompt],
+				};
+			}
 
 			// Build combined append prompt: memory instructions + auto-learn guidance
 			// + mounted MCP route guidance + optional MCP server instructions. For UI
@@ -4525,11 +4530,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				transformed = clampProviderContextImageBytes(transformed, transformModel);
 				// Keep per-request volatility out of the system prompt: the date/cwd
 				// reminder rides on the first user turn so open-weight providers keep
-				// their tool-schema prefix cache (#7404).
+				// their tool-schema prefix cache (#7404). A chat has no workspace: date only.
 				return dateCwdReminder.transform(
 					transformed,
 					formatLocalCalendarDate(),
-					normalizePromptPath(sessionManager.getCwd()),
+					isChatSession(sessionManager) ? undefined : normalizePromptPath(sessionManager.getCwd()),
 				);
 			};
 		};

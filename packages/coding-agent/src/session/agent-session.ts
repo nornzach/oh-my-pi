@@ -340,7 +340,7 @@ import {
 import { renderAttachmentSourceNotice } from "./attachment-source-notice";
 import { BashRunner, type BashRunnerHost } from "./bash-runner";
 import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus, PromptCacheEntry } from "./cache-warmer";
-import { chatHistoryLimit } from "./chat-session";
+import { type ChatConfig, chatHistoryLimit, saveChatConfig } from "./chat-session";
 import {
 	checkpointStartedAtFromEntry,
 	completedRewindFromEntry,
@@ -7457,6 +7457,13 @@ export class AgentSession implements SettingsScope {
 	/** Rebuilds the stable base prompt, optionally discarding a stale asynchronous rebuild. */
 	refreshBaseSystemPrompt(commitIf?: () => boolean): Promise<void> {
 		return this.#tools.refreshBaseSystemPrompt(commitIf);
+	}
+
+	/** Save this chat's own settings (see `saveChatConfig`); its prompt applies from the next message. */
+	async saveChatConfig(patch: Partial<ChatConfig>): Promise<ChatConfig> {
+		const config = saveChatConfig(this.sessionManager, this.settings, patch);
+		await this.refreshBaseSystemPrompt();
+		return config;
 	}
 
 	/** Replaces connected MCP tools and enables them immediately. */

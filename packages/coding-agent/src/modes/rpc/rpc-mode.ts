@@ -33,6 +33,7 @@ import { resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
+import { chatConfig, isChatSession } from "../../session/chat-session";
 import { cfgChatSettings } from "../../session/chat-settings";
 import { cfgSttLanguage } from "../../stt/settings";
 import { cfgSpeechVoice } from "../../tts/settings";
@@ -1925,8 +1926,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	let hostTools: AgentTool[] = [];
 	/** The agent's `terminal` tool while the host opts in with `terminal_configure`. */
 	let terminalTool: TerminalTool | undefined;
+	// A chat is tool-free: neither the host's tools nor the terminal ever join it.
 	const refreshRpcTools = () =>
-		session.refreshRpcHostTools(terminalTool ? [...hostTools, terminalTool as AgentTool] : hostTools);
+		session.refreshRpcHostTools(
+			isChatSession(session.sessionManager)
+				? []
+				: terminalTool
+					? [...hostTools, terminalTool as AgentTool]
+					: hostTools,
+		);
 	const subagentRegistry = subagentEventBus
 		? new RpcSubagentRegistry(subagentEventBus, output, () => session.sessionFile)
 		: undefined;
@@ -2320,8 +2328,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			if (event.type === "agent_end") loopModeController.onAgentEnd();
 		});
-		// Every chat tab shares the chat settings: announce a change, including one another
-		// process wrote to the config file, so the host re-reads them.
+		// A chat without settings of its own follows the `chat.*` defaults: announce a change,
+		// including one another process wrote to the config file, so the host re-reads them.
 		if (session.sessionManager.getHeader()?.kind === "chat") {
 			cfgChatSettings.listen(session, () => {
 				output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
@@ -3709,6 +3717,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (!sessionId) return error(id, "set_session_pinned", "Session id cannot be empty");
 				const pinned = await setSessionPinned(sessionId, command.pinned);
 				return success(id, "set_session_pinned", { pinned });
+			}
+
+			case "get_chat_config": {
+				if (!isChatSession(session.sessionManager)) return error(id, "get_chat_config", "Not a chat session");
+				return success(id, "get_chat_config", chatConfig(session.sessionManager, session.settings));
+			}
+
+			case "set_chat_config": {
+				if (!isChatSession(session.sessionManager)) return error(id, "set_chat_config", "Not a chat session");
+				try {
+					return success(id, "set_chat_config", await session.saveChatConfig(command.config));
+				} catch (err) {
+					return error(id, "set_chat_config", err instanceof Error ? err.message : String(err));
+				}
 			}
 
 			case "export_html": {

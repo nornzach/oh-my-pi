@@ -5,6 +5,16 @@ export interface RpcSettingProvenance {
 	globalPath?: string;
 }
 
+/** One chat's own settings (`get_chat_config`, `set_chat_config`); a chat that saved none follows `chat.*`. */
+export interface RpcChatConfig {
+	/** Sent as the whole system prompt; blank sends the built-in chat prompt. */
+	systemPrompt: string;
+	/** `single` sends every message on its own. */
+	history: "continuous" | "single";
+	/** Earlier turns a continuous chat sends with each message; 0 sends all of them. */
+	historyTurns: number;
+}
+
 /**
  * RPC protocol types for headless operation.
  *
@@ -256,6 +266,8 @@ export type RpcCommand =
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
+	| { id?: string; type: "get_chat_config" }
+	| { id?: string; type: "set_chat_config"; config: Partial<RpcChatConfig> }
 	| {
 			id?: string;
 			type: "set_session_pinned";
@@ -2674,6 +2686,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "abort_eval"; success: true }
 
 	// Session
+	| { id?: string; type: "response"; command: "get_chat_config"; success: true; data: RpcChatConfig }
+	| { id?: string; type: "response"; command: "set_chat_config"; success: true; data: RpcChatConfig }
 	| {
 			id?: string;
 			type: "response";

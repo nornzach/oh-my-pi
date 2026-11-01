@@ -6,7 +6,7 @@
 
 - The RPC `terminal` tool drives shell sessions on this machine or over SSH (`open`, `exec`, `send`, `wait`): commands run one at a time in a terminal the user watches, keep their directory and environment, and stop at password, passphrase, and new-host prompts for the user to answer
 - RPC `get_model_roles` reports each candidate's role thinking levels and the role's selected model, and `set_model_role` accepts a thinking level ([nornzach/oh-my-pi-gui#34](https://github.com/nornzach/oh-my-pi-gui/issues/34))
-- Chat sessions (`omp --chat`, GUI chat tabs) can send a preset system prompt (`chat.systemPrompt`) and limit what each message carries: `chat.history: single` sends every message on its own, and `chat.historyTurns` caps the earlier turns a continuous chat sends, while the transcript keeps every turn
+- Chat sessions (`omp --chat`, GUI chat tabs) can send a preset system prompt and limit what each message carries (single turn, or a cap on earlier turns), while the transcript keeps every turn. Each chat keeps its own settings (RPC `get_chat_config` / `set_chat_config`); `chat.systemPrompt`, `chat.history` and `chat.historyTurns` are the defaults for chats that set none
 ### Breaking Changes
 
 - `CustomToolLoader` now resolves the injected host SDK itself; its constructor starts with `cwd` instead of a `pi` namespace argument
@@ -58,6 +58,7 @@
 
 ### Fixed
 
+- Chat sessions no longer carry the coding agent: they send only the chat prompt, no host tools such as `terminal`, and a date without the working directory
 - Fixed `omp auth-gateway serve` routing a bare model id (e.g. Claude Code's `claude-opus-5-5`) to a mirror provider such as Cursor after a catalog refresh; a bare id now goes to the highest-priority credentialed provider (`modelProviderOrder`, then the built-in native-first order), and among equally ranked providers prefers one speaking the route's wire format
 - Fixed table charts marking the worse value "best" when a column or row name suggests the wrong direction (a GPU's memory bandwidth and L2 cache read as costs). Charts no longer guess which way is better from header wording; under `tui.autoGraph: smart` the judge decides, for single-measure tables and every metric row too, and can decline a chart of page numbers, step numbers or figures quoted in prose
 - Fixed background bash job widgets showing binary mojibake as the stage and counting it as hundreds of thousands of lines when a pipe carries binary data (`git archive | tar -x`, `curl | gunzip`); such pipes are now left out of the widget

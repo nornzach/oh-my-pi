@@ -1,31 +1,92 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ScopeLike } from "../config/registry";
+import chatPromptContent from "../prompts/chat-mode.md" with { type: "text" };
 import { cfgChatHistory, cfgChatHistoryTurns, cfgChatSystemPrompt } from "./chat-settings";
 import { isUserQueuedMessage } from "./queued-messages";
 import type { SessionManager } from "./session-manager";
 
 type SessionKindSource = Pick<SessionManager, "getHeader">;
+type ChatSessionSource = Pick<SessionManager, "getHeader" | "getBranch">;
 
-function isChatSession(sessionManager: SessionKindSource): boolean {
+/** Custom session entry holding one chat's own settings; the latest on the branch wins. */
+export const CHAT_CONFIG_ENTRY = "chat-config";
+
+/** What a chat sends: its system prompt and how much of the conversation goes with each message. */
+export interface ChatConfig {
+	/** Sent as the whole system prompt; blank sends the built-in chat prompt. */
+	systemPrompt: string;
+	/** `single` sends every message on its own. */
+	history: "continuous" | "single";
+	/** Earlier turns a continuous chat sends with each message; 0 sends all of them. */
+	historyTurns: number;
+}
+
+export function isChatSession(sessionManager: SessionKindSource): boolean {
 	return sessionManager.getHeader()?.kind === "chat";
 }
 
-/** The `chat.systemPrompt` preset a chat session sends verbatim, or `undefined` to build the default prompt. */
-export function chatSystemPrompt(sessionManager: SessionKindSource, scope: ScopeLike): string | undefined {
-	if (!isChatSession(sessionManager)) return undefined;
-	const preset = cfgChatSystemPrompt.get(scope);
-	return preset.trim() ? preset : undefined;
+/**
+ * A chat's settings: the ones it saved for itself, else the `chat.*` defaults.
+ * Each chat keeps its own, so editing one never changes another.
+ */
+export function chatConfig(sessionManager: ChatSessionSource, scope: ScopeLike): ChatConfig {
+	const branch = sessionManager.getBranch();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type !== "custom" || entry.customType !== CHAT_CONFIG_ENTRY) continue;
+		const saved = parseChatConfig(entry.data);
+		if (saved) return saved;
+	}
+	return {
+		systemPrompt: cfgChatSystemPrompt.get(scope),
+		history: cfgChatHistory.get(scope),
+		historyTurns: cfgChatHistoryTurns.get(scope),
+	};
 }
 
 /**
- * Earlier turns a session's requests carry (`chat.history`, `chat.historyTurns`), or
- * `undefined` for the whole conversation. Only chat sessions limit them.
+ * Save `patch` into this chat's own settings, in its session; other chats keep theirs.
+ * Throws on a value the settings would reject.
  */
-export function chatHistoryLimit(sessionManager: SessionKindSource, scope: ScopeLike): number | undefined {
+export function saveChatConfig(
+	sessionManager: ChatSessionSource & Pick<SessionManager, "appendCustomEntry">,
+	scope: ScopeLike,
+	patch: Partial<ChatConfig>,
+): ChatConfig {
+	const next = parseChatConfig({ ...chatConfig(sessionManager, scope), ...patch });
+	if (!next) throw new Error(`Invalid chat settings: ${Bun.inspect(patch)}`);
+	sessionManager.appendCustomEntry(CHAT_CONFIG_ENTRY, next);
+	return next;
+}
+
+function parseChatConfig(data: unknown): ChatConfig | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const { systemPrompt, history, historyTurns } = data as Record<string, unknown>;
+	if (typeof systemPrompt !== "string") return undefined;
+	if (history !== "continuous" && history !== "single") return undefined;
+	if (typeof historyTurns !== "number" || !Number.isInteger(historyTurns) || historyTurns < 0) return undefined;
+	return { systemPrompt, history, historyTurns };
+}
+
+/**
+ * The whole system prompt a chat session sends — its own preset, else the built-in
+ * chat prompt — or `undefined` outside chat sessions, which build the agent prompt.
+ */
+export function chatSystemPrompt(sessionManager: ChatSessionSource, scope: ScopeLike): string | undefined {
 	if (!isChatSession(sessionManager)) return undefined;
-	if (cfgChatHistory.get(scope) === "single") return 0;
-	const turns = cfgChatHistoryTurns.get(scope);
-	return turns > 0 ? turns : undefined;
+	const preset = chatConfig(sessionManager, scope).systemPrompt;
+	return preset.trim() ? preset : chatPromptContent.trim();
+}
+
+/**
+ * Earlier turns a session's requests carry, or `undefined` for the whole
+ * conversation. Only chat sessions limit them.
+ */
+export function chatHistoryLimit(sessionManager: ChatSessionSource, scope: ScopeLike): number | undefined {
+	if (!isChatSession(sessionManager)) return undefined;
+	const config = chatConfig(sessionManager, scope);
+	if (config.history === "single") return 0;
+	return config.historyTurns > 0 ? config.historyTurns : undefined;
 }
 
 /**

@@ -98,7 +98,6 @@ import {
 import { ensureTheme, initTheme, stopThemeWatcher } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
-import chatPromptContent from "./prompts/chat-mode.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
@@ -1770,13 +1769,11 @@ export async function buildSessionOptions(
 	}
 
 	// Chat sessions default to no tools, while an explicit --tools remains an allowlist.
+	// Their system prompt is the chat prompt (see `chatSystemPrompt`), never the agent one.
 	const sessionKind = parsed.chat ? "chat" : (sessionManager?.getHeader()?.kind ?? "agent");
 	if (sessionKind === "chat") {
 		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
 		options.restrictToolNames = true;
-		if (!parsed.systemPrompt && !parsed.appendSystemPrompt) {
-			options.appendSystemPrompt = chatPromptContent;
-		}
 	} else if (parsed.noTools) {
 		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
 	} else if (parsed.tools) {

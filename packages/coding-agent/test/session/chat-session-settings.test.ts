@@ -1,8 +1,10 @@
 /**
- * Contract: a chat session (`omp --chat`, GUI chat tabs) sends `chat.systemPrompt`
- * as its whole system prompt and carries only the turns `chat.history` /
- * `chat.historyTurns` allow, while its transcript keeps every turn. Agent
- * sessions ignore all three settings.
+ * Contract: a chat session (`omp --chat`, GUI chat tabs) sends only a chat
+ * prompt — its preset, else the built-in one, never the agent prompt — with a
+ * date but no working directory, and carries only the turns its history setting
+ * allows, while its transcript keeps every turn. A chat's own settings, saved in
+ * its session, win over the `chat.*` defaults and never reach another chat.
+ * Agent sessions ignore all of it.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -48,13 +50,13 @@ function sent(message: AgentMessage): string {
 type Request = Pick<Context, "messages" | "systemPrompt">;
 
 /** A session on a mock model that records every main-loop request. */
-async function harness(kind: "chat" | "agent", overrides: Record<string, unknown> = {}) {
+async function harness(kind: "chat" | "agent", overrides: Record<string, unknown> = {}, shared?: Settings) {
 	const root = TempDir.createSync("@omp-chat-settings-");
 	roots.push(root);
 	const auth = createInMemoryAuthStorage();
 	auth.keys.setRuntime("mock", "test-key");
 	const mock = createMockModel({ handler: { content: ["reply"] } });
-	const settings = Settings.isolated({ "retry.enabled": false, "todo.enabled": false, ...overrides });
+	const settings = shared ?? Settings.isolated({ "retry.enabled": false, "todo.enabled": false, ...overrides });
 	const { session } = await createAgentSession({
 		cwd: root.path(),
 		agentDir: root.path(),
@@ -134,10 +136,20 @@ describe("limitChatHistory", () => {
 });
 
 describe("chat.systemPrompt", () => {
-	it("replaces a chat's system prompt from the next message, and blank restores the generated one", async () => {
+	it("sends only the chat prompt, a preset replaces it from the next message, and blank restores it", async () => {
 		const { session, settings, requests } = await harness("chat");
+		const agent = await harness("agent");
 		await session.prompt("hello");
-		const generated = requests[0].systemPrompt;
+		await agent.session.prompt("hello");
+		const builtIn = requests[0].systemPrompt;
+		// One short block, sharing nothing with the agent's prompt.
+		expect(builtIn).toHaveLength(1);
+		expect(builtIn?.[0]).toContain("chat mode");
+		const agentLines = (agent.requests[0].systemPrompt?.join("\n") ?? "")
+			.split("\n")
+			.filter(line => line.length > 40);
+		expect(agentLines.length).toBeGreaterThan(0);
+		for (const line of agentLines) expect(builtIn?.[0]).not.toContain(line);
 
 		cfgChatSystemPrompt.override(settings, "Answer like a ship's cook.");
 		await settle(session);
@@ -147,7 +159,19 @@ describe("chat.systemPrompt", () => {
 		cfgChatSystemPrompt.override(settings, "  ");
 		await settle(session);
 		await session.prompt("and tomorrow?");
-		expect(requests[2].systemPrompt).toEqual(generated);
+		expect(requests[2].systemPrompt).toEqual(builtIn);
+	});
+
+	it("tells a chat the date but not the working directory", async () => {
+		const chat = await harness("chat");
+		const agent = await harness("agent");
+		await chat.session.prompt("hello");
+		await agent.session.prompt("hello");
+		const reminder = (request: Request) =>
+			text(request.messages[0]).match(/^<system-reminder>[\s\S]*?<\/system-reminder>/)?.[0];
+		expect(reminder(chat.requests[0])).toMatch(/Today: \d{4}-\d{2}-\d{2}\./);
+		expect(reminder(chat.requests[0])).not.toContain("working directory");
+		expect(reminder(agent.requests[0])).toContain("working directory");
 	});
 
 	it("never reaches an agent session's prompt", async () => {
@@ -177,6 +201,29 @@ describe("chat.history", () => {
 		cfgChatHistoryTurns.override(settings, 0);
 		await session.prompt("fourth");
 		expect(requests[3].messages.map(sent)).toEqual(["first", "reply", "second", "reply", "third", "reply", "fourth"]);
+	});
+
+	it("follows a chat's own saved settings, which never reach another chat", async () => {
+		const settings = Settings.isolated({ "retry.enabled": false, "todo.enabled": false, "chat.history": "single" });
+		const mine = await harness("chat", {}, settings);
+		const other = await harness("chat", {}, settings);
+		await mine.session.saveChatConfig({ history: "continuous", systemPrompt: "Mine." });
+		for (const { session } of [mine, other]) {
+			await session.prompt("first");
+			await session.prompt("second");
+		}
+		expect(mine.requests[1]).toEqual({
+			systemPrompt: ["Mine."],
+			messages: expect.anything(),
+		});
+		expect(mine.requests[1].messages.map(sent)).toEqual(["first", "reply", "second"]);
+		// The other chat still follows the defaults: single turn, built-in prompt.
+		expect(other.requests[1].messages.map(sent)).toEqual(["second"]);
+		expect(other.requests[1].systemPrompt?.[0]).toContain("chat mode");
+		// A later default change no longer reaches the chat that saved its own.
+		cfgChatHistory.override(settings, "single");
+		await mine.session.prompt("third");
+		expect(mine.requests[2].messages.map(sent)).toEqual(["first", "reply", "second", "reply", "third"]);
 	});
 
 	it("leaves an agent session's history whole", async () => {

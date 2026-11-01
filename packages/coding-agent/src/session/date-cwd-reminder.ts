@@ -14,8 +14,8 @@ import type { Context, Message, UserMessage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import dateCwdReminderTemplate from "../prompts/system/date-cwd-reminder.md" with { type: "text" };
 
-/** Renders the reminder text for the given local calendar date and cwd. */
-export function renderDateCwdReminder(date: string, cwd: string): string {
+/** Renders the reminder text for the given local calendar date and cwd (none in a chat, which has no workspace). */
+export function renderDateCwdReminder(date: string, cwd: string | undefined): string {
 	return prompt.render(dateCwdReminderTemplate, { date, cwd }).trim();
 }
 
@@ -99,7 +99,7 @@ export class DateCwdReminderInjector {
 	#states = new Map<string, RootState>();
 
 	/** Apply the current reminder while preserving all earlier injected bytes. */
-	transform(context: Context, date: string, cwd: string): Context {
+	transform(context: Context, date: string, cwd: string | undefined): Context {
 		if (!context.systemPrompt || context.systemPrompt.length === 0 || context.messages.length === 0) return context;
 		const reminder = renderDateCwdReminder(date, cwd);
 		const messages = this.#inject(context.messages, reminder);
