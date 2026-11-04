@@ -3709,7 +3709,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "get_session_stats": {
 				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
+				// `/session`'s Prompt Cache section; the TUI reads it off the session directly.
+				const promptCache = session.getPromptCacheStatus();
+				return success(id, "get_session_stats", promptCache ? { ...stats, promptCache } : stats);
 			}
 
 			case "set_session_pinned": {

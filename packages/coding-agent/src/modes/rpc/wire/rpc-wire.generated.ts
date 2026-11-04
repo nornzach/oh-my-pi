@@ -653,6 +653,49 @@ export interface SessionCredits {
 	acuCost: number;
 }
 
+export interface PromptCacheColdReason {
+	/** `refresh-missed`: omp's warm refresh found the entry gone. */
+	kind: "expired" | "refresh-missed" | "model" | "thinking" | "tools" | "system-prompt" | "retention" | "compaction";
+	/** `expired`: when the entry lapsed (epoch ms). */
+	at?: number;
+	/** `model` / `thinking`: the value the entry was written under. */
+	from?: string;
+	/** `model` / `thinking`: the value the next request uses. */
+	to?: string;
+}
+
+export interface PromptCacheWarming {
+	/** `scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight. */
+	state: "scheduled" | "refreshing" | "inactive";
+	/** When the armed refresh decides (epoch ms). */
+	nextWarmAt?: number;
+	/** When warming gives up (epoch ms). */
+	stopsAt?: number;
+	/** Why nothing is scheduled. */
+	reason?: string;
+}
+
+export interface PromptCacheStatus {
+	/** `cold`: the next request rewrites the cached prefix. */
+	state: "warm" | "cold";
+	/** Read off the transcript of a reopened session, not a response this process saw. */
+	inferred: boolean;
+	/** Retention tier the entry was written under: `short` (5m) or `long` (1h). */
+	tier: "short" | "long";
+	/** Send time of the last request that read or wrote the entry (epoch ms). */
+	touchedAt: number;
+	/** Prompt tokens a warm cache serves. */
+	cachedTokens: number;
+	/** Estimated prompt tokens of the next request. */
+	nextTokens: number;
+	/** Why it is cold; absent while warm. */
+	reason?: PromptCacheColdReason;
+	/** Lifetime after the last touch; absent when the provider never expires it. */
+	ttlMs?: number;
+	/** omp's cache warmer; absent when the entry was inferred. */
+	warming?: PromptCacheWarming;
+}
+
 export interface SessionStats {
 	sessionId: string;
 	userMessages: number;
@@ -669,6 +712,8 @@ export interface SessionStats {
 	/** Failed edits by the engine's `errorKind`. */
 	editRejections?: Record<string, number>;
 	contextUsage?: ContextUsage;
+	/** What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell. */
+	promptCache?: PromptCacheStatus;
 }
 
 export interface MessagesPage {

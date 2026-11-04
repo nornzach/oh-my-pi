@@ -3148,6 +3148,126 @@
 				"acuCost"
 			]
 		},
+		"PromptCacheColdReason": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"enum": [
+						"expired",
+						"refresh-missed",
+						"model",
+						"thinking",
+						"tools",
+						"system-prompt",
+						"retention",
+						"compaction"
+					],
+					"type": "string",
+					"description": "`refresh-missed`: omp's warm refresh found the entry gone."
+				},
+				"at": {
+					"type": "integer",
+					"description": "`expired`: when the entry lapsed (epoch ms)."
+				},
+				"from": {
+					"type": "string",
+					"description": "`model` / `thinking`: the value the entry was written under."
+				},
+				"to": {
+					"type": "string",
+					"description": "`model` / `thinking`: the value the next request uses."
+				}
+			},
+			"required": [
+				"kind"
+			]
+		},
+		"PromptCacheWarming": {
+			"type": "object",
+			"properties": {
+				"state": {
+					"enum": [
+						"scheduled",
+						"refreshing",
+						"inactive"
+					],
+					"type": "string",
+					"description": "`scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight."
+				},
+				"nextWarmAt": {
+					"type": "integer",
+					"description": "When the armed refresh decides (epoch ms)."
+				},
+				"stopsAt": {
+					"type": "integer",
+					"description": "When warming gives up (epoch ms)."
+				},
+				"reason": {
+					"type": "string",
+					"description": "Why nothing is scheduled."
+				}
+			},
+			"required": [
+				"state"
+			]
+		},
+		"PromptCacheStatus": {
+			"type": "object",
+			"properties": {
+				"state": {
+					"enum": [
+						"warm",
+						"cold"
+					],
+					"type": "string",
+					"description": "`cold`: the next request rewrites the cached prefix."
+				},
+				"inferred": {
+					"type": "boolean",
+					"description": "Read off the transcript of a reopened session, not a response this process saw."
+				},
+				"tier": {
+					"enum": [
+						"short",
+						"long"
+					],
+					"type": "string",
+					"description": "Retention tier the entry was written under: `short` (5m) or `long` (1h)."
+				},
+				"touchedAt": {
+					"type": "integer",
+					"description": "Send time of the last request that read or wrote the entry (epoch ms)."
+				},
+				"cachedTokens": {
+					"type": "integer",
+					"description": "Prompt tokens a warm cache serves."
+				},
+				"nextTokens": {
+					"type": "integer",
+					"description": "Estimated prompt tokens of the next request."
+				},
+				"reason": {
+					"$ref": "#/$defs/PromptCacheColdReason",
+					"description": "Why it is cold; absent while warm."
+				},
+				"ttlMs": {
+					"type": "integer",
+					"description": "Lifetime after the last touch; absent when the provider never expires it."
+				},
+				"warming": {
+					"$ref": "#/$defs/PromptCacheWarming",
+					"description": "omp's cache warmer; absent when the entry was inferred."
+				}
+			},
+			"required": [
+				"state",
+				"inferred",
+				"tier",
+				"touchedAt",
+				"cachedTokens",
+				"nextTokens"
+			]
+		},
 		"SessionStats": {
 			"type": "object",
 			"properties": {
@@ -3201,6 +3321,10 @@
 				},
 				"contextUsage": {
 					"$ref": "#/$defs/ContextUsage"
+				},
+				"promptCache": {
+					"$ref": "#/$defs/PromptCacheStatus",
+					"description": "What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell."
 				}
 			},
 			"required": [

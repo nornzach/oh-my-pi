@@ -828,6 +828,52 @@ class SessionCredits:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class PromptCacheColdReason:
+    kind: Literal["expired", "refresh-missed", "model", "thinking", "tools", "system-prompt", "retention", "compaction"]
+    """`refresh-missed`: omp's warm refresh found the entry gone."""
+    at: int | None = None
+    """`expired`: when the entry lapsed (epoch ms)."""
+    from_: str | None = None
+    """`model` / `thinking`: the value the entry was written under."""
+    to: str | None = None
+    """`model` / `thinking`: the value the next request uses."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptCacheWarming:
+    state: Literal["scheduled", "refreshing", "inactive"]
+    """`scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight."""
+    next_warm_at: int | None = None
+    """When the armed refresh decides (epoch ms)."""
+    stops_at: int | None = None
+    """When warming gives up (epoch ms)."""
+    reason: str | None = None
+    """Why nothing is scheduled."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class PromptCacheStatus:
+    state: Literal["warm", "cold"]
+    """`cold`: the next request rewrites the cached prefix."""
+    inferred: bool
+    """Read off the transcript of a reopened session, not a response this process saw."""
+    tier: Literal["short", "long"]
+    """Retention tier the entry was written under: `short` (5m) or `long` (1h)."""
+    touched_at: int
+    """Send time of the last request that read or wrote the entry (epoch ms)."""
+    cached_tokens: int
+    """Prompt tokens a warm cache serves."""
+    next_tokens: int
+    """Estimated prompt tokens of the next request."""
+    reason: PromptCacheColdReason | None = None
+    """Why it is cold; absent while warm."""
+    ttl_ms: int | None = None
+    """Lifetime after the last touch; absent when the provider never expires it."""
+    warming: PromptCacheWarming | None = None
+    """omp's cache warmer; absent when the entry was inferred."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class SessionStats:
     session_id: str
     user_messages: int
@@ -844,6 +890,8 @@ class SessionStats:
     edit_rejections: dict[str, float] | None = None
     """Failed edits by the engine's `errorKind`."""
     context_usage: ContextUsage | None = None
+    prompt_cache: PromptCacheStatus | None = None
+    """What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2223,6 +2271,41 @@ def parse_session_credits(value: object, path: str = "SessionCredits") -> Sessio
     )
 
 
+def parse_prompt_cache_cold_reason(value: object, path: str = "PromptCacheColdReason") -> PromptCacheColdReason:
+    payload = expect_object(value, path)
+    return PromptCacheColdReason(
+        kind=required(payload, "kind", cast('Decoder[Literal["expired", "refresh-missed", "model", "thinking", "tools", "system-prompt", "retention", "compaction"]]', literal(frozenset({"expired", "refresh-missed", "model", "thinking", "tools", "system-prompt", "retention", "compaction"}))), path),
+        at=optional(payload, "at", decode_int, path),
+        from_=optional(payload, "from", decode_str, path),
+        to=optional(payload, "to", decode_str, path),
+    )
+
+
+def parse_prompt_cache_warming(value: object, path: str = "PromptCacheWarming") -> PromptCacheWarming:
+    payload = expect_object(value, path)
+    return PromptCacheWarming(
+        state=required(payload, "state", cast('Decoder[Literal["scheduled", "refreshing", "inactive"]]', literal(frozenset({"scheduled", "refreshing", "inactive"}))), path),
+        next_warm_at=optional(payload, "nextWarmAt", decode_int, path),
+        stops_at=optional(payload, "stopsAt", decode_int, path),
+        reason=optional(payload, "reason", decode_str, path),
+    )
+
+
+def parse_prompt_cache_status(value: object, path: str = "PromptCacheStatus") -> PromptCacheStatus:
+    payload = expect_object(value, path)
+    return PromptCacheStatus(
+        state=required(payload, "state", cast('Decoder[Literal["warm", "cold"]]', literal(frozenset({"warm", "cold"}))), path),
+        inferred=required(payload, "inferred", decode_bool, path),
+        tier=required(payload, "tier", cast('Decoder[Literal["short", "long"]]', literal(frozenset({"short", "long"}))), path),
+        touched_at=required(payload, "touchedAt", decode_int, path),
+        cached_tokens=required(payload, "cachedTokens", decode_int, path),
+        next_tokens=required(payload, "nextTokens", decode_int, path),
+        reason=optional(payload, "reason", parse_prompt_cache_cold_reason, path),
+        ttl_ms=optional(payload, "ttlMs", decode_int, path),
+        warming=optional(payload, "warming", parse_prompt_cache_warming, path),
+    )
+
+
 def parse_session_stats(value: object, path: str = "SessionStats") -> SessionStats:
     payload = expect_object(value, path)
     return SessionStats(
@@ -2240,6 +2323,7 @@ def parse_session_stats(value: object, path: str = "SessionStats") -> SessionSta
         routed_models=optional(payload, "routedModels", record(decode_float), path),
         edit_rejections=optional(payload, "editRejections", record(decode_float), path),
         context_usage=optional(payload, "contextUsage", parse_context_usage, path),
+        prompt_cache=optional(payload, "promptCache", parse_prompt_cache_status, path),
     )
 
 
@@ -4112,6 +4196,9 @@ __all__ = [
     "OpenUrlUiRequest",
     "PromoteQueuedMessageResult",
     "PromptAck",
+    "PromptCacheColdReason",
+    "PromptCacheStatus",
+    "PromptCacheWarming",
     "PromptError",
     "PromptResultEvent",
     "PromptStatus",
@@ -4295,6 +4382,9 @@ __all__ = [
     "parse_open_url_ui_request",
     "parse_promote_queued_message_result",
     "parse_prompt_ack",
+    "parse_prompt_cache_cold_reason",
+    "parse_prompt_cache_status",
+    "parse_prompt_cache_warming",
     "parse_prompt_error",
     "parse_prompt_result_event",
     "parse_python_execution_message",

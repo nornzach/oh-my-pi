@@ -3305,6 +3305,64 @@ pub struct SessionCredits {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptCacheColdReason {
+	/// `refresh-missed`: omp's warm refresh found the entry gone.
+	pub kind: PromptCacheColdReasonKind,
+	/// `expired`: when the entry lapsed (epoch ms).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub at: Option<i64>,
+	/// `model` / `thinking`: the value the entry was written under.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub from: Option<String>,
+	/// `model` / `thinking`: the value the next request uses.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub to: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptCacheWarming {
+	/// `scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight.
+	pub state: PromptCacheWarmingState,
+	/// When the armed refresh decides (epoch ms).
+	#[serde(rename = "nextWarmAt", default, skip_serializing_if = "Option::is_none")]
+	pub next_warm_at: Option<i64>,
+	/// When warming gives up (epoch ms).
+	#[serde(rename = "stopsAt", default, skip_serializing_if = "Option::is_none")]
+	pub stops_at: Option<i64>,
+	/// Why nothing is scheduled.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptCacheStatus {
+	/// `cold`: the next request rewrites the cached prefix.
+	pub state: PromptCacheStatusState,
+	/// Read off the transcript of a reopened session, not a response this process saw.
+	pub inferred: bool,
+	/// Retention tier the entry was written under: `short` (5m) or `long` (1h).
+	pub tier: PromptCacheStatusTier,
+	/// Send time of the last request that read or wrote the entry (epoch ms).
+	#[serde(rename = "touchedAt")]
+	pub touched_at: i64,
+	/// Prompt tokens a warm cache serves.
+	#[serde(rename = "cachedTokens")]
+	pub cached_tokens: i64,
+	/// Estimated prompt tokens of the next request.
+	#[serde(rename = "nextTokens")]
+	pub next_tokens: i64,
+	/// Why it is cold; absent while warm.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reason: Option<PromptCacheColdReason>,
+	/// Lifetime after the last touch; absent when the provider never expires it.
+	#[serde(rename = "ttlMs", default, skip_serializing_if = "Option::is_none")]
+	pub ttl_ms: Option<i64>,
+	/// omp's cache warmer; absent when the entry was inferred.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub warming: Option<PromptCacheWarming>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionStats {
 	#[serde(rename = "sessionId")]
 	pub session_id: String,
@@ -3333,6 +3391,9 @@ pub struct SessionStats {
 	pub edit_rejections: Option<BTreeMap<String, f64>>,
 	#[serde(rename = "contextUsage", default, skip_serializing_if = "Option::is_none")]
 	pub context_usage: Option<ContextUsage>,
+	/// What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell.
+	#[serde(rename = "promptCache", default, skip_serializing_if = "Option::is_none")]
+	pub prompt_cache: Option<PromptCacheStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5899,6 +5960,99 @@ impl<'de> Deserialize<'de> for LitCompleted {
 			Ok(Self)
 		} else {
 			Err(D::Error::custom(format!("expected \"completed\", got {value}")))
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptCacheColdReasonKind {
+	#[serde(rename = "expired")]
+	Expired,
+	#[serde(rename = "refresh-missed")]
+	RefreshMissed,
+	#[serde(rename = "model")]
+	Model,
+	#[serde(rename = "thinking")]
+	Thinking,
+	#[serde(rename = "tools")]
+	Tools,
+	#[serde(rename = "system-prompt")]
+	SystemPrompt,
+	#[serde(rename = "retention")]
+	Retention,
+	#[serde(rename = "compaction")]
+	Compaction,
+}
+
+impl PromptCacheColdReasonKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Expired => "expired",
+			Self::RefreshMissed => "refresh-missed",
+			Self::Model => "model",
+			Self::Thinking => "thinking",
+			Self::Tools => "tools",
+			Self::SystemPrompt => "system-prompt",
+			Self::Retention => "retention",
+			Self::Compaction => "compaction",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptCacheWarmingState {
+	#[serde(rename = "scheduled")]
+	Scheduled,
+	#[serde(rename = "refreshing")]
+	Refreshing,
+	#[serde(rename = "inactive")]
+	Inactive,
+}
+
+impl PromptCacheWarmingState {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Scheduled => "scheduled",
+			Self::Refreshing => "refreshing",
+			Self::Inactive => "inactive",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptCacheStatusState {
+	#[serde(rename = "warm")]
+	Warm,
+	#[serde(rename = "cold")]
+	Cold,
+}
+
+impl PromptCacheStatusState {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Warm => "warm",
+			Self::Cold => "cold",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PromptCacheStatusTier {
+	#[serde(rename = "short")]
+	Short,
+	#[serde(rename = "long")]
+	Long,
+}
+
+impl PromptCacheStatusTier {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Short => "short",
+			Self::Long => "long",
 		}
 	}
 }

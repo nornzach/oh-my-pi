@@ -3019,6 +3019,195 @@ func (v *SessionCredits) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type PromptCacheColdReason struct {
+	// `refresh-missed`: omp's warm refresh found the entry gone.
+	Kind PromptCacheColdReasonKind `json:"kind"`
+	// `expired`: when the entry lapsed (epoch ms).
+	At *int64 `json:"at,omitempty"`
+	// `model` / `thinking`: the value the entry was written under.
+	From *string `json:"from,omitempty"`
+	// `model` / `thinking`: the value the next request uses.
+	To *string `json:"to,omitempty"`
+}
+
+func (v *PromptCacheColdReason) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptCacheColdReason", v.decodeFrom)
+}
+
+func (v *PromptCacheColdReason) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptCacheColdReason
+	d := fieldDecoder{raw: raw, owner: "PromptCacheColdReason"}
+	d.required("kind", &out.Kind)
+	d.optional("at", &out.At)
+	d.optional("from", &out.From)
+	d.optional("to", &out.To)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type PromptCacheColdReasonKind string
+
+const (
+	PromptCacheColdReasonKindExpired       PromptCacheColdReasonKind = "expired"
+	PromptCacheColdReasonKindRefreshMissed PromptCacheColdReasonKind = "refresh-missed"
+	PromptCacheColdReasonKindModel         PromptCacheColdReasonKind = "model"
+	PromptCacheColdReasonKindThinking      PromptCacheColdReasonKind = "thinking"
+	PromptCacheColdReasonKindTools         PromptCacheColdReasonKind = "tools"
+	PromptCacheColdReasonKindSystemPrompt  PromptCacheColdReasonKind = "system-prompt"
+	PromptCacheColdReasonKindRetention     PromptCacheColdReasonKind = "retention"
+	PromptCacheColdReasonKindCompaction    PromptCacheColdReasonKind = "compaction"
+)
+
+func (v *PromptCacheColdReasonKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptCacheColdReasonKind")
+	if err != nil {
+		return err
+	}
+	switch value := PromptCacheColdReasonKind(s); value {
+	case PromptCacheColdReasonKindExpired, PromptCacheColdReasonKindRefreshMissed, PromptCacheColdReasonKindModel, PromptCacheColdReasonKindThinking, PromptCacheColdReasonKindTools, PromptCacheColdReasonKindSystemPrompt, PromptCacheColdReasonKindRetention, PromptCacheColdReasonKindCompaction:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptCacheColdReasonKind", s)
+}
+
+type PromptCacheWarming struct {
+	// `scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight.
+	State PromptCacheWarmingState `json:"state"`
+	// When the armed refresh decides (epoch ms).
+	NextWarmAt *int64 `json:"nextWarmAt,omitempty"`
+	// When warming gives up (epoch ms).
+	StopsAt *int64 `json:"stopsAt,omitempty"`
+	// Why nothing is scheduled.
+	Reason *string `json:"reason,omitempty"`
+}
+
+func (v *PromptCacheWarming) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptCacheWarming", v.decodeFrom)
+}
+
+func (v *PromptCacheWarming) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptCacheWarming
+	d := fieldDecoder{raw: raw, owner: "PromptCacheWarming"}
+	d.required("state", &out.State)
+	d.optional("nextWarmAt", &out.NextWarmAt)
+	d.optional("stopsAt", &out.StopsAt)
+	d.optional("reason", &out.Reason)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type PromptCacheWarmingState string
+
+const (
+	PromptCacheWarmingStateScheduled  PromptCacheWarmingState = "scheduled"
+	PromptCacheWarmingStateRefreshing PromptCacheWarmingState = "refreshing"
+	PromptCacheWarmingStateInactive   PromptCacheWarmingState = "inactive"
+)
+
+func (v *PromptCacheWarmingState) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptCacheWarmingState")
+	if err != nil {
+		return err
+	}
+	switch value := PromptCacheWarmingState(s); value {
+	case PromptCacheWarmingStateScheduled, PromptCacheWarmingStateRefreshing, PromptCacheWarmingStateInactive:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptCacheWarmingState", s)
+}
+
+type PromptCacheStatus struct {
+	// `cold`: the next request rewrites the cached prefix.
+	State PromptCacheStatusState `json:"state"`
+	// Read off the transcript of a reopened session, not a response this process saw.
+	Inferred bool `json:"inferred"`
+	// Retention tier the entry was written under: `short` (5m) or `long` (1h).
+	Tier PromptCacheStatusTier `json:"tier"`
+	// Send time of the last request that read or wrote the entry (epoch ms).
+	TouchedAt int64 `json:"touchedAt"`
+	// Prompt tokens a warm cache serves.
+	CachedTokens int64 `json:"cachedTokens"`
+	// Estimated prompt tokens of the next request.
+	NextTokens int64 `json:"nextTokens"`
+	// Why it is cold; absent while warm.
+	Reason *PromptCacheColdReason `json:"reason,omitempty"`
+	// Lifetime after the last touch; absent when the provider never expires it.
+	TtlMs *int64 `json:"ttlMs,omitempty"`
+	// omp's cache warmer; absent when the entry was inferred.
+	Warming *PromptCacheWarming `json:"warming,omitempty"`
+}
+
+func (v *PromptCacheStatus) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "PromptCacheStatus", v.decodeFrom)
+}
+
+func (v *PromptCacheStatus) decodeFrom(raw map[string]json.RawMessage) error {
+	var out PromptCacheStatus
+	d := fieldDecoder{raw: raw, owner: "PromptCacheStatus"}
+	d.required("state", &out.State)
+	d.required("inferred", &out.Inferred)
+	d.required("tier", &out.Tier)
+	d.required("touchedAt", &out.TouchedAt)
+	d.required("cachedTokens", &out.CachedTokens)
+	d.required("nextTokens", &out.NextTokens)
+	d.optional("reason", &out.Reason)
+	d.optional("ttlMs", &out.TtlMs)
+	d.optional("warming", &out.Warming)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type PromptCacheStatusState string
+
+const (
+	PromptCacheStatusStateWarm PromptCacheStatusState = "warm"
+	PromptCacheStatusStateCold PromptCacheStatusState = "cold"
+)
+
+func (v *PromptCacheStatusState) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptCacheStatusState")
+	if err != nil {
+		return err
+	}
+	switch value := PromptCacheStatusState(s); value {
+	case PromptCacheStatusStateWarm, PromptCacheStatusStateCold:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptCacheStatusState", s)
+}
+
+type PromptCacheStatusTier string
+
+const (
+	PromptCacheStatusTierShort PromptCacheStatusTier = "short"
+	PromptCacheStatusTierLong  PromptCacheStatusTier = "long"
+)
+
+func (v *PromptCacheStatusTier) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "PromptCacheStatusTier")
+	if err != nil {
+		return err
+	}
+	switch value := PromptCacheStatusTier(s); value {
+	case PromptCacheStatusTierShort, PromptCacheStatusTierLong:
+		*v = value
+		return nil
+	}
+	return unknownValue("PromptCacheStatusTier", s)
+}
+
 type SessionStats struct {
 	SessionID         string             `json:"sessionId"`
 	UserMessages      int64              `json:"userMessages"`
@@ -3035,6 +3224,8 @@ type SessionStats struct {
 	// Failed edits by the engine's `errorKind`.
 	EditRejections map[string]float64 `json:"editRejections,omitempty"`
 	ContextUsage   *ContextUsage      `json:"contextUsage,omitempty"`
+	// What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell.
+	PromptCache *PromptCacheStatus `json:"promptCache,omitempty"`
 }
 
 func (v *SessionStats) UnmarshalJSON(data []byte) error {
@@ -3058,6 +3249,7 @@ func (v *SessionStats) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("routedModels", &out.RoutedModels)
 	d.optional("editRejections", &out.EditRejections)
 	d.optional("contextUsage", &out.ContextUsage)
+	d.optional("promptCache", &out.PromptCache)
 	if d.err != nil {
 		return d.err
 	}

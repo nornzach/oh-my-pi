@@ -245,6 +245,35 @@ export const stateDefs = {
 		total: "number.integer",
 	},
 	SessionCredits: { cost: "number", committedCost: "number", acuCost: "number" },
+	PromptCacheColdReason: {
+		kind: doc(
+			"'expired' | 'refresh-missed' | 'model' | 'thinking' | 'tools' | 'system-prompt' | 'retention' | 'compaction'",
+			"`refresh-missed`: omp's warm refresh found the entry gone.",
+		),
+		"at?": doc("number.integer", "`expired`: when the entry lapsed (epoch ms)."),
+		"from?": doc("string", "`model` / `thinking`: the value the entry was written under."),
+		"to?": doc("string", "`model` / `thinking`: the value the next request uses."),
+	},
+	PromptCacheWarming: {
+		state: doc(
+			"'scheduled' | 'refreshing' | 'inactive'",
+			"`scheduled`: a refresh decision is armed; `refreshing`: a refresh is in flight.",
+		),
+		"nextWarmAt?": doc("number.integer", "When the armed refresh decides (epoch ms)."),
+		"stopsAt?": doc("number.integer", "When warming gives up (epoch ms)."),
+		"reason?": doc("string", "Why nothing is scheduled."),
+	},
+	PromptCacheStatus: {
+		state: doc("'warm' | 'cold'", "`cold`: the next request rewrites the cached prefix."),
+		"reason?": doc("PromptCacheColdReason", "Why it is cold; absent while warm."),
+		inferred: doc("boolean", "Read off the transcript of a reopened session, not a response this process saw."),
+		tier: doc("'short' | 'long'", "Retention tier the entry was written under: `short` (5m) or `long` (1h)."),
+		touchedAt: doc("number.integer", "Send time of the last request that read or wrote the entry (epoch ms)."),
+		"ttlMs?": doc("number.integer", "Lifetime after the last touch; absent when the provider never expires it."),
+		cachedTokens: doc("number.integer", "Prompt tokens a warm cache serves."),
+		nextTokens: doc("number.integer", "Estimated prompt tokens of the next request."),
+		"warming?": doc("PromptCacheWarming", "omp's cache warmer; absent when the entry was inferred."),
+	},
 	SessionStats: {
 		"sessionFile?": "string",
 		sessionId: "string",
@@ -260,6 +289,10 @@ export const stateDefs = {
 		"routedModels?": "Record<string, number>",
 		"editRejections?": doc("Record<string, number>", "Failed edits by the engine's `errorKind`."),
 		"contextUsage?": "ContextUsage",
+		"promptCache?": doc(
+			"PromptCacheStatus",
+			"What the next request finds in the prompt cache, as `/session` shows it; absent when omp cannot tell.",
+		),
 	},
 	MessagesPage: {
 		messages: "AgentMessage[]",
