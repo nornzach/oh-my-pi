@@ -50,7 +50,7 @@ async function collectRpcMcpServerNames(
 	};
 	addConfiguredNames(userConfig);
 	addConfiguredNames(projectConfig);
-	for (const name of MCPManager.instance()?.getAllServerNames() ?? []) names.add(name);
+	for (const name of MCPManager.owned()?.getAllServerNames() ?? []) names.add(name);
 	return [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 

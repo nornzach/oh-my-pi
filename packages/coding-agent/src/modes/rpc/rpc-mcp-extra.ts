@@ -138,7 +138,7 @@ export function serializeMcpReload<T>(reload: () => Promise<T>): Promise<T> {
  */
 async function reloadRpcMcpServers(session: AgentSession): Promise<void> {
 	await serializeMcpReload(async () => {
-		const manager = MCPManager.instance();
+		const manager = MCPManager.owned();
 		if (manager) {
 			await manager.disconnectAll();
 			// Prompt enrichment is asynchronous. Clear commands before rediscovery so
@@ -457,7 +457,7 @@ async function resolveRpcServerForAuth(
 	const found = await findRpcConfiguredServer(cwd, name);
 	if (found) return { ...found, discovered: false };
 
-	const manager = MCPManager.instance();
+	const manager = MCPManager.owned();
 	const config = manager?.getServerConfig(name);
 	const source = manager?.getSource(name);
 	if (!config || !source) return null;
@@ -487,7 +487,7 @@ async function testRpcMcpConnection(
 	options?: { oauth?: boolean },
 ): Promise<void> {
 	const testName = `test_${Date.now()}`;
-	const manager = MCPManager.instance();
+	const manager = MCPManager.owned();
 	let resolvedConfig: MCPServerConfig;
 	if (manager) {
 		resolvedConfig = await manager.prepareConfig(config, options);

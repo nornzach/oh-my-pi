@@ -1770,6 +1770,7 @@ export class SelectorController {
 							},
 							onSetPinned: async (session: SessionInfo, pinned: boolean) => {
 								await setSessionPinned(session.id, pinned);
+								this.ctx.applySessionPin(session.id, pinned);
 							},
 						}
 					: {

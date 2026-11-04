@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { RpcBtwController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-btw";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { BtwHistoryRecord } from "@oh-my-pi/pi-coding-agent/session/btw-history";
 
 // Fork-only `btw_branch`: promotes the last completed RPC /btw answer into a
@@ -19,6 +20,7 @@ function harness(reply: () => Promise<{ replyText: string; assistantMessage: Ass
 	);
 	const session = {
 		model: { id: "model", api: "test", provider: "test" },
+		settings: Settings.isolated(),
 		sessionManager: {
 			getArtifactsDir: () => null,
 			getSessionId: () => "session-1",

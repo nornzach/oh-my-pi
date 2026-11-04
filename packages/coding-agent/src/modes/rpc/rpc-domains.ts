@@ -154,7 +154,7 @@ export async function buildRpcHooksResult(session: AgentSession): Promise<RpcHoo
  */
 export async function buildRpcMcpServersResult(session: AgentSession): Promise<RpcMcpServersResult> {
 	const cwd = session.sessionManager.getCwd();
-	const manager = MCPManager.instance();
+	const manager = MCPManager.owned();
 	const [userConfig, projectConfig] = await Promise.all([
 		readMCPConfigFile(getMCPConfigPath("user", cwd)),
 		readMCPConfigFile(getMCPConfigPath("project", cwd)),

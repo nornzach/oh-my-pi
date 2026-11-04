@@ -144,7 +144,7 @@ export async function applyRpcMcpAction(
 ): Promise<RpcMcpActionResult> {
 	if (!name.trim()) throw new Error("Server name cannot be empty");
 	const cwd = session.sessionManager.getCwd();
-	const manager = MCPManager.instance();
+	const manager = MCPManager.owned();
 
 	switch (action) {
 		case "enable":

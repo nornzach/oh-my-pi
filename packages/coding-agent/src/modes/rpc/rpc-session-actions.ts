@@ -107,7 +107,7 @@ export async function applyRpcReloadPlugins(
 	// same settings-derived filters as startup, serialized with every other
 	// shared-manager mutation. Skipped entirely when MCP never initialized
 	// (mirrors the TUI controller's `if (!ctx.mcpManager) return`).
-	const manager = MCPManager.instance();
+	const manager = MCPManager.owned();
 	if (manager) {
 		await serializeMcpReload(async () => {
 			await manager.disconnectAll();
