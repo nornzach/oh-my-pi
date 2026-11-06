@@ -13,10 +13,11 @@
  * actions) must keep getting the pre-#5642 plain leaf move instead of
  * silently reporting a successful no-op navigation (review on #5895).
  */
-import { describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionRunner, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { applyRpcSwitchLeaf } from "../src/modes/rpc/rpc-session-extra";
 import { assistantMsg, createTestSession, userMsg } from "./utilities";
@@ -631,6 +632,11 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 });
 
 describe("RPC switch_leaf ask re-answer", () => {
+	// The ask tool labels its rows from the theme; main.ts sets it up before any mode runs.
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
 	it("opens the remote ask dialog, commits a sibling answer, and defers resume", async () => {
 		const ctx = await createTestSession({ inMemory: true });
 		try {
