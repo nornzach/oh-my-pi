@@ -1812,11 +1812,7 @@ export class Agent {
 		this.#state.streamMessage = null;
 		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
-		this.#steeringQueue = [];
-		this.#followUpQueue = [];
-		this.#notifySteeringWaiters();
-		this.#emitQueueChanged();
-		this.clearDeferredToolDirectives();
+		this.clearAllQueues();
 	}
 
 	/** Send a prompt with an AgentMessage */
