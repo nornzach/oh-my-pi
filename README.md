@@ -416,7 +416,7 @@ Full provider & routing reference at [omp.sh/docs/providers](https://omp.sh/docs
 
 ### Search providers
 
-Twenty-three backends. Pin one, or let `auto` walk the chain in order.
+Twenty-four backends. Pin one, or let `auto` walk the chain in order.
 
 | provider     | auth                                      |
 | ------------ | ----------------------------------------- |
@@ -429,6 +429,7 @@ Twenty-three backends. Pin one, or let `auto` walk the chain in order.
 | `zai`        | `ZAI_API_KEY`                             |
 | `exa`        | `EXA_API_KEY` (or mcp)                    |
 | `tinyfish`   | `TINYFISH_API_KEY`                        |
+| `keenable`   | `KEENABLE_API_KEY` (keyless fallback)     |
 | `jina`       | `JINA_API_KEY`                            |
 | `kagi`       | `KAGI_API_KEY`                            |
 | `tavily`     | `TAVILY_API_KEY`                          |

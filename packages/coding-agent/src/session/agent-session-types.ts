@@ -26,6 +26,7 @@ import type { postmortem } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager, AsyncJobManagerApi } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { AgentDefinition } from "../task/types";
+import type { AgentRegistryApi } from "../registry/agent-registry";
 import type { SessionAccountPoolScope } from "../config/account-pools";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -391,6 +392,8 @@ export interface AgentSessionConfig {
 	agentId?: string;
 	/** Whether this is a top-level or subagent session. */
 	agentKind?: "main" | "sub";
+	/** Registry whose awaits table records this agent blocked on the user while a dialog waits for their answer. */
+	agentRegistry?: AgentRegistryApi;
 	/** Provider-facing session ID override. */
 	providerSessionId?: string;
 	/** OAuth account pools enforced on the session's key lookups; the session lifts them on dispose. */

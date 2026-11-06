@@ -58,7 +58,7 @@ import {
 	cfgInlineToolDescriptors,
 	cfgPersonality,
 } from "./session/settings";
-import { cfgTaskBatch, cfgTaskEager } from "./task/settings";
+import { cfgOvnfsPath, cfgTaskBatch, cfgTaskEager } from "./task/settings";
 import {
 	cfgAsyncEnabled,
 	cfgOutEnabled,
@@ -96,6 +96,8 @@ export const cfgSystemPromptInputs = combine({
 	evalAutoBackground: cfgEvalAutoBackgroundEnabled,
 	taskEager: cfgTaskEager,
 	taskBatch: cfgTaskBatch,
+	// Separate-checkout guidance names the ovnfs command.
+	ovnfsPath: cfgOvnfsPath,
 	// Rule bucketing (TTSR registrations, rulebook, always-apply) runs at rebuild time.
 	ttsrEnabled: cfgTtsrEnabled,
 	ttsrBuiltinRules: cfgTtsrBuiltinRules,
@@ -611,6 +613,8 @@ export interface BuildSystemPromptOptions {
 	xdevDocs?: string;
 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
 	autoQaEnabled?: boolean;
+	/** ovnfs command when its binary is found (`ovnfsCommand`); renders the separate-checkout guidance. */
+	ovnfs?: string;
 	/** Whether active `write` is restricted to xd:// dispatch and the plan artifact sandbox. */
 	writeTransportOnly?: boolean;
 	/**
@@ -704,6 +708,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		xdevTools = [],
 		xdevDocs = "",
 		autoQaEnabled = false,
+		ovnfs,
 		writeTransportOnly = false,
 		subagent = false,
 		activeRepoContext: providedActiveRepoContext,
@@ -974,6 +979,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		securityEnabled,
 		settingsApproval,
 		outReplies,
+		subagent,
 	};
 	const filteredSkills = (options.skillDescriptions ?? new SkillDescriptionCatalog()).render(
 		hasSkillReader ? skills.filter(skill => skill.hide !== true) : [],
@@ -1040,6 +1046,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
 		xdevDocs,
 		autoQaEnabled,
+		ovnfs,
 		writeTransportOnly,
 		subagent,
 	};

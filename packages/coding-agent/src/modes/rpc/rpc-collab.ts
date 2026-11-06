@@ -127,7 +127,7 @@ export class RpcCollabController {
 			this.#host = undefined;
 			await host.stop("host stopped");
 		}
-		this.#ctx.collabGuest = undefined;
+		this.#ctx.setCollabGuest(undefined);
 		this.#ctx.collabHost = undefined;
 		this.#publishState();
 		return this.state;
@@ -170,13 +170,19 @@ export class RpcCollabController {
 	#buildContext(): InteractiveModeContext {
 		const { session, eventBus } = this.#options;
 		const clearable = { clear: () => {}, disposeChildren: () => {} };
+		let joined: CollabGuestLink | undefined;
 		const context = {
 			session,
 			sessionManager: session.sessionManager,
 			settings: session.settings,
 			eventBus,
 			collabHost: undefined,
-			collabGuest: undefined,
+			get collabGuest() {
+				return joined;
+			},
+			setCollabGuest: (guest: CollabGuestLink | undefined) => {
+				joined = guest;
+			},
 			statusLine: {
 				setCollabStatus: (_status: CollabStatusSegment | null) => this.#publishState(),
 				getCachedContextBreakdown: () => session.getContextBreakdown() ?? {},
@@ -192,6 +198,7 @@ export class RpcCollabController {
 			},
 			chatContainer: clearable,
 			pendingMessagesContainer: clearable,
+			pendingShellContainer: clearable,
 			statusContainer: clearable,
 			pendingTools: new Map(),
 			compactionQueuedMessages: [],
@@ -201,9 +208,11 @@ export class RpcCollabController {
 			autoCompactionLoader: undefined,
 			retryLoader: undefined,
 			eventController: {
-				handleEvent: async (event: AgentSessionEvent) => {
+				dispatchSessionEvent: async (event: AgentSessionEvent) => {
 					this.#options.output(event);
 				},
+				takeDisplaceableComponents: () => [],
+				resetTranscriptAnchors: () => {},
 			},
 			showStatus: (message: string) => this.#options.notify(message, "info"),
 			showError: (message: string) => this.#options.notify(message, "error"),
