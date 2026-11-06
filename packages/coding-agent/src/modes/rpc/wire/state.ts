@@ -192,6 +192,17 @@ export const stateDefs = {
 		"providerReplayThroughEntryId?": "string",
 	},
 	ModelCycleResult: { model: "ModelInfo", "thinkingLevel?": "ThinkingLevel", isScoped: "boolean" },
+	DiscoveredModel: doc(
+		{
+			id: "string",
+			name: "string",
+			reasoning: "boolean",
+			input: doc("string[]", "Accepted input modalities, e.g. `text`, `image`."),
+			contextWindow: doc("number.integer | null", "Null when the server does not report a limit."),
+			maxTokens: doc("number.integer | null", "Null when the server does not report a limit."),
+		},
+		"A model an endpoint offers, as `discover_provider_models` reports it.",
+	),
 	ThinkingLevelCycleResult: { level: "Effort" },
 	CancellationResult: { cancelled: "boolean" },
 	OpenSessionResult: doc(

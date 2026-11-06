@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AgentTool, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type ImageContent, type Model, PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
+import { type Api, type ImageContent, type Model, PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -29,9 +29,11 @@ import {
 import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import { $env, isRecord, logger, Snowflake, setProjectDir, toError } from "@oh-my-pi/pi-utils";
 import { orderedSettings } from "../../config/all-settings";
+import { reportedModelLimits } from "../../config/model-discovery";
 import { resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
+import { resolveConfigHeaders } from "../../config/resolve-config-value";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
 import { chatConfig, isChatSession } from "../../session/chat-session";
 import { cfgChatSettings } from "../../session/chat-settings";
@@ -2397,6 +2399,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			kind: session.sessionManager.getHeader()?.kind,
 		});
 	};
+	// A session is named in the background, well after the commands that report it.
+	session.sessionManager.onSessionNameChanged(emitSessionInfoUpdate);
 
 	// Bound the background-discovery await used by model-listing commands.
 	// The RPC command queue is serial, so an unbounded
@@ -3425,6 +3429,29 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				return success(id, "get_available_models", result);
 			}
 
+			case "discover_provider_models": {
+				const models = await session.modelRegistry.listEndpointModels(
+					{
+						provider: command.provider ?? "custom",
+						api: command.api as Api,
+						baseUrl: command.baseUrl,
+						authHeader: command.authHeader,
+						headers: await resolveConfigHeaders(command.headers),
+						discovery: { type: command.discoveryType ?? "openai-models-list", timeoutMs: command.timeoutMs },
+					},
+					{ apiKey: command.apiKey, useSavedCredential: command.provider !== undefined },
+				);
+				return success(id, "discover_provider_models", {
+					models: models.map(model => ({
+						id: model.id,
+						name: model.name,
+						reasoning: model.reasoning,
+						input: model.input,
+						...reportedModelLimits(model),
+					})),
+				});
+			}
+
 			// =================================================================
 			// Thinking
 			// =================================================================
@@ -4200,7 +4227,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (!applied) {
 					return error(id, "set_session_name", "Session name cannot be empty");
 				}
-				if (renamingCurrent) emitSessionInfoUpdate();
 				return success(id, "set_session_name");
 			}
 

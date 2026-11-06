@@ -419,6 +419,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "discover_provider_models",
+				"doc": "List the models an endpoint offers, for a provider being configured. Saves nothing.",
+				"params": "DiscoverProviderModelsParams",
+				"result": "DiscoverProviderModelsResult",
+				"nullable": false,
+				"unwrap": "models",
+				"timeoutMs": 30000,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "set_thinking_level",
 				"doc": "Set the thinking level.",
 				"params": "SetThinkingLevelParams",
@@ -2922,6 +2933,58 @@
 				"model",
 				"isScoped"
 			]
+		},
+		"DiscoveredModel": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"reasoning": {
+					"type": "boolean"
+				},
+				"input": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Accepted input modalities, e.g. `text`, `image`."
+				},
+				"contextWindow": {
+					"anyOf": [
+						{
+							"type": "integer"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "Null when the server does not report a limit."
+				},
+				"maxTokens": {
+					"anyOf": [
+						{
+							"type": "integer"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "Null when the server does not report a limit."
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"reasoning",
+				"input",
+				"contextWindow",
+				"maxTokens"
+			],
+			"description": "A model an endpoint offers, as `discover_provider_models` reports it."
 		},
 		"ThinkingLevelCycleResult": {
 			"type": "object",
@@ -6794,6 +6857,67 @@
 					"type": "array",
 					"items": {
 						"$ref": "#/$defs/ModelInfo"
+					}
+				}
+			},
+			"required": [
+				"models"
+			]
+		},
+		"DiscoverProviderModelsParams": {
+			"type": "object",
+			"properties": {
+				"api": {
+					"type": "string"
+				},
+				"baseUrl": {
+					"type": "string"
+				},
+				"provider": {
+					"type": "string",
+					"description": "A saved provider whose credential authenticates the request when `apiKey` is absent."
+				},
+				"apiKey": {
+					"type": "string"
+				},
+				"authHeader": {
+					"type": "boolean"
+				},
+				"headers": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {
+						"type": "string"
+					}
+				},
+				"discoveryType": {
+					"enum": [
+						"ollama",
+						"llama.cpp",
+						"lm-studio",
+						"openai-models-list",
+						"proxy",
+						"litellm"
+					],
+					"type": "string",
+					"description": "The server's model-list protocol; `openai-models-list` by default."
+				},
+				"timeoutMs": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"api",
+				"baseUrl"
+			]
+		},
+		"DiscoverProviderModelsResult": {
+			"type": "object",
+			"properties": {
+				"models": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/DiscoveredModel"
 					}
 				}
 			},

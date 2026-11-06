@@ -3199,6 +3199,22 @@ pub struct ModelCycleResult {
 	pub thinking_level: Option<ThinkingLevel>,
 }
 
+/// A model an endpoint offers, as `discover_provider_models` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveredModel {
+	pub id: String,
+	pub name: String,
+	pub reasoning: bool,
+	/// Accepted input modalities, e.g. `text`, `image`.
+	pub input: Vec<String>,
+	/// Null when the server does not report a limit.
+	#[serde(rename = "contextWindow", deserialize_with = "Deserialize::deserialize")]
+	pub context_window: Option<i64>,
+	/// Null when the server does not report a limit.
+	#[serde(rename = "maxTokens", deserialize_with = "Deserialize::deserialize")]
+	pub max_tokens: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThinkingLevelCycleResult {
 	pub level: Effort,
@@ -5494,6 +5510,32 @@ pub struct GetAvailableModelsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoverProviderModelsParams {
+	pub api: String,
+	#[serde(rename = "baseUrl")]
+	pub base_url: String,
+	/// A saved provider whose credential authenticates the request when `apiKey` is absent.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "apiKey", default, skip_serializing_if = "Option::is_none")]
+	pub api_key: Option<String>,
+	#[serde(rename = "authHeader", default, skip_serializing_if = "Option::is_none")]
+	pub auth_header: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub headers: Option<BTreeMap<String, String>>,
+	/// The server's model-list protocol; `openai-models-list` by default.
+	#[serde(rename = "discoveryType", default, skip_serializing_if = "Option::is_none")]
+	pub discovery_type: Option<DiscoverProviderModelsParamsDiscoveryType>,
+	#[serde(rename = "timeoutMs", default, skip_serializing_if = "Option::is_none")]
+	pub timeout_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoverProviderModelsResult {
+	pub models: Vec<DiscoveredModel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetThinkingLevelParams {
 	pub level: ThinkingLevel,
 }
@@ -6155,6 +6197,36 @@ impl HostUriResultContentType {
 			Self::TextMarkdown => "text/markdown",
 			Self::ApplicationJson => "application/json",
 			Self::TextPlain => "text/plain",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DiscoverProviderModelsParamsDiscoveryType {
+	#[serde(rename = "ollama")]
+	Ollama,
+	#[serde(rename = "llama.cpp")]
+	LlamaCpp,
+	#[serde(rename = "lm-studio")]
+	LmStudio,
+	#[serde(rename = "openai-models-list")]
+	OpenaiModelsList,
+	#[serde(rename = "proxy")]
+	Proxy,
+	#[serde(rename = "litellm")]
+	Litellm,
+}
+
+impl DiscoverProviderModelsParamsDiscoveryType {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Ollama => "ollama",
+			Self::LlamaCpp => "llama.cpp",
+			Self::LmStudio => "lm-studio",
+			Self::OpenaiModelsList => "openai-models-list",
+			Self::Proxy => "proxy",
+			Self::Litellm => "litellm",
 		}
 	}
 }
@@ -6892,6 +6964,38 @@ impl Command for GetAvailableModelsCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<GetAvailableModelsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.models)
+	}
+}
+
+/// List the models an endpoint offers, for a provider being configured. Saves nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoverProviderModelsCommand {
+	pub api: String,
+	#[serde(rename = "baseUrl")]
+	pub base_url: String,
+	/// A saved provider whose credential authenticates the request when `apiKey` is absent.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "apiKey", default, skip_serializing_if = "Option::is_none")]
+	pub api_key: Option<String>,
+	#[serde(rename = "authHeader", default, skip_serializing_if = "Option::is_none")]
+	pub auth_header: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub headers: Option<BTreeMap<String, String>>,
+	/// The server's model-list protocol; `openai-models-list` by default.
+	#[serde(rename = "discoveryType", default, skip_serializing_if = "Option::is_none")]
+	pub discovery_type: Option<DiscoverProviderModelsParamsDiscoveryType>,
+	#[serde(rename = "timeoutMs", default, skip_serializing_if = "Option::is_none")]
+	pub timeout_ms: Option<i64>,
+}
+
+impl Command for DiscoverProviderModelsCommand {
+	const NAME: &'static str = "discover_provider_models";
+	const TIMEOUT_MS: Option<u64> = Some(30000);
+	type Output = Vec<DiscoveredModel>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<DiscoverProviderModelsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.models)
 	}
 }
 

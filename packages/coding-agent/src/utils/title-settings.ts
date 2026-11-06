@@ -75,7 +75,7 @@ export const cfgTitleRefreshAfterPrompts = register({
 		group: "Modes",
 		label: "Refresh Title After Prompts",
 		description:
-			"Every this many operator prompts, ask the judge model whether a generated session title still fits the conversation, and regenerate it if not",
+			"Counted in your prompts, not in time: every this many, ask the judge model whether a generated session title still fits the conversation, and regenerate it if not. 0 is off",
 		options: [
 			{ value: "0", label: "Off", description: "Default" },
 			{ value: "1", label: "Every prompt" },

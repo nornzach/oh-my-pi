@@ -10,6 +10,8 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
+import { setInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 let session: AgentSession | undefined;
@@ -293,6 +295,29 @@ describe("AgentSession title fork", () => {
 		expect(target.sessionName).toBe("🧪 FLAKY: Fix flaky park tests");
 		expect(side.calls).toHaveLength(2);
 		expect(titleModel).not.toHaveBeenCalled();
+	});
+
+	it("gives only the TUI a Nerd Fonts icon: an rpc-ui host draws the title in its own font", async () => {
+		vi.spyOn(titleGenerator, "nerdGlyphsActive").mockReturnValue(true);
+		const titledOn = async (interactive: boolean): Promise<string | undefined> => {
+			const previous = setInteractiveHost(interactive);
+			try {
+				const main = createMockModel({ responses: [{ content: ["Reading the park tests first."] }] });
+				const side = createMockModel({ handler: { content: [CARD_REPLY] } });
+				const target = await createSession(main, side, { "title.icons": "nf+emoji" });
+				const titled = nextTitle(target);
+				await target.prompt(FIRST_MESSAGE);
+				await titled;
+				return target.sessionName;
+			} finally {
+				setInteractiveHost(previous);
+			}
+		};
+
+		expect(await titledOn(false)).toBe("🧪 FLAKY: Fix flaky park tests");
+		const inTerminal = await titledOn(true);
+		expect(inTerminal).toEndWith(" FLAKY: Fix flaky park tests");
+		expect(inTerminal).not.toContain("🧪");
 	});
 
 	it("leaves sessions without autoTitle unnamed", async () => {

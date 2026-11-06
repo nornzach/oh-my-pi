@@ -205,6 +205,20 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_available_models"; forceRefresh?: boolean }
+	| {
+			id?: string;
+			type: "discover_provider_models";
+			/** A saved provider whose credential authenticates the request when `apiKey` is absent. */
+			provider?: string;
+			api: string;
+			baseUrl: string;
+			apiKey?: string;
+			authHeader?: boolean;
+			headers?: Record<string, string>;
+			/** The server's model-list protocol; `openai-models-list` by default. */
+			discoveryType?: "ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm";
+			timeoutMs?: number;
+	  }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
@@ -1373,6 +1387,19 @@ export interface RpcProviderInfo {
 	modelCount: number;
 }
 
+/** A model an endpoint offers, as `discover_provider_models` reports it. */
+export interface RpcDiscoveredModel {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	/** Accepted input modalities, e.g. `text`, `image`. */
+	input: string[];
+	/** Null when the server does not report a limit. */
+	contextWindow: number | null;
+	/** Null when the server does not report a limit. */
+	maxTokens: number | null;
+}
+
 export interface RpcProvidersResult {
 	providers: RpcProviderInfo[];
 	models: Model[];
@@ -2513,6 +2540,13 @@ export type RpcResponse =
 			command: "get_available_models";
 			success: true;
 			data: RpcAvailableModelsResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "discover_provider_models";
+			success: true;
+			data: { models: RpcDiscoveredModel[] };
 	  }
 
 	// Thinking

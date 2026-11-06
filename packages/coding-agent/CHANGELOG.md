@@ -4,6 +4,7 @@
 
 ### Added
 
+- RPC `discover_provider_models` lists the models an endpoint offers for a provider being configured, without saving anything ([gui#40](https://github.com/nornzach/oh-my-pi-gui/issues/40)).
 - RPC hosts can send a `/btw` answer's steering prompt to the main session with `btw_inject`: with `btw.inject` on, RPC side questions ask for the `<inject>` block, and `btw_record` frames and `get_btw_history` report whether it is `ready`, `sending` or `sent`
 - The RPC `terminal` tool drives shell sessions on this machine or over SSH (`open`, `exec`, `send`, `wait`): commands run one at a time in a terminal the user watches, keep their directory and environment, and stop at password, passphrase, and new-host prompts for the user to answer
 - RPC `get_model_roles` reports each candidate's role thinking levels and the role's selected model, and `set_model_role` accepts a thinking level ([nornzach/oh-my-pi-gui#34](https://github.com/nornzach/oh-my-pi-gui/issues/34))
@@ -22,6 +23,7 @@
 
 ### Fixed
 
+- `--mode rpc-ui` sessions now get generated titles, and every name change reaches the host through `session_info_update` ([gui#41](https://github.com/nornzach/oh-my-pi-gui/issues/41)).
 - Long bash output cut in the middle no longer splits a line at the `[…N ln elided…]` marker, and its "Showing lines …" notice now names the lines actually shown, ending at the output's real last line ([#17957](https://github.com/can1357/oh-my-pi/pull/17957) by [@H4vC](https://github.com/H4vC))
 - A bash command that prints nothing and succeeds now returns `(no output, exit code 0)` instead of a bare `(no output)`, so an empty diff or search no longer reads like a failed command ([#17957](https://github.com/can1357/oh-my-pi/pull/17957) by [@H4vC](https://github.com/H4vC))
 - Added `tui.motion` (`full` / `reduced` / `none`, also `--motion` and `PI_MOTION`), one switch over spinners, the thinking pulse, shimmer and the status-line blink/fade for many-pane or reduced-motion use; a `tui.spinnerInterval` you set still wins over the preset ([#14240](https://github.com/can1357/oh-my-pi/pull/14240) by [@mccraigmccraig](https://github.com/mccraigmccraig))

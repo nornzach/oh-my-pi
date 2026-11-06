@@ -48,6 +48,21 @@ import type { ProviderDiscovery } from "./models-config-schema";
 // "socket connection was closed unexpectedly").
 export const DISCOVERY_DEFAULT_CONTEXT_WINDOW = OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 export const DISCOVERY_DEFAULT_MAX_TOKENS = OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
+
+/**
+ * A discovered model's limits without the defaults discovery fills in when a
+ * server reports none, for showing or saving: those are guesses, and a model
+ * config that leaves them out gets the same default, or the catalog's real limit.
+ */
+export function reportedModelLimits(model: Pick<Model<Api>, "contextWindow" | "maxTokens">): {
+	contextWindow: number | null;
+	maxTokens: number | null;
+} {
+	return {
+		contextWindow: model.contextWindow === DISCOVERY_DEFAULT_CONTEXT_WINDOW ? null : (model.contextWindow ?? null),
+		maxTokens: model.maxTokens === DISCOVERY_DEFAULT_MAX_TOKENS ? null : (model.maxTokens ?? null),
+	};
+}
 const MAX_MODEL_DISCOVERY_PAGES = 100;
 
 /**

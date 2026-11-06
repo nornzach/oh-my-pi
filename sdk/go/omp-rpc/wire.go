@@ -2742,6 +2742,39 @@ func (v *ModelCycleResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+// A model an endpoint offers, as `discover_provider_models` reports it.
+type DiscoveredModel struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Reasoning bool   `json:"reasoning"`
+	// Accepted input modalities, e.g. `text`, `image`.
+	Input []string `json:"input"`
+	// Null when the server does not report a limit.
+	ContextWindow *int64 `json:"contextWindow"`
+	// Null when the server does not report a limit.
+	MaxTokens *int64 `json:"maxTokens"`
+}
+
+func (v *DiscoveredModel) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "DiscoveredModel", v.decodeFrom)
+}
+
+func (v *DiscoveredModel) decodeFrom(raw map[string]json.RawMessage) error {
+	var out DiscoveredModel
+	d := fieldDecoder{raw: raw, owner: "DiscoveredModel"}
+	d.required("id", &out.ID)
+	d.required("name", &out.Name)
+	d.required("reasoning", &out.Reasoning)
+	d.required("input", &out.Input)
+	d.nullable("contextWindow", &out.ContextWindow)
+	d.nullable("maxTokens", &out.MaxTokens)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type ThinkingLevelCycleResult struct {
 	Level Effort `json:"level"`
 }
@@ -7620,6 +7653,25 @@ func (v *GetAvailableModelsResult) decodeFrom(raw map[string]json.RawMessage) er
 	return nil
 }
 
+type DiscoverProviderModelsResult struct {
+	Models []DiscoveredModel `json:"models"`
+}
+
+func (v *DiscoverProviderModelsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "DiscoverProviderModelsResult", v.decodeFrom)
+}
+
+func (v *DiscoverProviderModelsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out DiscoverProviderModelsResult
+	d := fieldDecoder{raw: raw, owner: "DiscoverProviderModelsResult"}
+	d.required("models", &out.Models)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type GetAvailableThinkingLevelsResult struct {
 	Levels []ThinkingLevel `json:"levels"`
 }
@@ -8308,6 +8360,51 @@ func (c Commands) GetAvailableModels(ctx context.Context) ([]ModelInfo, error) {
 	var out GetAvailableModelsResult
 	err := c.call(ctx, "get_available_models", nil, 0, &out)
 	return out.Models, err
+}
+
+// DiscoverProviderModelsCommand holds the parameters of "discover_provider_models".
+type DiscoverProviderModelsCommand struct {
+	API     string `json:"api"`
+	BaseURL string `json:"baseUrl"`
+	// A saved provider whose credential authenticates the request when `apiKey` is absent.
+	Provider   *string           `json:"provider,omitempty"`
+	APIKey     *string           `json:"apiKey,omitempty"`
+	AuthHeader *bool             `json:"authHeader,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	// The server's model-list protocol; `openai-models-list` by default.
+	DiscoveryType *DiscoverProviderModelsCommandDiscoveryType `json:"discoveryType,omitempty"`
+	TimeoutMs     *int64                                      `json:"timeoutMs,omitempty"`
+}
+
+// DiscoverProviderModels sends "discover_provider_models": List the models an endpoint offers, for a provider being configured. Saves nothing.
+func (c Commands) DiscoverProviderModels(ctx context.Context, p DiscoverProviderModelsCommand) ([]DiscoveredModel, error) {
+	var out DiscoverProviderModelsResult
+	err := c.call(ctx, "discover_provider_models", p, 30*time.Second, &out)
+	return out.Models, err
+}
+
+type DiscoverProviderModelsCommandDiscoveryType string
+
+const (
+	DiscoverProviderModelsCommandDiscoveryTypeOllama           DiscoverProviderModelsCommandDiscoveryType = "ollama"
+	DiscoverProviderModelsCommandDiscoveryTypeLlamaCpp         DiscoverProviderModelsCommandDiscoveryType = "llama.cpp"
+	DiscoverProviderModelsCommandDiscoveryTypeLmStudio         DiscoverProviderModelsCommandDiscoveryType = "lm-studio"
+	DiscoverProviderModelsCommandDiscoveryTypeOpenaiModelsList DiscoverProviderModelsCommandDiscoveryType = "openai-models-list"
+	DiscoverProviderModelsCommandDiscoveryTypeProxy            DiscoverProviderModelsCommandDiscoveryType = "proxy"
+	DiscoverProviderModelsCommandDiscoveryTypeLitellm          DiscoverProviderModelsCommandDiscoveryType = "litellm"
+)
+
+func (v *DiscoverProviderModelsCommandDiscoveryType) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "DiscoverProviderModelsCommandDiscoveryType")
+	if err != nil {
+		return err
+	}
+	switch value := DiscoverProviderModelsCommandDiscoveryType(s); value {
+	case DiscoverProviderModelsCommandDiscoveryTypeOllama, DiscoverProviderModelsCommandDiscoveryTypeLlamaCpp, DiscoverProviderModelsCommandDiscoveryTypeLmStudio, DiscoverProviderModelsCommandDiscoveryTypeOpenaiModelsList, DiscoverProviderModelsCommandDiscoveryTypeProxy, DiscoverProviderModelsCommandDiscoveryTypeLitellm:
+		*v = value
+		return nil
+	}
+	return unknownValue("DiscoverProviderModelsCommandDiscoveryType", s)
 }
 
 // SetThinkingLevelCommand holds the parameters of "set_thinking_level".

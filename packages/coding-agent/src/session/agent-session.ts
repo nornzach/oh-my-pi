@@ -11816,10 +11816,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return cfgTitleGenerator.get(this.settings) === "fork" && this.#titleSystemPrompt === undefined;
 	}
 
-	/** The icons a new card may show: `title.icons`, an emoji where Nerd Fonts glyphs do not render, no card when boring. */
+	/**
+	 * The icons a new card may show: `title.icons`, an emoji where Nerd Fonts glyphs do not render, no card when
+	 * boring. Only the TUI's own terminal can have the font: an rpc-ui host draws the title in its own, whatever
+	 * symbol preset the shared config picked for the terminal.
+	 */
 	#cardIcons(): TitleIcons {
 		const icons = cfgTitleIcons.get(this.settings);
-		return icons === "nf+emoji" && !nerdGlyphsActive() ? "emoji" : icons;
+		return icons === "nf+emoji" && !(isInteractiveHost() && nerdGlyphsActive()) ? "emoji" : icons;
 	}
 
 	#fallBackFromTitleFork(input: TitleInput, signal: AbortSignal): void {

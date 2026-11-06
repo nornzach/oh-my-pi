@@ -2573,6 +2573,28 @@ export class ModelRegistry {
 		};
 	}
 
+	/**
+	 * The models an endpoint offers right now, for a provider being configured:
+	 * nothing is saved or merged into the catalog. A typed `apiKey` authenticates
+	 * the request. Without one, only `useSavedCredential` reaches for what is stored
+	 * under `config.provider`: an id typed into a new provider's form must never
+	 * send another provider's key to the URL typed next to it.
+	 */
+	async listEndpointModels(
+		config: DiscoveryProviderConfig,
+		auth: { apiKey?: string; useSavedCredential: boolean },
+	): Promise<Model<Api>[]> {
+		const typedKey = auth.apiKey && (await resolveConfigValue(auth.apiKey));
+		const ctx: DiscoveryContext = typedKey
+			? { fetch: this.#fetch, getBearerApiKeyResolver: async () => typedKey }
+			: auth.useSavedCredential
+				? this.#discoveryContext()
+				: this.#nonResolvingDiscoveryContext();
+		return withModelDiscoveryTimeout(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, () =>
+			discoverModelsByProviderType(config, ctx),
+		);
+	}
+
 	#nonResolvingDiscoveryContext(): DiscoveryContext {
 		return {
 			fetch: this.#fetch,

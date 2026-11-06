@@ -232,6 +232,29 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: { models: "ModelInfo[]" },
 		unwrap: "models",
 	},
+	{
+		name: "discover_provider_models",
+		doc: "List the models an endpoint offers, for a provider being configured. Saves nothing.",
+		params: {
+			"provider?": doc(
+				"string",
+				"A saved provider whose credential authenticates the request when `apiKey` is absent.",
+			),
+			api: "string",
+			baseUrl: "string",
+			"apiKey?": "string",
+			"authHeader?": "boolean",
+			"headers?": "Record<string, string>",
+			"discoveryType?": doc(
+				"'ollama' | 'llama.cpp' | 'lm-studio' | 'openai-models-list' | 'proxy' | 'litellm'",
+				"The server's model-list protocol; `openai-models-list` by default.",
+			),
+			"timeoutMs?": "number.integer",
+		},
+		result: { models: "DiscoveredModel[]" },
+		unwrap: "models",
+		timeoutMs: 30_000,
+	},
 	{ name: "set_thinking_level", doc: "Set the thinking level.", params: { level: "ThinkingLevel" } },
 	{
 		name: "cycle_thinking_level",

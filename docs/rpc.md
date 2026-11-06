@@ -167,6 +167,9 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_model", provider: string, modelId: string }`
 - `{ id?, type: "cycle_model" }`
 - `{ id?, type: "get_available_models" }`
+- `{ id?, type: "discover_provider_models", provider?: string, api: string, baseUrl: string, apiKey?: string, authHeader?: boolean, headers?: Record<string, string>, discoveryType?: "ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm", timeoutMs?: number }`
+
+`discover_provider_models` lists the models an endpoint offers, for a provider being configured, and saves nothing. It returns `{ models }`, where `contextWindow` and `maxTokens` are `null` unless the server reported them. A typed `apiKey` authenticates the request; without one, only a named `provider` uses that provider's saved credential.
 
 `get_available_models` waits for background model discovery before returning. `set_model` also waits when the requested model is not already in the available catalog; it returns the selected `Model` or a `Model not found: <provider>/<modelId>` failure.
 

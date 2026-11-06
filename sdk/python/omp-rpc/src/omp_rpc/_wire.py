@@ -739,6 +739,20 @@ class ModelCycleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class DiscoveredModel:
+    """A model an endpoint offers, as `discover_provider_models` reports it."""
+    id: str
+    name: str
+    reasoning: bool
+    input: tuple[str, ...]
+    """Accepted input modalities, e.g. `text`, `image`."""
+    context_window: int | None
+    """Null when the server does not report a limit."""
+    max_tokens: int | None
+    """Null when the server does not report a limit."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class ThinkingLevelCycleResult:
     level: Effort
 
@@ -2164,6 +2178,18 @@ def parse_model_cycle_result(value: object, path: str = "ModelCycleResult") -> M
         model=required(payload, "model", parse_model_info, path),
         is_scoped=required(payload, "isScoped", decode_bool, path),
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+    )
+
+
+def parse_discovered_model(value: object, path: str = "DiscoveredModel") -> DiscoveredModel:
+    payload = expect_object(value, path)
+    return DiscoveredModel(
+        id=required(payload, "id", decode_str, path),
+        name=required(payload, "name", decode_str, path),
+        reasoning=required(payload, "reasoning", decode_bool, path),
+        input=required(payload, "input", array(decode_str), path),
+        context_window=required(payload, "contextWindow", nullable(decode_int), path),
+        max_tokens=required(payload, "maxTokens", nullable(decode_int), path),
     )
 
 
@@ -3618,6 +3644,25 @@ class WireClient:
         params: dict[str, object] = {}
         return required(expect_object(self._command("get_available_models", params), "get_available_models"), "models", array(parse_model_info), "get_available_models")
 
+    def discover_provider_models(self, api: str, base_url: str, *, provider: str | None = None, api_key: str | None = None, auth_header: bool | None = None, headers: dict[str, str] | None = None, discovery_type: Literal["ollama", "llama.cpp", "lm-studio", "openai-models-list", "proxy", "litellm"] | None = None, timeout_ms: int | None = None) -> tuple[DiscoveredModel, ...]:
+        """List the models an endpoint offers, for a provider being configured. Saves nothing."""
+        params: dict[str, object] = {}
+        params["api"] = api
+        params["baseUrl"] = base_url
+        if provider is not None:
+            params["provider"] = provider
+        if api_key is not None:
+            params["apiKey"] = api_key
+        if auth_header is not None:
+            params["authHeader"] = auth_header
+        if headers is not None:
+            params["headers"] = headers
+        if discovery_type is not None:
+            params["discoveryType"] = discovery_type
+        if timeout_ms is not None:
+            params["timeoutMs"] = timeout_ms
+        return required(expect_object(self._command("discover_provider_models", params, timeout=30), "discover_provider_models"), "models", array(parse_discovered_model), "discover_provider_models")
+
     def set_thinking_level(self, level: ThinkingLevel) -> None:
         """Set the thinking level."""
         params: dict[str, object] = {}
@@ -4140,6 +4185,7 @@ __all__ = [
     "DictationEndEvent",
     "DictationStateEvent",
     "DictationTranscriptEvent",
+    "DiscoveredModel",
     "EditorUiRequest",
     "Effort",
     "ExtensionError",
@@ -4335,6 +4381,7 @@ __all__ = [
     "parse_dictation_end_event",
     "parse_dictation_state_event",
     "parse_dictation_transcript_event",
+    "parse_discovered_model",
     "parse_editor_ui_request",
     "parse_extension_error",
     "parse_extension_ui_request",

@@ -2058,12 +2058,7 @@ export async function runRootCommand(
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
 		}
-		if (
-			parsedArgs.noTitle ||
-			parsedArgs.mode === "rpc" ||
-			parsedArgs.mode === "rpc-ui" ||
-			parsedArgs.mode === "acp"
-		) {
+		if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "acp") {
 			Bun.env.PI_NO_TITLE = "1";
 		}
 
@@ -2432,7 +2427,8 @@ export async function runRootCommand(
 			options.allowSessionModelFallback = isInteractive;
 			options.settingsApproval = isInteractive;
 			options.tuiTranscript = isInteractive;
-			options.autoTitle = isInteractive;
+			// An rpc-ui host shows session titles, as the TUI does, and has no way to name a session itself.
+			options.autoTitle = isInteractive || mode === "rpc-ui";
 			options.settings = settingsInstance;
 			options.telemetry = startupTelemetry;
 			options.extensions = startupExtensions;

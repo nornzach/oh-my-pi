@@ -576,6 +576,19 @@ export interface ModelCycleResult {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/** A model an endpoint offers, as `discover_provider_models` reports it. */
+export interface DiscoveredModel {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	/** Accepted input modalities, e.g. `text`, `image`. */
+	input: string[];
+	/** Null when the server does not report a limit. */
+	contextWindow: number | null;
+	/** Null when the server does not report a limit. */
+	maxTokens: number | null;
+}
+
 export interface ThinkingLevelCycleResult {
 	level: Effort;
 }
@@ -1774,6 +1787,23 @@ export interface GetAvailableModelsResult {
 	models: ModelInfo[];
 }
 
+export interface DiscoverProviderModelsParams {
+	api: string;
+	baseUrl: string;
+	/** A saved provider whose credential authenticates the request when `apiKey` is absent. */
+	provider?: string;
+	apiKey?: string;
+	authHeader?: boolean;
+	headers?: Record<string, string>;
+	/** The server's model-list protocol; `openai-models-list` by default. */
+	discoveryType?: "ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm";
+	timeoutMs?: number;
+}
+
+export interface DiscoverProviderModelsResult {
+	models: DiscoveredModel[];
+}
+
 export interface SetThinkingLevelParams {
 	level: ThinkingLevel;
 }
@@ -1992,6 +2022,7 @@ export interface RpcWireCommands {
 	set_model: { params: SetModelParams; result: ModelInfo };
 	cycle_model: { params: undefined; result: ModelCycleResult | null };
 	get_available_models: { params: undefined; result: GetAvailableModelsResult };
+	discover_provider_models: { params: DiscoverProviderModelsParams; result: DiscoverProviderModelsResult };
 	set_thinking_level: { params: SetThinkingLevelParams; result: undefined };
 	cycle_thinking_level: { params: undefined; result: ThinkingLevelCycleResult | null };
 	get_available_thinking_levels: { params: undefined; result: GetAvailableThinkingLevelsResult };
