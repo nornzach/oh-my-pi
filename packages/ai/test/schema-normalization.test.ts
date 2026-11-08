@@ -193,7 +193,99 @@ describe("upgradeJsonSchemaTo202012", () => {
 // normalizeSchemaForGoogle
 // ---------------------------------------------------------------------------
 
+describe.each([
+	["normalizeSchemaForGoogle", normalizeSchemaForGoogle],
+	["normalizeSchemaForCCA", normalizeSchemaForCCA],
+] as const)("empty enum values on %s", (_name, normalize) => {
+	type Normalized = { properties: Record<string, Record<string, unknown>>; required?: string[] };
+
+	it("drops them so Gemini doesn't reject the request, and leaves a valid enum alone", () => {
+		const { properties } = normalize({
+			type: "object",
+			properties: {
+				kind: { type: "string", enum: ["", "cron", "once"] },
+				only: { type: "string", enum: [""] },
+				mode: { type: "string", enum: ["read", "write"] },
+				literal: { const: "" },
+				list: { type: "array", items: { type: "string", enum: ["", "a"] } },
+			},
+		}) as Normalized;
+
+		expect(properties.kind).toEqual({ type: "string", enum: ["cron", "once"] });
+		expect(properties.only).toEqual({ type: "string" });
+		expect(properties.mode).toEqual({ type: "string", enum: ["read", "write"] });
+		expect(properties.literal).not.toHaveProperty("enum");
+		expect(properties.list.items).toEqual({ type: "string", enum: ["a"] });
+	});
+
+	it("stops requiring a field that listed the empty value, so a model can decline to set it", () => {
+		const schema = normalize({
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["list", "update"] },
+				title: { type: "string" },
+				scheduleKind: { type: "string", enum: ["", "cron"] },
+				choice: { anyOf: [{ const: "" }, { const: "a" }] },
+			},
+			required: ["action", "title", "scheduleKind", "choice"],
+		}) as Normalized;
+
+		expect(schema.required).toEqual(["action", "title"]);
+	});
+
+	it("drops `required` entirely when no field is left in it", () => {
+		const schema = normalize({
+			type: "object",
+			properties: { kind: { type: "string", enum: ["", "cron"] } },
+			required: ["kind"],
+		}) as Normalized;
+
+		expect(schema).not.toHaveProperty("required");
+	});
+});
+
+describe("empty enum values outside Google", () => {
+	const input = {
+		type: "object",
+		properties: { kind: { type: "string", enum: ["", "cron"] } },
+		required: ["kind"],
+		additionalProperties: false,
+	};
+
+	it("stay offered and required under OpenAI strict mode, which accepts them", () => {
+		const { schema, strict } = tryEnforceStrictSchema(input);
+
+		expect(strict).toBe(true);
+		expect(schema).toMatchObject({ properties: { kind: { enum: ["", "cron"] } }, required: ["kind"] });
+	});
+
+	it("stay offered and required for MCP", () => {
+		expect(normalizeSchemaForMCP(input)).toMatchObject({
+			properties: { kind: { enum: ["", "cron"] } },
+			required: ["kind"],
+		});
+	});
+});
+
 describe("normalizeSchemaForGoogle", () => {
+	it("removes a `not` that names an empty value instead of sending it to Gemini", () => {
+		const { properties } = normalizeSchemaForGoogle({
+			type: "object",
+			properties: { name: { type: "string", not: { enum: [""] } } },
+		}) as { properties: Record<string, unknown> };
+
+		expect(properties.name).toEqual({ type: "string" });
+	});
+
+	it("keeps an empty enum value that is only an example payload", () => {
+		const { properties } = normalizeSchemaForGoogle({
+			type: "object",
+			properties: { filter: { type: "object", default: { enum: [""] } } },
+		}) as { properties: Record<string, { default?: unknown }> };
+
+		expect(properties.filter.default).toEqual({ enum: [""] });
+	});
+
 	it("preserves string enums and removes enums Google cannot represent", () => {
 		const sanitized = normalizeSchemaForGoogle({
 			type: "object",

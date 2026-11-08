@@ -60,6 +60,8 @@ export interface NormalizeSchemaOptions {
 	foldOneOfIntoAnyOf: boolean;
 	dropNonScalarEnum: boolean;
 	stringEnumsOnly?: boolean;
+	/** Target rejects a request over any `""` in an enum; see {@link dropEmptyEnumValues}. */
+	dropEmptyEnumValues?: boolean;
 	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
 	validateAndFallback?: { fallback: unknown };
 }
@@ -179,11 +181,11 @@ function hasUnrepresentableGoogleEnumConstraint(
 
 	if (
 		Array.isArray(value.enum) &&
-		(value.enum.length === 0 || value.enum.some(enumValue => typeof enumValue !== "string"))
+		(value.enum.length === 0 || value.enum.some(enumValue => typeof enumValue !== "string" || enumValue === ""))
 	) {
 		return true;
 	}
-	if (Object.hasOwn(value, "const") && typeof value.const !== "string") return true;
+	if (Object.hasOwn(value, "const") && (typeof value.const !== "string" || value.const === "")) return true;
 
 	for (const key in value) {
 		if (!Object.hasOwn(value, key)) continue;
@@ -629,6 +631,54 @@ function dropNonStringEnumForGoogle(schema: JsonObject): JsonObject {
 	if (!Array.isArray(schema.enum)) return schema;
 	const isStringEnum = schema.enum.length > 0 && schema.enum.every(value => typeof value === "string");
 	return isStringEnum ? schema : copySchemaWithout(schema, "enum");
+}
+
+/** Whether a schema lists `""` as an allowed value, directly or in a union branch. */
+export function schemaListsEmptyEnumValue(schema: unknown): boolean {
+	if (!isJsonObject(schema)) return false;
+	if (schema.const === "") return true;
+	if (Array.isArray(schema.enum) && schema.enum.includes("")) return true;
+	return JSON_SCHEMA_COMBINERS.some(combiner => {
+		const branches = schema[combiner];
+		return Array.isArray(branches) && branches.some(branch => schemaListsEmptyEnumValue(branch));
+	});
+}
+
+/**
+ * Gemini fails a whole request over one empty enum value (`enum[0]: cannot be empty`), so remove them, and any enum left
+ * with nothing. A property that listed `""` also stops being required: `""` was how a model said "no value", and a
+ * field it still had to fill would force a real choice, such as overwriting a setting it meant to keep.
+ * `validateToolArguments` restores the `""` when the model leaves the field out.
+ */
+function dropEmptyEnumValues(node: unknown, insideSchemaMap = false): unknown {
+	if (Array.isArray(node)) return node.map(entry => dropEmptyEnumValues(entry));
+	if (!isJsonObject(node)) return node;
+
+	const result: JsonObject = {};
+	for (const key in node) {
+		if (!Object.hasOwn(node, key)) continue;
+		const childKind = classifySchemaChild(key, node[key], insideSchemaMap);
+		result[key] = childKind ? dropEmptyEnumValues(node[key], childKind === "map") : node[key];
+	}
+	if (insideSchemaMap) return result;
+
+	if (Array.isArray(result.enum) && result.enum.includes("")) {
+		const kept = result.enum.filter(value => value !== "");
+		if (kept.length > 0) result.enum = kept;
+		else delete result.enum;
+	}
+
+	const { properties } = node;
+	if (Array.isArray(result.required) && isJsonObject(properties)) {
+		const stillRequired = result.required.filter(
+			name => typeof name !== "string" || !schemaListsEmptyEnumValue(properties[name]),
+		);
+		if (stillRequired.length < result.required.length) {
+			if (stillRequired.length > 0) result.required = stillRequired;
+			else delete result.required;
+		}
+	}
+	return result;
 }
 
 /** Copy all keys from a schema except the specified combiner key. */
@@ -1283,6 +1333,9 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	if (options.extractNullableFromUnions) {
 		normalized = normalizeNullablePropertiesForCloudCodeAssist(normalized).schema;
 	}
+	if (options.dropEmptyEnumValues) {
+		normalized = dropEmptyEnumValues(normalized);
+	}
 	const residualChecks = createResidualIncompatibilityChecks(options.rejectResidualIncompatibilities);
 	if (residualChecks && hasResidualSchemaIncompatibilities(normalized, residualChecks)) {
 		logger.debug("Schema has residual provider incompatibilities, using fallback");
@@ -1314,6 +1367,7 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 		inferTypeForBareEnum: true,
 		dropNonScalarEnum: false,
 		stringEnumsOnly: true,
+		dropEmptyEnumValues: true,
 		foldOneOfIntoAnyOf: false,
 	});
 }
@@ -1336,6 +1390,7 @@ export function normalizeSchemaForCCA(value: unknown): unknown {
 		extractNullableFromUnions: true,
 		inferTypeForBareEnum: true,
 		dropNonScalarEnum: false,
+		dropEmptyEnumValues: true,
 		foldOneOfIntoAnyOf: false,
 		rejectResidualIncompatibilities: ["type-array", "type-null", "nullable", "combiners", "not"],
 		validateAndFallback: { fallback: CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA },

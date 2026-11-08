@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gemini rejecting every request in a session with `enum[0]: cannot be empty` when any tool offered an empty string as a choice ([#46](https://github.com/nornzach/oh-my-pi-gui/issues/46))
+
 ## [18.17.0] - 2026-11-06
 
 ### Added

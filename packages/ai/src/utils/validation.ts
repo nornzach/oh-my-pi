@@ -23,6 +23,7 @@ import {
 	type JsonSchemaValidationIssue,
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
+import { schemaListsEmptyEnumValue } from "./schema/normalize";
 import { stamp } from "./schema/stamps";
 import { arkToWireSchema, isArkSchema } from "./schema/wire";
 import { boundRawToolArguments } from "./tool-call-arguments";
@@ -822,7 +823,19 @@ function normalizeOptionalNullsForSchema(
 	let nextValue = value as Record<string, unknown>;
 
 	for (const [key, propertySchema] of Object.entries(properties)) {
-		if (!(key in nextValue)) continue;
+		if (!(key in nextValue)) {
+			// Google's request schemas can't offer an empty enum value, so there a
+			// model says "no value" by leaving the field out. Fill in the value
+			// the tool's own schema lists for that, rather than rejecting the call.
+			if (required.has(key) && listsEmptyEnumValue(propertySchema, root)) {
+				if (!changed) {
+					nextValue = { ...nextValue };
+					changed = true;
+				}
+				nextValue[key] = "";
+			}
+			continue;
+		}
 		const currentValue = nextValue[key];
 		const isNullish =
 			currentValue === null ||
@@ -902,6 +915,11 @@ function normalizeOptionalNullsForSchema(
 	}
 
 	return { value: changed ? nextValue : value, changed };
+}
+
+function listsEmptyEnumValue(propertySchema: unknown, root: unknown): boolean {
+	const ref = isRecord(propertySchema) ? propertySchema.$ref : undefined;
+	return schemaListsEmptyEnumValue(typeof ref === "string" ? resolveLocalJsonSchemaRef(root, ref) : propertySchema);
 }
 
 function resolveLocalJsonSchemaRef(root: unknown, ref: string): unknown | undefined {

@@ -2523,6 +2523,60 @@ describe("Tool argument coercion", () => {
 	});
 });
 
+describe("required fields that list an empty value", () => {
+	const tool: Tool = {
+		name: "manage",
+		description: "",
+		parameters: {
+			type: "object",
+			$defs: { kind: { type: "string", enum: ["", "cron"] } },
+			properties: {
+				title: { type: "string" },
+				depth: { type: "string", enum: ["", "check"] },
+				kind: { $ref: "#/$defs/kind" },
+				choice: { anyOf: [{ const: "" }, { type: "number" }] },
+				mode: { type: "string", enum: ["read", "write"] },
+				note: { type: "string", enum: ["", "x"] },
+			},
+			required: ["title", "depth", "kind", "choice"],
+			additionalProperties: false,
+		},
+	} as unknown as Tool;
+	const call = (args: Record<string, unknown>): ToolCall => ({
+		type: "toolCall",
+		id: "1",
+		name: "manage",
+		arguments: args,
+	});
+
+	it("treats leaving one out as choosing the empty value, as a Gemini model must", () => {
+		expect(validateToolArguments(tool, call({ title: "t" }))).toEqual({
+			title: "t",
+			depth: "",
+			kind: "",
+			choice: "",
+		});
+	});
+
+	it("keeps a value the model did send", () => {
+		const args = { title: "t", depth: "check", kind: "cron", choice: 3 };
+		expect(validateToolArguments(tool, call(args))).toEqual(args);
+	});
+
+	it("still rejects a required field with no empty choice", () => {
+		const strict: Tool = {
+			...tool,
+			parameters: {
+				type: "object",
+				properties: { mode: { type: "string", enum: ["read", "write"] } },
+				required: ["mode"],
+			},
+		} as unknown as Tool;
+
+		expect(() => validateToolArguments(strict, call({}))).toThrow(/mode: is required/);
+	});
+});
+
 describe("In-band arg spill healing", () => {
 	const todoTool: Tool = {
 		name: "todo",
