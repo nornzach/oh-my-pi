@@ -474,8 +474,16 @@ describe("applyRpcMarketplaceAction", () => {
 						license: "MIT",
 						category: "productivity",
 						tags: ["search", "web"],
+						displayName: "Rich Plugin",
+						strict: false,
+						skills: ["./skills/search"],
+						lspServers: { clangd: { command: "clangd" } },
 					},
 					{ name: "bare-plugin", source: "./plugins/bare-plugin" },
+					{
+						name: "remote-plugin",
+						source: { source: "url", url: "https://github.com/example/remote.git", sha: "abc123" },
+					},
 				],
 			}),
 		);
@@ -500,10 +508,16 @@ describe("applyRpcMarketplaceAction", () => {
 			category: "productivity",
 			tags: ["search", "web"],
 			installed: false,
+			displayName: "Rich Plugin",
+			source: "./plugins/rich-plugin",
+			components: { skills: ["./skills/search"], lspServers: { clangd: { command: "clangd" } } },
 		});
 		// Negative contract: a metadata-free catalog entry must not leak partial fields.
 		const bare = result.plugins?.find(plugin => plugin.name === "bare-plugin");
-		expect(bare).toEqual({ name: "bare-plugin", installed: false });
+		expect(bare).toEqual({ name: "bare-plugin", installed: false, source: "./plugins/bare-plugin" });
+		// The GUI locates a plugin's repository and logo from a typed source, so it must arrive intact.
+		const remote = result.plugins?.find(plugin => plugin.name === "remote-plugin");
+		expect(remote?.source).toEqual({ source: "url", url: "https://github.com/example/remote.git", sha: "abc123" });
 	});
 
 	it("reports activation: executable vs resource-only installs and toggles", async () => {

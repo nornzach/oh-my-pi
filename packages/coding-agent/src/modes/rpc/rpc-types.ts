@@ -1765,6 +1765,24 @@ export interface RpcMcpReauthCancelResult {
 	cancelled: boolean;
 }
 
+/** Where a catalog plugin's files come from, as the catalog declares it. A string is a path inside the marketplace. */
+export type RpcMarketplacePluginSource =
+	| string
+	| { source: "github"; repo: string; ref?: string; sha?: string }
+	| { source: "url"; url: string; ref?: string; sha?: string }
+	| { source: "git-subdir"; url: string; path: string; ref?: string; sha?: string }
+	| { source: "npm"; package: string; version?: string; registry?: string };
+
+/** Components a catalog entry declares itself, in the catalog's own shape. The plugin's files can add more. */
+export interface RpcMarketplacePluginComponents {
+	commands?: unknown;
+	agents?: unknown;
+	skills?: unknown;
+	hooks?: unknown;
+	mcpServers?: unknown;
+	lspServers?: unknown;
+}
+
 /** One catalog entry from a marketplace, with its local install state. */
 export interface RpcMarketplacePluginInfo {
 	name: string;
@@ -1772,12 +1790,15 @@ export interface RpcMarketplacePluginInfo {
 	version?: string;
 	installed: boolean;
 	/** Catalog metadata; each field is absent when the catalog entry omits it. */
+	displayName?: string;
 	author?: string;
 	license?: string;
 	repository?: string;
 	homepage?: string;
 	category?: string;
 	tags?: string[];
+	source?: RpcMarketplacePluginSource;
+	components?: RpcMarketplacePluginComponents;
 }
 
 /**

@@ -14,9 +14,24 @@ import { classifySource } from "../../extensibility/plugins/marketplace";
 import type { PluginManifest } from "../../extensibility/plugins/types";
 import type { AgentSession } from "../../session/agent-session";
 import { createDomainMarketplaceManager } from "./rpc-domains";
-import type { RpcMarketplaceActionResult, RpcMarketplacePluginInfo, RpcPluginActivation } from "./rpc-types";
+import type {
+	RpcMarketplaceActionResult,
+	RpcMarketplacePluginComponents,
+	RpcMarketplacePluginInfo,
+	RpcPluginActivation,
+} from "./rpc-types";
 
 export type RpcMarketplaceAction = "add" | "remove" | "update" | "install" | "uninstall" | "upgrade" | "list_available";
+
+const CATALOG_COMPONENT_KEYS = ["commands", "agents", "skills", "hooks", "mcpServers", "lspServers"] as const;
+
+/** Components the entry declares. The catalog parser keeps fields it doesn't model, such as `skills`, so read them from the raw entry. */
+function catalogComponents(entry: object): RpcMarketplacePluginComponents | undefined {
+	const raw = entry as Record<string, unknown>;
+	const declared = CATALOG_COMPONENT_KEYS.filter(key => raw[key] !== undefined);
+	if (declared.length === 0) return undefined;
+	return Object.fromEntries(declared.map(key => [key, raw[key]]));
+}
 
 /**
  * Compose the canonical `name@marketplace` plugin id the manager mutations
@@ -170,17 +185,22 @@ export async function applyRpcMarketplaceAction(
 				for (const entry of marketplaces) {
 					if (command.marketplace && entry.name !== command.marketplace) continue;
 					for (const plugin of await manager.listAvailablePlugins(entry.name)) {
+						const displayName = (plugin as { displayName?: unknown }).displayName;
+						const components = catalogComponents(plugin);
 						plugins.push({
 							name: plugin.name,
 							...(plugin.description !== undefined ? { description: plugin.description } : {}),
 							...(plugin.version !== undefined ? { version: plugin.version } : {}),
 							installed: installedIds.has(`${plugin.name}@${entry.name}`),
+							...(typeof displayName === "string" && displayName ? { displayName } : {}),
 							...(plugin.author?.name ? { author: plugin.author.name } : {}),
 							...(plugin.license !== undefined ? { license: plugin.license } : {}),
 							...(plugin.repository !== undefined ? { repository: plugin.repository } : {}),
 							...(plugin.homepage !== undefined ? { homepage: plugin.homepage } : {}),
 							...(plugin.category !== undefined ? { category: plugin.category } : {}),
 							...(plugin.tags !== undefined && plugin.tags.length > 0 ? { tags: plugin.tags } : {}),
+							source: plugin.source,
+							...(components ? { components } : {}),
 						});
 					}
 				}
