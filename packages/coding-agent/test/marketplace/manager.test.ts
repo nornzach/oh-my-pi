@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
@@ -1511,6 +1511,83 @@ describe("MarketplaceManager", () => {
 			const content = await Bun.file(catalogPath).text();
 			const catalog = JSON.parse(content) as { plugins: Array<{ version?: string }> };
 			expect(catalog.plugins[0].version).toBe("1.0.0");
+		});
+
+		describe("while a catalog is downloading", () => {
+			const REMOTE = "https://catalogs.example.test/remote/marketplace.json";
+			const remoteCatalog = JSON.stringify({
+				name: "remote-catalog",
+				owner: { name: "Test" },
+				plugins: [],
+			});
+			let fetchSpy: Mock<typeof fetch> | undefined;
+
+			/** The next downloads wait until `open()`; `calls()` counts how many started. */
+			function gateDownloads() {
+				const gate = Promise.withResolvers<void>();
+				let calls = 0;
+				fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+					calls++;
+					await gate.promise;
+					return new Response(remoteCatalog);
+				}) as unknown as typeof fetch);
+				return { open: () => gate.resolve(), calls: () => calls };
+			}
+
+			const registeredNames = async () =>
+				(await readMarketplacesRegistry(path.join(ctx.tmpDir, "marketplaces.json"))).marketplaces
+					.map(m => m.name)
+					.sort();
+
+			afterEach(() => fetchSpy?.mockRestore());
+
+			async function addRemoteThenGate() {
+				const first = gateDownloads();
+				first.open();
+				await ctx.manager.addMarketplace(REMOTE);
+				fetchSpy?.mockRestore();
+				return gateDownloads();
+			}
+
+			it("keeps a catalog another process adds meanwhile", async () => {
+				const gate = await addRemoteThenGate();
+				const update = ctx.manager.updateMarketplace("remote-catalog");
+				while (gate.calls() === 0) await Bun.sleep(1);
+
+				await createOutsideProjectManager(ctx.tmpDir).addMarketplace(mktDir);
+				gate.open();
+				await update;
+
+				expect(await registeredNames()).toEqual(["remote-catalog", "test-marketplace"]);
+			});
+
+			it("does not bring back a catalog another process removes meanwhile", async () => {
+				const gate = await addRemoteThenGate();
+				const update = ctx.manager.updateMarketplace("remote-catalog");
+				while (gate.calls() === 0) await Bun.sleep(1);
+
+				await createOutsideProjectManager(ctx.tmpDir).removeMarketplace("remote-catalog");
+				gate.open();
+
+				await expect(update).rejects.toThrow('Marketplace "remote-catalog" not found');
+				expect(await registeredNames()).toEqual([]);
+			});
+
+			it("downloads stale catalogs once when two processes start together", async () => {
+				const gate = await addRemoteThenGate();
+				setMarketplaceUpdatedAt(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString());
+
+				const first = ctx.manager.refreshStaleMarketplaces();
+				while (gate.calls() === 0) await Bun.sleep(1);
+				await createOutsideProjectManager(ctx.tmpDir).refreshStaleMarketplaces();
+				expect(gate.calls()).toBe(1);
+
+				gate.open();
+				await first;
+
+				const [entry] = (await readMarketplacesRegistry(path.join(ctx.tmpDir, "marketplaces.json"))).marketplaces;
+				expect(Date.now() - Date.parse(entry.updatedAt)).toBeLessThan(60_000);
+			});
 		});
 
 		it("upgradePluginAcrossScopes upgrades in all scopes, returns both entries", async () => {

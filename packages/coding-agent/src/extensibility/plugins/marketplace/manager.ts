@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { tryAcquireFileLock, withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { expandTilde } from "../../../tools/path-utils";
 import { linkPluginDirectory } from "../directory-link";
 import { normalizePluginRuntimeConfig, writePluginRuntimeConfig } from "../runtime-config";
@@ -48,6 +49,7 @@ import type {
 	MarketplaceCatalog,
 	MarketplacePluginEntry,
 	MarketplaceRegistryEntry,
+	MarketplacesRegistry,
 } from "./types";
 import { buildPluginId, nameSegmentCollisionKey, parsePluginId } from "./types";
 
@@ -133,66 +135,78 @@ export class MarketplaceManager {
 
 	// ── Marketplace lifecycle ─────────────────────────────────────────────────
 
-	async addMarketplace(source: string): Promise<MarketplaceRegistryEntry> {
-		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
+	/**
+	 * Run `fn` on the registry as it is now, under a lock shared with other omp processes. A catalog
+	 * clone takes seconds, and writing back a copy read before it would undo whatever they did in
+	 * that time: a catalog added meanwhile would vanish, and one removed meanwhile would return.
+	 */
+	async #withMarketplacesRegistry<T>(fn: (reg: MarketplacesRegistry) => Promise<T>): Promise<T> {
+		const registryPath = this.#opts.marketplacesRegistryPath;
+		await fs.mkdir(path.dirname(registryPath), { recursive: true });
+		return withFileLock(registryPath, async () => fn(await readMarketplacesRegistry(registryPath)));
+	}
 
+	async addMarketplace(source: string): Promise<MarketplaceRegistryEntry> {
 		const { catalog, clonePath } = await fetchMarketplace(source, this.#opts.marketplacesCacheDir);
 
-		const catalogKey = nameSegmentCollisionKey(catalog.name);
-		const existingName = reg.marketplaces.find(m => nameSegmentCollisionKey(m.name) === catalogKey)?.name;
-		if (existingName) {
+		return this.#withMarketplacesRegistry(async reg => {
+			const catalogKey = nameSegmentCollisionKey(catalog.name);
+			const existingName = reg.marketplaces.find(m => nameSegmentCollisionKey(m.name) === catalogKey)?.name;
+			if (existingName) {
+				if (clonePath) {
+					await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
+				}
+				if (existingName === catalog.name) {
+					throw new Error(`Marketplace "${catalog.name}" already exists`);
+				}
+				throw new Error(
+					`Marketplace "${catalog.name}" conflicts with existing marketplace "${existingName}" on case-insensitive filesystems`,
+				);
+			}
+
+			// Promote the temp clone to its final cache location now that we know it's not a duplicate.
 			if (clonePath) {
-				await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
+				await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
 			}
-			if (existingName === catalog.name) {
-				throw new Error(`Marketplace "${catalog.name}" already exists`);
-			}
-			throw new Error(
-				`Marketplace "${catalog.name}" conflicts with existing marketplace "${existingName}" on case-insensitive filesystems`,
+
+			const sourceType = classifySource(source);
+			const normalizedSource = sourceType === "local" ? path.resolve(expandTilde(source)) : source;
+
+			const catalogPath = path.resolve(
+				expandTilde(path.join(this.#opts.marketplacesCacheDir, catalog.name, "marketplace.json")),
 			);
-		}
 
-		// Promote the temp clone to its final cache location now that we know it's not a duplicate.
-		if (clonePath) {
-			await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
-		}
+			// Persist the fetched catalog so subsequent reads don't require re-fetching.
+			await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
 
-		const sourceType = classifySource(source);
-		const normalizedSource = sourceType === "local" ? path.resolve(expandTilde(source)) : source;
+			const now = new Date().toISOString();
+			const entry: MarketplaceRegistryEntry = {
+				name: catalog.name,
+				sourceType,
+				sourceUri: normalizedSource,
+				catalogPath,
+				addedAt: now,
+				updatedAt: now,
+			};
 
-		const catalogPath = path.resolve(
-			expandTilde(path.join(this.#opts.marketplacesCacheDir, catalog.name, "marketplace.json")),
-		);
+			const updated = addMarketplaceEntry(reg, entry);
+			await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updated);
 
-		// Persist the fetched catalog so subsequent reads don't require re-fetching.
-		await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
-
-		const now = new Date().toISOString();
-		const entry: MarketplaceRegistryEntry = {
-			name: catalog.name,
-			sourceType,
-			sourceUri: normalizedSource,
-			catalogPath,
-			addedAt: now,
-			updatedAt: now,
-		};
-
-		const updated = addMarketplaceEntry(reg, entry);
-		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updated);
-
-		logger.debug("Marketplace added", { name: catalog.name, sourceType });
-		return entry;
+			logger.debug("Marketplace added", { name: catalog.name, sourceType });
+			return entry;
+		});
 	}
 
 	async removeMarketplace(name: string): Promise<void> {
-		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
-		// removeMarketplaceEntry throws if not found — propagate to caller.
-		const updated = removeMarketplaceEntry(reg, name);
-		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updated);
+		await this.#withMarketplacesRegistry(async reg => {
+			// removeMarketplaceEntry throws if not found — propagate to caller.
+			const updated = removeMarketplaceEntry(reg, name);
+			await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updated);
 
-		await fs.rm(path.join(this.#opts.marketplacesCacheDir, name), {
-			recursive: true,
-			force: true,
+			await fs.rm(path.join(this.#opts.marketplacesCacheDir, name), {
+				recursive: true,
+				force: true,
+			});
 		});
 
 		logger.debug("Marketplace removed", { name });
@@ -219,29 +233,40 @@ export class MarketplaceManager {
 			);
 		}
 
-		// Promote the temp clone to its final cache location now that drift check passed.
-		if (clonePath) {
-			await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
-		}
+		return this.#withMarketplacesRegistry(async current => {
+			const entry = getMarketplaceEntry(current, name);
+			if (!entry) {
+				// Removed while downloading: promoting the clone would bring its cache back.
+				if (clonePath) {
+					await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
+				}
+				throw new Error(`Marketplace "${name}" not found`);
+			}
 
-		// Overwrite the cached catalog and migrate legacy home-relative registry entries.
-		const catalogPath = path.resolve(expandTilde(existing.catalogPath));
-		await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+			// Promote the temp clone to its final cache location now that drift check passed.
+			if (clonePath) {
+				await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
+			}
 
-		const updatedEntry: MarketplaceRegistryEntry = {
-			...existing,
-			catalogPath,
-			updatedAt: new Date().toISOString(),
-		};
+			// Overwrite the cached catalog and migrate legacy home-relative registry entries.
+			const catalogPath = path.resolve(expandTilde(entry.catalogPath));
+			await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
 
-		const updatedReg = {
-			...reg,
-			marketplaces: reg.marketplaces.map(m => (m.name === name ? updatedEntry : m)),
-		};
-		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updatedReg);
+			const updatedEntry: MarketplaceRegistryEntry = {
+				...entry,
+				catalogPath,
+				updatedAt: new Date().toISOString(),
+			};
 
-		logger.debug("Marketplace updated", { name });
-		return updatedEntry;
+			const updatedReg = {
+				...current,
+				marketplaces: current.marketplaces.map(m => (m.name === name ? updatedEntry : m)),
+			};
+			await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updatedReg);
+
+			logger.debug("Marketplace updated", { name });
+			return updatedEntry;
+		});
 	}
 
 	async updateAllMarketplaces(): Promise<MarketplaceRegistryEntry[]> {
@@ -788,16 +813,29 @@ export class MarketplaceManager {
 	// Per-marketplace failures are silently swallowed — offline is fine.
 	async refreshStaleMarketplaces(): Promise<void> {
 		await pruneAbandonedMarketplaceClones(this.#opts.marketplacesCacheDir);
-		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
+		const registryPath = this.#opts.marketplacesRegistryPath;
+		const reg = await readMarketplacesRegistry(registryPath);
 		const staleMs = 24 * 60 * 60 * 1000;
-		for (const entry of reg.marketplaces) {
-			if (Date.now() - Date.parse(entry.updatedAt) >= staleMs) {
-				try {
-					await this.updateMarketplace(entry.name);
-				} catch {
-					// Network or parse failure — leave stale, try next time.
+		const isStale = (entry: MarketplaceRegistryEntry) => Date.now() - Date.parse(entry.updatedAt) >= staleMs;
+		if (!reg.marketplaces.some(isStale)) return;
+
+		// Every omp process runs this on startup, and sessions often open together. One at a
+		// time is enough: the others would only download the same catalogs again.
+		const lease = tryAcquireFileLock(`${registryPath}.refresh`);
+		if (!lease) return;
+		try {
+			// Read again now that it's ours: whoever held the lease may have just finished.
+			for (const entry of (await readMarketplacesRegistry(registryPath)).marketplaces) {
+				if (isStale(entry)) {
+					try {
+						await this.updateMarketplace(entry.name);
+					} catch {
+						// Network or parse failure — leave stale, try next time.
+					}
 				}
 			}
+		} finally {
+			lease.release();
 		}
 	}
 
