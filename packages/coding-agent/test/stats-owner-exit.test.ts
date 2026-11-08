@@ -23,9 +23,13 @@ describe("omp stats with an owner", () => {
 	});
 
 	/** Runs the real dashboard command on a private home until it reports its address. */
-	async function startDashboard(env: Record<string, string>): Promise<Bun.Subprocess<"ignore", "pipe", "ignore">> {
+	async function startDashboard(
+		env: Record<string, string>,
+		port = 0,
+	): Promise<Bun.Subprocess<"ignore", "pipe", "ignore">> {
 		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stats-owner-"));
-		const server = Bun.spawn([process.execPath, CLI, "stats", "--host", "127.0.0.1", "--port", "0", "--no-open"], {
+		const args = ["stats", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
+		const server = Bun.spawn([process.execPath, CLI, ...args], {
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "ignore",
@@ -71,6 +75,26 @@ describe("omp stats with an owner", () => {
 
 		const exited = await Promise.race([server.exited.then(() => true), Bun.sleep(10_000).then(() => false)]);
 		expect(exited).toBe(true);
+	}, 60_000);
+
+	// The GUI always asks for the same port, so a dashboard started by hand gets
+	// reused. With no server of its own this process used to die, and the GUI kept
+	// restarting it.
+	it("stays up beside a dashboard it reuses, and exits non-zero once that one is gone", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+		const port = probe.port as number;
+		probe.stop(true);
+		const original = await startDashboard({}, port);
+		const reuser = await startDashboard({}, port);
+
+		await Bun.sleep(LINGER_MS);
+		expect(isAlive(reuser.pid)).toBe(true);
+
+		original.kill("SIGKILL");
+		await original.exited;
+
+		const code = await Promise.race([reuser.exited, Bun.sleep(15_000).then(() => "still running")]);
+		expect(code).toBe(1);
 	}, 60_000);
 
 	it.each([

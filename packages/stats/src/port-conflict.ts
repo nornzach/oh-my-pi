@@ -75,6 +75,11 @@ async function probeStatsDashboard(port: number, hostname: string): Promise<Stat
 	}
 }
 
+/** True while something still answers on a dashboard's port, even if it is too busy to answer in time. */
+export async function isStatsDashboardAlive(port: number, hostname: string): Promise<boolean> {
+	return (await probeStatsDashboard(port, hostname)) !== "unreachable";
+}
+
 async function findLinuxPortHolder(port: number): Promise<PortHolder | null> {
 	const socketInodes = new Set<string>();
 	for (const tablePath of ["/proc/net/tcp", "/proc/net/tcp6"]) {

@@ -20,6 +20,7 @@
 - Fixed plugin catalogs being lost or coming back when added or removed during a background catalog refresh
 - Fixed every omp session downloading stale plugin catalogs at the same time
 - An `omp stats` dashboard started by the GUI no longer keeps running after the app crashes or is force-quit
+- `omp stats --no-open` no longer exits at once when another dashboard already holds the port; it stays until that dashboard stops
 - `--mode rpc-ui` sessions now get generated titles, and every name change reaches the host through `session_info_update` ([gui#41](https://github.com/nornzach/oh-my-pi-gui/issues/41)).
 - Added `skills.manualSkills` glob patterns to keep skills available manually while hiding them from the model catalog, without editing their `SKILL.md` files ([#18114](https://github.com/can1357/oh-my-pi/pull/18114) by [@Shadorain](https://github.com/Shadorain))
 - Added Keenable as a web search engine (`web/keenable`). It uses `KEENABLE_API_KEY` or a stored `keenable` credential when present; an explicit selection without a key uses Keenable's keyless public endpoint ([#17953](https://github.com/can1357/oh-my-pi/pull/17953) by [@KGKallasmaa](https://github.com/KGKallasmaa))

@@ -13,6 +13,8 @@ import { startParentWatchdog } from "../subprocess/parent-watchdog";
 import { openTernPage } from "../tools/browser/tern/user-page";
 import { openPath } from "../utils/open";
 
+const REUSED_DASHBOARD_POLL_MS = 2_000;
+
 /**
  * Single-line TTY progress bar. On a non-TTY stream we just stay quiet -
  * the final "Synced ..." summary still prints either way.
@@ -79,6 +81,7 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		formatStatsDashboardUrl,
 		getDashboardStats,
 		getTotalMessageCount,
+		isStatsDashboardAlive,
 		printStatsSummary,
 		refreshRollups,
 		setStatsCloseHandler,
@@ -122,9 +125,18 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	const url = formatStatsDashboardUrl(hostname, port);
 	console.log(chalk.green(`Dashboard available at: ${url}`));
 
-	// Another process owns a reused dashboard: show it, never stop it. Headless
-	// (e.g. embedded by the GUI) serves only and opens nothing.
-	if (reused && !cmd.noOpen) {
+	// Headless (e.g. embedded by the GUI) beside another process's dashboard: open
+	// nothing. No server here holds the process open, and an embedder reads this
+	// process's life as the dashboard's, so stay while it answers, then exit
+	// non-zero so the embedder starts its own.
+	if (reused && cmd.noOpen) {
+		while (await isStatsDashboardAlive(port, hostname)) await Bun.sleep(REUSED_DASHBOARD_POLL_MS);
+		await postmortem.quit(1);
+		return;
+	}
+
+	// Another process owns a reused dashboard: show it, never stop it.
+	if (reused) {
 		const page = await openTernPage(url, "over");
 		if (!page) {
 			openPath(url);
