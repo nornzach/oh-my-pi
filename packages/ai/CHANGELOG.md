@@ -5,6 +5,8 @@
 ### Fixed
 
 - Fixed Gemini rejecting every request in a session with `enum[0]: cannot be empty` when any tool offered an empty string as a choice ([#46](https://github.com/nornzach/oh-my-pi-gui/issues/46))
+## [18.18.2] - 2026-11-08
+
 ### Added
 
 - Added edit execution context support for Cursor handlers, allowing integrations to identify frames that materialize native file edits and detect when server-side edits have settled.
