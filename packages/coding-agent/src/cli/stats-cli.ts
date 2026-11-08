@@ -6,9 +6,10 @@
 
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { $env, postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { openStandaloneJudge } from "../judgment/standalone";
+import { startParentWatchdog } from "../subprocess/parent-watchdog";
 import { openTernPage } from "../tools/browser/tern/user-page";
 import { openPath } from "../utils/open";
 
@@ -101,6 +102,12 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		}
 		return;
 	}
+
+	// A host embedding the dashboard (the GUI) names itself here. If it is
+	// force-killed or crashes it runs no cleanup, and nothing else would stop
+	// this server. A dashboard started by hand outlives its shell on purpose.
+	const ownerPid = Number($env.PI_STATS_OWNER_PID);
+	if (Number.isInteger(ownerPid) && ownerPid > 0) startParentWatchdog(ownerPid);
 
 	// The dashboard starts immediately and ingests sessions in the background,
 	// streaming progress to the page. The judge (settings, auth, registry)
