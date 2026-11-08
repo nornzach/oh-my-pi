@@ -3685,8 +3685,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// =================================================================
 
 			case "bash": {
+				// Reject rather than coerce: a falsy non-boolean such as `null` would silently share the output.
+				if (command.excludeFromContext !== undefined && typeof command.excludeFromContext !== "boolean") {
+					return error(id, "bash", "excludeFromContext must be a boolean");
+				}
 				const result = await session.executeBash(command.command, undefined, {
-					excludeFromContext: command.excluded === true,
+					excludeFromContext: command.excludeFromContext,
 				});
 				return success(id, "bash", result);
 			}
@@ -4443,6 +4447,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						knownProvider.storeCredentialsAs ?? knownProvider.id,
 						"online",
 					);
+					await session.refreshScopedModels();
 					emitModelCatalogUpdate();
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
@@ -4474,10 +4479,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					return error(id, "logout", "providerId must be a string and credentialId an integer");
 				}
 				const { removed, remainingSource } = await logoutCredential(
-					session.modelRegistry,
+					session,
 					command.providerId,
 					command.credentialId,
-					session.sessionId,
 				);
 				if (!removed) {
 					return error(id, "logout", `Credential ${command.credentialId} is not stored for ${command.providerId}`);
@@ -5309,6 +5313,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			supportedProtocolVersions: [1, 2],
 			maxFrameBytes: MAX_RPC_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+			supportsBashExcludeFromContext: true,
 		});
 		startupSucceeded = true;
 	} catch (err) {

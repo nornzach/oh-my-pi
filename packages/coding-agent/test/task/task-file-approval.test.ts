@@ -26,7 +26,7 @@ describe("taskFile approval binding", () => {
 	const executions: ExecutorOptions[] = [];
 
 	beforeEach(async () => {
-		// Approval prompts show canonical targets, and macOS's temp dir sits behind a /var -> /private/var symlink.
+		// Real path: macOS tmpdir is a symlink (/var → /private/var), and approval shows resolved targets.
 		directory = await fs.promises.realpath(
 			await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-task-file-approval-")),
 		);

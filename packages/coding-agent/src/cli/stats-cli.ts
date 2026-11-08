@@ -116,13 +116,25 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	// it (its Close, Esc, Ctrl+C, or Tern's Close block), which stops the
 	// dashboard; elsewhere the system browser shows it.
 	const cwd = process.cwd();
-	const { hostname, port } = await startServer(cmd.port, cmd.host, {
+	const { hostname, port, reused } = await startServer(cmd.port, cmd.host, {
 		judge: async () => (await openStandaloneJudge(cwd, "stats_frustration")).judge,
 	});
 	const url = formatStatsDashboardUrl(hostname, port);
 	console.log(chalk.green(`Dashboard available at: ${url}`));
 
-	// Headless (e.g. embedded by the GUI): serve only, open nothing.
+	// Another process owns a reused dashboard: show it, never stop it. Headless
+	// (e.g. embedded by the GUI) serves only and opens nothing.
+	if (reused && !cmd.noOpen) {
+		const page = await openTernPage(url, "over");
+		if (!page) {
+			openPath(url);
+			return;
+		}
+		console.log("Showing it in place of this block: close it to return\n");
+		await page.closed();
+		return;
+	}
+
 	// Close is on before the page first loads, and off again for the system
 	// browser, where closing would leave a dead tab.
 	if (!cmd.noOpen) setStatsCloseHandler(() => void postmortem.quit(0));

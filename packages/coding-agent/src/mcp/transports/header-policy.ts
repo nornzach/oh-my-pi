@@ -12,6 +12,7 @@
  *    configured headers are attached only when the hop targets the configured
  *    origin. Method-changing redirects of non-GET requests are refused.
  */
+import { resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
 
 /** Header buckets for one MCP HTTP request. */
 interface MCPHeaderSources {
@@ -107,10 +108,10 @@ export async function mcpFetch(
 	sources: MCPHeaderSources,
 	originLocked: boolean,
 ): Promise<Response> {
-	const fetchWithoutSocketTimeout = (target: string, options: object): Promise<Response> =>
-		fetch(target, options as RequestInit);
+	const extraCa = resolveExtraCa();
 	if (!originLocked) {
-		return fetchWithoutSocketTimeout(url, { ...init, headers: mergeMCPHeaders(sources), timeout: false });
+		const options = { ...init, headers: mergeMCPHeaders(sources), timeout: false };
+		return fetch(url, extraCa ? withExtraCaInit(options, extraCa) : options);
 	}
 
 	const configuredOrigin = new URL(url).origin;
@@ -118,12 +119,8 @@ export async function mcpFetch(
 	for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
 		const attachConfigured = new URL(currentUrl).origin === configuredOrigin;
 		const headers = mergeMCPHeaders(attachConfigured ? sources : { generated: sources.generated });
-		const response = await fetchWithoutSocketTimeout(currentUrl, {
-			...init,
-			headers,
-			redirect: "manual",
-			timeout: false,
-		});
+		const options: RequestInit & { timeout: false } = { ...init, headers, redirect: "manual", timeout: false };
+		const response = await fetch(currentUrl, extraCa ? withExtraCaInit(options, extraCa) : options);
 		if (!REDIRECT_STATUSES[response.status]) return response;
 
 		const location = response.headers.get("Location");
