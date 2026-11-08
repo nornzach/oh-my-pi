@@ -927,9 +927,7 @@ interface TitleInput {
 }
 
 const kPersistedSessionEntryId = Symbol("persistedSessionEntryId");
-type PersistedAgentMessage = AgentMessage & {
-	[kPersistedSessionEntryId]?: string;
-};
+type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]?: string };
 
 interface UserQueueLayout {
 	/** Non-user messages surrounding the visible user-entry slots. */
@@ -1157,6 +1155,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * command.
 	 */
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
+	/**
+	 * Held beside the messages, not on them: context hooks are handed clones and an
+	 * extra key on the original reads as a hook's edit, which would mark saved turns
+	 * as rebuilt per request.
+	 */
+	readonly #persistedEntryIds = new WeakMap<AgentMessage, string>();
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -2477,7 +2481,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
 			appendSessionMessage: message => this.#appendSessionMessage(message),
-			persistedAssistantEntryId: message => (message as PersistedAgentMessage)[kPersistedSessionEntryId],
+			persistedAssistantEntryId: message => (message as PersistedAssistantMessage)[kPersistedSessionEntryId],
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
@@ -4481,7 +4485,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// A digest entry carries no persistence key, so the memo stays valid across it.
 		if (message.role === "assistant") this.#tools.recordReplyPrompt(message);
 		const entryId = this.sessionManager.appendMessage(message);
-		(message as PersistedAgentMessage)[kPersistedSessionEntryId] = entryId;
+		this.#persistedEntryIds.set(message, entryId);
+		if (message.role === "assistant") (message as PersistedAssistantMessage)[kPersistedSessionEntryId] = entryId;
 		const key = sessionMessagePersistenceKey(message);
 		if (wasFresh && cache && key) {
 			cache.keys.add(key);
@@ -4608,7 +4613,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					// provider preparation / hook time from the prompt→yield anchor.
 					message.timestamp,
 				);
-				(message as PersistedAgentMessage)[kPersistedSessionEntryId] = entryId;
+				this.#persistedEntryIds.set(message, entryId);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
 				this.#ttsr.markInjectedFromDetails(message.details);
@@ -8167,7 +8172,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/** Persisted identity assigned when this exact message committed to the active branch. */
 	getPersistedMessageEntryId(message: AgentMessage): string | undefined {
-		return (message as PersistedAgentMessage)[kPersistedSessionEntryId];
+		return this.#persistedEntryIds.get(message);
 	}
 
 	/**
