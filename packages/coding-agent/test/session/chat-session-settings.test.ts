@@ -244,7 +244,9 @@ describe("chat.history", () => {
 		const compactions = async (history: "continuous" | "single") => {
 			const { session } = await harness("chat", {
 				"chat.history": history,
-				"compaction.thresholdTokens": 100,
+				// Above the chat system prompt: threshold compaction is blocked outright
+				// when fixed context alone exceeds the recovery band.
+				"compaction.thresholdTokens": 2_000,
 				"compaction.keepRecentTokens": 1,
 				"compaction.methodOrder": ["soft"],
 				"compaction.asyncEnabled": false,
@@ -253,8 +255,9 @@ describe("chat.history", () => {
 			session.subscribe(event => {
 				if (event.type === "auto_compaction_start") started.push(event);
 			});
-			await session.prompt("x".repeat(2_000));
-			await session.prompt("y".repeat(2_000));
+			// Each turn fits under the threshold; only the whole history exceeds it.
+			await session.prompt("x".repeat(6_000));
+			await session.prompt("y".repeat(6_000));
 			await session.waitForIdle();
 			return started.length;
 		};
