@@ -35,6 +35,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
+import type { FormBlock, FormSpan } from "@oh-my-pi/pi-tui/html-form/parse";
 import type { CopyTarget } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
@@ -132,7 +133,7 @@ export type RpcCommand =
 			objective?: string;
 			token_budget?: number;
 	  }
-	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
+	| { id?: string; type: "set_ask_dialog"; enabled: boolean; form?: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
@@ -3914,6 +3915,15 @@ export interface RpcAskDialogQuestion {
 	recommended?: number;
 }
 
+/** A form block as hosts receive it: pictures travel as their alt text. */
+export type RpcFormBlock = Exclude<FormBlock, { kind: "image" | "svg" }>;
+
+/** One titled part of an RPC `form` dialog. */
+export interface RpcFormSection {
+	title: FormSpan[];
+	blocks: RpcFormBlock[];
+}
+
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
 	| {
@@ -3978,6 +3988,14 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "ask";
 			questions: RpcAskDialogQuestion[];
+			timeout?: number;
+	  }
+	/** The whole form of one `ask` tool call. Emitted only after `set_ask_dialog` with `form: true`. */
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "form";
+			sections: RpcFormSection[];
 			timeout?: number;
 	  }
 	| {
@@ -4162,6 +4180,8 @@ export type RpcExtensionUIResponse =
 			cancelled: true;
 			timedOut?: boolean;
 	  }
+	/** Answers to a `form` request by control name: a string, or a string array for a multi-choice field. */
+	| { type: "extension_ui_response"; id: string; formData: Record<string, unknown> }
 	/** Answers to an `ask` request, one per question in request order. */
 	| {
 			type: "extension_ui_response";

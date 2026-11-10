@@ -107,7 +107,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	{
 		name: "set_ask_dialog",
 		doc: "Opt in to `ask` UI requests; returns the applied setting.",
-		params: { enabled: "boolean" },
+		params: {
+			enabled: "boolean",
+			"form?": doc(
+				"boolean",
+				"Also take the `ask` tool's whole form as one `form` request, instead of field by field.",
+			),
+		},
 		result: { enabled: "boolean" },
 		unwrap: "enabled",
 	},

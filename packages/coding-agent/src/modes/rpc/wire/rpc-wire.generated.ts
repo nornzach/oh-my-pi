@@ -1395,6 +1395,96 @@ export interface AskUiRequest {
 	timeout?: number;
 }
 
+/** A run of inline text; a newline inside `text` is a hard line break. */
+export interface FormSpan {
+	text: string;
+	style?: "code" | "strong" | "em";
+}
+
+export interface FormChoiceOption {
+	value: string;
+	label: FormSpan[];
+	checked: boolean;
+	disabled: boolean;
+}
+
+/** A radio group, checkbox group or select. Empty `label`: the question is the text block before it. */
+export interface FormChoiceField {
+	kind: "choice";
+	name: string;
+	multi: boolean;
+	select: boolean;
+	/** Offer a free-text answer beside the options; its text is submitted as a value. */
+	other: boolean;
+	label: FormSpan[];
+	options: FormChoiceOption[];
+	required: boolean;
+}
+
+export interface FormTextField {
+	kind: "text";
+	name: string;
+	type: string;
+	multiline: boolean;
+	label: FormSpan[];
+	value: string;
+	placeholder: string;
+	required: boolean;
+	rows: number;
+	min?: number;
+	max?: number;
+	pattern?: string;
+	minLength?: number;
+	maxLength?: number;
+}
+
+export type FormField = FormChoiceField | FormTextField;
+
+export interface FormTextBlock {
+	kind: "text";
+	spans: FormSpan[];
+	heading: boolean;
+}
+
+export interface FormListBlock {
+	kind: "list";
+	items: FormSpan[][];
+	ordered: boolean;
+}
+
+export interface FormPreBlock {
+	kind: "pre";
+	text: string;
+}
+
+export interface FormTableBlock {
+	kind: "table";
+	rows: FormSpan[][][];
+	headerRows: number;
+}
+
+export interface FormFieldBlock {
+	kind: "field";
+	field: FormField;
+}
+
+export type FormBlock = FormTextBlock | FormListBlock | FormPreBlock | FormTableBlock | FormFieldBlock;
+
+/** One titled part of a form. Pictures arrive as their alt text. */
+export interface FormSection {
+	title: FormSpan[];
+	blocks: FormBlock[];
+}
+
+/** The whole form of one `ask` tool call; sent only after `set_ask_dialog` enables it with `form: true`. */
+export interface FormUiRequest {
+	type: "extension_ui_request";
+	id: string;
+	method: "form";
+	sections: FormSection[];
+	timeout?: number;
+}
+
 /** Close the dialog opened by request `targetId`; a later answer to it is ignored. */
 export interface CancelUiRequest {
 	type: "extension_ui_request";
@@ -1453,7 +1543,7 @@ export interface OpenUrlUiRequest {
 }
 
 /** Extension UI request, discriminated by `method`. */
-export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
+export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | FormUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
 
 /** Answer to one `ask` question: exact option labels, plus optional free text. */
 export interface AskAnswer {
@@ -1491,8 +1581,15 @@ export interface AnswersUiResponse {
 	answers: AskAnswer[];
 }
 
+/** Answers a `form` request, by control `name`: a string, or a string array for a multi-choice field. Choice values are option `value`s, or free text where `other` is set. */
+export interface FormUiResponse {
+	type: "extension_ui_response";
+	id: string;
+	formData: Record<string, unknown>;
+}
+
 /** Host reply to an extension UI request; variants share `type` and differ by their payload key. */
-export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse;
+export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse | FormUiResponse;
 
 export interface HostToolCallRequest {
 	type: "host_tool_call";
@@ -1680,6 +1777,8 @@ export interface GoalParams {
 
 export interface SetAskDialogParams {
 	enabled: boolean;
+	/** Also take the `ask` tool's whole form as one `form` request, instead of field by field. */
+	form?: boolean;
 }
 
 export interface SetAskDialogResult {

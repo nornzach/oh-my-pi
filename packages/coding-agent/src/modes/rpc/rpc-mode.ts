@@ -19,6 +19,15 @@ import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import {
+	choiceValue,
+	defaultFormData,
+	type HtmlFormData,
+	type HtmlFormValue,
+	isArrayChoice,
+	textValue,
+} from "@oh-my-pi/pi-tui/html-form/data";
+import { type ChoiceField, type HtmlForm, parseHtmlForm, type TextField } from "@oh-my-pi/pi-tui/html-form/parse";
 import { buildCopyTargets } from "@oh-my-pi/pi-tui/overlays/copy-targets";
 import {
 	type WordCompletionEngine,
@@ -44,6 +53,7 @@ import {
 	type ExtensionAskDialogResult,
 	type ExtensionAskDialogSubmitResult,
 	type ExtensionCustomOptions,
+	type ExtensionFormDialogResult,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
@@ -231,6 +241,8 @@ import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcFormBlock,
+	RpcFormSection,
 	RpcExtensionUISelectOptionDetail,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -1486,6 +1498,89 @@ export async function requestRpcAskDialog(
 	return timedOut ? timedOutAskDialogResult(questions) : result;
 }
 
+/** A form's blocks for the wire: hosts get a picture's alt text, never its markup or data. */
+function rpcFormSections(form: HtmlForm): RpcFormSection[] {
+	return form.sections.map(section => ({
+		title: section.title,
+		blocks: section.blocks.flatMap((block): RpcFormBlock[] => {
+			if (block.kind !== "image" && block.kind !== "svg") return [block];
+			return block.alt ? [{ kind: "text", spans: [{ text: block.alt }], heading: false }] : [];
+		}),
+	}));
+}
+
+function submittedChoice(field: ChoiceField, raw: unknown): HtmlFormValue | undefined {
+	const submitted = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+	if (!isArrayChoice(field) && submitted.length > 1) {
+		throw new Error(`Form answer ${JSON.stringify(field.name)} is single-choice but carries more than one value`);
+	}
+	const checked = new Set<number>();
+	let other: string | undefined;
+	for (const value of submitted) {
+		const index = field.options.findIndex(option => option.value === value && !option.disabled);
+		if (index >= 0) checked.add(index);
+		else if (field.other && other === undefined && typeof value === "string") other = value;
+		else throw new Error(`Form answer ${JSON.stringify(field.name)} is not one of its options`);
+	}
+	return choiceValue(field, checked, other);
+}
+
+function submittedText(field: TextField, raw: unknown): HtmlFormValue {
+	if (raw !== undefined && typeof raw !== "string") {
+		throw new Error(`Form answer ${JSON.stringify(field.name)} must be text`);
+	}
+	return textValue(field, raw ?? "");
+}
+
+/** Validates `form` answers against the parsed form; any mismatch throws instead of guessing. */
+function parseFormDialogResponse(
+	response: RpcExtensionUIResponse,
+	form: HtmlForm,
+	dialogOptions: ExtensionUIDialogOptions,
+): ExtensionFormDialogResult | undefined {
+	if ("cancelled" in response && response.cancelled) {
+		if (response.timedOut) dialogOptions.onTimeout?.();
+		return undefined;
+	}
+	const submitted: unknown = "formData" in response ? response.formData : undefined;
+	if (!isRecord(submitted)) throw new Error("Form response must carry formData");
+	const data: HtmlFormData = Object.fromEntries(form.hidden);
+	for (const field of form.fields) {
+		if (!field.name) continue;
+		const raw = submitted[field.name];
+		const value = field.kind === "text" ? submittedText(field, raw) : submittedChoice(field, raw);
+		if (value !== undefined) data[field.name] = value;
+	}
+	return { data };
+}
+
+/** Sends a whole form as one RPC `form` dialog; a timeout submits the form's defaults. */
+export async function requestRpcFormDialog(
+	pendingRequests: Map<string, PendingExtensionRequest>,
+	output: RpcOutput,
+	html: string,
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<ExtensionFormDialogResult | undefined> {
+	const form = parseHtmlForm(html);
+	let timedOut = false;
+	const opts: ExtensionUIDialogOptions = {
+		...dialogOptions,
+		onTimeout: () => {
+			timedOut = true;
+			dialogOptions?.onTimeout?.();
+		},
+	};
+	const result = await requestRpcDialog(
+		pendingRequests,
+		output,
+		opts,
+		undefined,
+		{ method: "form", sections: rpcFormSections(form), timeout: dialogOptions?.timeout },
+		response => parseFormDialogResponse(response, form, opts),
+	);
+	return timedOut ? { data: defaultFormData(form), timedOut: true } : result;
+}
+
 export function requestRpcEditor(
 	pendingRequests: Map<string, PendingExtensionRequest>,
 	output: RpcOutput,
@@ -1969,6 +2064,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		readonly supportsEditor = true;
 		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
 		askDialogEnabled = false;
+		/** Set by `set_ask_dialog` with `form: true`; other hosts keep the `ask` tool's field-by-field fallback. */
+		formDialogEnabled = false;
 		/** Set by `terminal_configure`; `pty: true` bash runs here instead of without a terminal. */
 		interactiveTerminal: InteractiveTerminalHost | undefined;
 
@@ -1981,6 +2078,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			if (!this.askDialogEnabled) return undefined;
 			return (questions, dialogOptions) =>
 				requestRpcAskDialog(this.pendingRequests, this.output, questions, dialogOptions);
+		}
+
+		get formDialog(): ExtensionUIContext["formDialog"] {
+			if (!this.formDialogEnabled) return undefined;
+			return (html, dialogOptions) => requestRpcFormDialog(this.pendingRequests, this.output, html, dialogOptions);
 		}
 
 		select(
@@ -2189,6 +2291,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 	const setAskDialog = (command: RpcCommand & { type: "set_ask_dialog" }): RpcResponse => {
 		rpcUiContext.askDialogEnabled = command.enabled === true;
+		rpcUiContext.formDialogEnabled = command.enabled === true && command.form === true;
 		return success(command.id, "set_ask_dialog", { enabled: rpcUiContext.askDialogEnabled });
 	};
 	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>

@@ -206,6 +206,55 @@ export const frameDefs = {
 		{ type: UI, id: "string", method: "'ask'", questions: "AskQuestion[]", "timeout?": "number.integer" },
 		"Every question of one `ask` tool call; sent only after `set_ask_dialog` enables it.",
 	),
+	FormSpan: doc(
+		{ text: "string", "style?": "'code' | 'strong' | 'em'" },
+		"A run of inline text; a newline inside `text` is a hard line break.",
+	),
+	FormChoiceOption: { value: "string", label: "FormSpan[]", checked: "boolean", disabled: "boolean" },
+	FormChoiceField: doc(
+		{
+			kind: "'choice'",
+			name: "string",
+			multi: "boolean",
+			select: "boolean",
+			other: doc("boolean", "Offer a free-text answer beside the options; its text is submitted as a value."),
+			label: "FormSpan[]",
+			options: "FormChoiceOption[]",
+			required: "boolean",
+		},
+		"A radio group, checkbox group or select. Empty `label`: the question is the text block before it.",
+	),
+	FormTextField: {
+		kind: "'text'",
+		name: "string",
+		type: "string",
+		multiline: "boolean",
+		label: "FormSpan[]",
+		value: "string",
+		placeholder: "string",
+		required: "boolean",
+		"min?": "number",
+		"max?": "number",
+		"pattern?": "string",
+		"minLength?": "number",
+		"maxLength?": "number",
+		rows: "number",
+	},
+	FormField: "FormChoiceField | FormTextField",
+	FormTextBlock: { kind: "'text'", spans: "FormSpan[]", heading: "boolean" },
+	FormListBlock: { kind: "'list'", items: "FormSpan[][]", ordered: "boolean" },
+	FormPreBlock: { kind: "'pre'", text: "string" },
+	FormTableBlock: { kind: "'table'", rows: "FormSpan[][][]", headerRows: "number.integer" },
+	FormFieldBlock: { kind: "'field'", field: "FormField" },
+	FormBlock: "FormTextBlock | FormListBlock | FormPreBlock | FormTableBlock | FormFieldBlock",
+	FormSection: doc(
+		{ title: "FormSpan[]", blocks: "FormBlock[]" },
+		"One titled part of a form. Pictures arrive as their alt text.",
+	),
+	FormUiRequest: doc(
+		{ type: UI, id: "string", method: "'form'", sections: "FormSection[]", "timeout?": "number.integer" },
+		"The whole form of one `ask` tool call; sent only after `set_ask_dialog` enables it with `form: true`.",
+	),
 	CancelUiRequest: doc(
 		{ type: UI, id: "string", method: "'cancel'", targetId: "string" },
 		"Close the dialog opened by request `targetId`; a later answer to it is ignored.",
@@ -243,7 +292,7 @@ export const frameDefs = {
 		"instructions?": "string",
 	},
 	ExtensionUiRequest: doc(
-		"SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest",
+		"SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | FormUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest",
 		"Extension UI request, discriminated by `method`.",
 	),
 	AskAnswer: doc(
@@ -266,8 +315,12 @@ export const frameDefs = {
 		{ type: "'extension_ui_response'", id: "string", answers: "AskAnswer[]" },
 		"Answers an `ask` request: one `AskAnswer` per question, in question order.",
 	),
+	FormUiResponse: doc(
+		{ type: "'extension_ui_response'", id: "string", formData: JSON_OBJECT },
+		"Answers a `form` request, by control `name`: a string, or a string array for a multi-choice field. Choice values are option `value`s, or free text where `other` is set.",
+	),
 	ExtensionUiResponse: doc(
-		"ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse",
+		"ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse | FormUiResponse",
 		"Host reply to an extension UI request; variants share `type` and differ by their payload key.",
 	),
 

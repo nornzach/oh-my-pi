@@ -770,7 +770,8 @@ The corresponding `get_state` result reports the same computed state:
 for every process; until a host enables it, the `ask` tool keeps prompting with
 one `select` (plus `editor` for free text) per choice. Builds without the
 command answer with a failed `response`, so hosts should keep the `select`
-fallback when enabling fails.
+fallback when enabling fails. Add `form: true` to also take the `ask` tool's
+whole form as one `form` request; hosts that omit it keep the per-field prompts.
 
 ```json
 { "id": "req_ask", "type": "set_ask_dialog", "enabled": true }
@@ -1355,10 +1356,18 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      masked input should hide typed characters when `secret: true`.
    - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
      question of one extension `ui.askDialog` call (the `ask` tool instead walks
-     its HTML form field by field through `select`, `input` and `editor`):
+     its HTML form field by field through `select`, `input` and `editor`, unless
+     the host enabled `form`):
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.
+   - `form` is emitted only after `set_ask_dialog` with `form: true`. It carries
+     the `ask` tool's whole form as `sections: Array<{ title, blocks }>` plus
+     `timeout?: number`. Blocks are `text`, `list`, `pre`, `table` and `field`;
+     pictures arrive as their alt text. Answer with `formData`, keyed by control
+     `name`: a string, or a string array for a multi-choice field. A choice value
+     is an option's `value`, or free text where the field sets `other`. On timeout
+     omp closes the dialog and submits the form's defaults.
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
 - `open_url` (emitted by RPC login flows): includes `url`, optional `launchUrl`, and optional `instructions`. When present, `launchUrl` is a short loopback redirect and is the recommended copy target so terminal truncation cannot corrupt OAuth query parameters.
 

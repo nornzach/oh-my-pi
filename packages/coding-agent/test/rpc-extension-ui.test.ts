@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
-import type { ExtensionAskDialogQuestion } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import type {
+	ExtensionAskDialogQuestion,
+	ExtensionUIDialogOptions,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import {
 	type PendingExtensionRequest,
 	reportDroppedPrompt,
 	type RpcExtensionUIResponse,
 	requestRpcAskDialog,
 	requestRpcDialog,
+	requestRpcFormDialog,
 	requestRpcInput,
 	requestRpcSelect,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
@@ -1128,7 +1132,7 @@ describe("RPC ask dialog", () => {
 		expect(onTimeout).not.toHaveBeenCalled();
 	});
 
-	it("walks the ask tool's form through select prompts, also after the host opts into ask dialogs", async () => {
+	it("walks the ask tool's form through select prompts until the host opts into whole forms", async () => {
 		await using temp = await TempDir.create("@rpc-ask-dialog-");
 		const extensionPath = temp.join("scripted-ask.ts");
 		await Bun.write(extensionPath, scriptedAskProvider);
@@ -1169,6 +1173,7 @@ describe("RPC ask dialog", () => {
 		};
 		const selectRequests: Record<string, unknown>[] = [];
 		const askRequests: Record<string, unknown>[] = [];
+		const formRequests: Record<string, unknown>[] = [];
 		const toolResults: unknown[] = [];
 		let optInResponse: unknown;
 		let finished = false;
@@ -1190,6 +1195,9 @@ describe("RPC ask dialog", () => {
 				} else if (frame.type === "extension_ui_request" && frame.method === "ask") {
 					askRequests.push(frame);
 					await send({ type: "extension_ui_response", id: frame.id, cancelled: true });
+				} else if (frame.type === "extension_ui_request" && frame.method === "form") {
+					formRequests.push(frame);
+					await send({ type: "extension_ui_response", id: frame.id, formData: { db: "sqlite" } });
 				} else if (frame.type === "tool_execution_end" && frame.toolName === "ask") {
 					toolResults.push(frame.result);
 				} else if (frame.type === "prompt_result" && frame.id === "fallback") {
@@ -1198,6 +1206,10 @@ describe("RPC ask dialog", () => {
 					optInResponse = frame;
 					await send({ type: "prompt", id: "dialog", message: form });
 				} else if (frame.type === "prompt_result" && frame.id === "dialog") {
+					await send({ type: "set_ask_dialog", id: "opt-in-form", enabled: true, form: true });
+				} else if (frame.type === "response" && frame.id === "opt-in-form") {
+					await send({ type: "prompt", id: "whole-form", message: form });
+				} else if (frame.type === "prompt_result" && frame.id === "whole-form") {
 					finished = true;
 					break;
 				}
@@ -1223,6 +1235,81 @@ describe("RPC ask dialog", () => {
 		const answered = expect.objectContaining({
 			details: { answers: [{ name: "db", question: "Which database?", answer: "Postgres" }] },
 		});
-		expect(toolResults).toEqual([answered, answered]);
+		expect(formRequests).toHaveLength(1);
+		expect(toolResults).toEqual([
+			answered,
+			answered,
+			expect.objectContaining({
+				details: { answers: [{ name: "db", question: "Which database?", answer: "SQLite" }] },
+			}),
+		]);
 	}, 60_000);
+});
+
+describe("RPC form dialog", () => {
+	const html = `<form>
+		<input type="hidden" name="source" value="wizard">
+		<fieldset><legend>Deploy</legend>
+			<p>Which target?</p>
+			<label><input type="radio" name="target" value="prod"> Production</label>
+			<label><input type="radio" name="target" value="stage" checked> Staging</label>
+			<img src="data:image/png;base64,AAAA" alt="Topology diagram">
+			<label>Replicas <input type="number" name="replicas" value="2"></label>
+			<label><input type="checkbox" name="regions" value="a"> East</label>
+			<label><input type="checkbox" name="regions" value="b"> West</label>
+			<select name="tier"><option value="free">Free</option><option value="pro">Pro</option></select>
+		</fieldset>
+	</form>`;
+
+	function openForm(options?: ExtensionUIDialogOptions) {
+		const pendingRequests = new Map<string, PendingExtensionRequest>();
+		const output = vi.fn<(frame: object) => void>();
+		const result = requestRpcFormDialog(pendingRequests, output, html, options);
+		const frame = output.mock.calls[0]?.[0] as Record<string, unknown>;
+		return { pendingRequests, output, result, frame, id: requireRequest(frame).id };
+	}
+
+	it("sends the parsed form once with pictures reduced to their alt text", async () => {
+		const { frame, result, pendingRequests, id } = openForm();
+		expect(frame).toMatchObject({ method: "form" });
+		const serialized = JSON.stringify(frame);
+		expect(serialized).toContain("Topology diagram");
+		expect(serialized).not.toContain("base64");
+		expect(serialized).not.toContain("wizard");
+		respond(pendingRequests, id, { cancelled: true });
+		await result;
+	});
+
+	it("turns answers into typed form data, keeping hidden inputs and free text", async () => {
+		const { pendingRequests, id, result } = openForm();
+		respond(pendingRequests, id, {
+			formData: { target: "Somewhere else", replicas: "5", regions: ["b", "Central"], tier: "pro" },
+		});
+		expect(await result).toEqual({
+			data: { source: "wizard", target: "Somewhere else", replicas: 5, regions: ["b", "Central"], tier: "pro" },
+		});
+	});
+
+	it("rejects a value the field does not offer", async () => {
+		const { pendingRequests, id, result } = openForm();
+		respond(pendingRequests, id, { formData: { tier: "enterprise" } });
+		await expect(result).rejects.toThrow('"tier" is not one of its options');
+	});
+
+	it("submits the form's defaults when the host reports its deadline", async () => {
+		const onTimeout = vi.fn();
+		const { pendingRequests, id, result } = openForm({ onTimeout });
+		respond(pendingRequests, id, { cancelled: true, timedOut: true });
+		expect(await result).toEqual({
+			data: { source: "wizard", target: "stage", replicas: 2, regions: [], tier: "free" },
+			timedOut: true,
+		});
+		expect(onTimeout).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats a plain host cancel as a cancelled form", async () => {
+		const { pendingRequests, id, result } = openForm();
+		respond(pendingRequests, id, { cancelled: true });
+		expect(await result).toBeUndefined();
+	});
 });

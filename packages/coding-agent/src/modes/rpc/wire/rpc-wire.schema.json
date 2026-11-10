@@ -5538,6 +5538,346 @@
 			],
 			"description": "Every question of one `ask` tool call; sent only after `set_ask_dialog` enables it."
 		},
+		"FormSpan": {
+			"type": "object",
+			"properties": {
+				"text": {
+					"type": "string"
+				},
+				"style": {
+					"enum": [
+						"code",
+						"strong",
+						"em"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"text"
+			],
+			"description": "A run of inline text; a newline inside `text` is a hard line break."
+		},
+		"FormChoiceOption": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string"
+				},
+				"label": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSpan"
+					}
+				},
+				"checked": {
+					"type": "boolean"
+				},
+				"disabled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"value",
+				"label",
+				"checked",
+				"disabled"
+			]
+		},
+		"FormChoiceField": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "choice"
+				},
+				"name": {
+					"type": "string"
+				},
+				"multi": {
+					"type": "boolean"
+				},
+				"select": {
+					"type": "boolean"
+				},
+				"other": {
+					"type": "boolean",
+					"description": "Offer a free-text answer beside the options; its text is submitted as a value."
+				},
+				"label": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSpan"
+					}
+				},
+				"options": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormChoiceOption"
+					}
+				},
+				"required": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"kind",
+				"name",
+				"multi",
+				"select",
+				"other",
+				"label",
+				"options",
+				"required"
+			],
+			"description": "A radio group, checkbox group or select. Empty `label`: the question is the text block before it."
+		},
+		"FormTextField": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "text"
+				},
+				"name": {
+					"type": "string"
+				},
+				"type": {
+					"type": "string"
+				},
+				"multiline": {
+					"type": "boolean"
+				},
+				"label": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSpan"
+					}
+				},
+				"value": {
+					"type": "string"
+				},
+				"placeholder": {
+					"type": "string"
+				},
+				"required": {
+					"type": "boolean"
+				},
+				"rows": {
+					"type": "number"
+				},
+				"min": {
+					"type": "number"
+				},
+				"max": {
+					"type": "number"
+				},
+				"pattern": {
+					"type": "string"
+				},
+				"minLength": {
+					"type": "number"
+				},
+				"maxLength": {
+					"type": "number"
+				}
+			},
+			"required": [
+				"kind",
+				"name",
+				"type",
+				"multiline",
+				"label",
+				"value",
+				"placeholder",
+				"required",
+				"rows"
+			]
+		},
+		"FormField": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/FormChoiceField"
+				},
+				{
+					"$ref": "#/$defs/FormTextField"
+				}
+			]
+		},
+		"FormTextBlock": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "text"
+				},
+				"spans": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSpan"
+					}
+				},
+				"heading": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"kind",
+				"spans",
+				"heading"
+			]
+		},
+		"FormListBlock": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "list"
+				},
+				"items": {
+					"type": "array",
+					"items": {
+						"type": "array",
+						"items": {
+							"$ref": "#/$defs/FormSpan"
+						}
+					}
+				},
+				"ordered": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"kind",
+				"items",
+				"ordered"
+			]
+		},
+		"FormPreBlock": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "pre"
+				},
+				"text": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"kind",
+				"text"
+			]
+		},
+		"FormTableBlock": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "table"
+				},
+				"rows": {
+					"type": "array",
+					"items": {
+						"type": "array",
+						"items": {
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/FormSpan"
+							}
+						}
+					}
+				},
+				"headerRows": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"kind",
+				"rows",
+				"headerRows"
+			]
+		},
+		"FormFieldBlock": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"const": "field"
+				},
+				"field": {
+					"$ref": "#/$defs/FormField"
+				}
+			},
+			"required": [
+				"kind",
+				"field"
+			]
+		},
+		"FormBlock": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/FormTextBlock"
+				},
+				{
+					"$ref": "#/$defs/FormListBlock"
+				},
+				{
+					"$ref": "#/$defs/FormPreBlock"
+				},
+				{
+					"$ref": "#/$defs/FormTableBlock"
+				},
+				{
+					"$ref": "#/$defs/FormFieldBlock"
+				}
+			]
+		},
+		"FormSection": {
+			"type": "object",
+			"properties": {
+				"title": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSpan"
+					}
+				},
+				"blocks": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormBlock"
+					}
+				}
+			},
+			"required": [
+				"title",
+				"blocks"
+			],
+			"description": "One titled part of a form. Pictures arrive as their alt text."
+		},
+		"FormUiRequest": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "extension_ui_request"
+				},
+				"id": {
+					"type": "string"
+				},
+				"method": {
+					"const": "form"
+				},
+				"sections": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/FormSection"
+					}
+				},
+				"timeout": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"type",
+				"id",
+				"method",
+				"sections"
+			],
+			"description": "The whole form of one `ask` tool call; sent only after `set_ask_dialog` enables it with `form: true`."
+		},
 		"CancelUiRequest": {
 			"type": "object",
 			"properties": {
@@ -5740,6 +6080,9 @@
 					"$ref": "#/$defs/AskUiRequest"
 				},
 				{
+					"$ref": "#/$defs/FormUiRequest"
+				},
+				{
 					"$ref": "#/$defs/CancelUiRequest"
 				},
 				{
@@ -5871,6 +6214,28 @@
 			],
 			"description": "Answers an `ask` request: one `AskAnswer` per question, in question order."
 		},
+		"FormUiResponse": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "extension_ui_response"
+				},
+				"id": {
+					"type": "string"
+				},
+				"formData": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				}
+			},
+			"required": [
+				"type",
+				"id",
+				"formData"
+			],
+			"description": "Answers a `form` request, by control `name`: a string, or a string array for a multi-choice field. Choice values are option `value`s, or free text where `other` is set."
+		},
 		"ExtensionUiResponse": {
 			"anyOf": [
 				{
@@ -5884,6 +6249,9 @@
 				},
 				{
 					"$ref": "#/$defs/AnswersUiResponse"
+				},
+				{
+					"$ref": "#/$defs/FormUiResponse"
 				}
 			],
 			"description": "Host reply to an extension UI request; variants share `type` and differ by their payload key."
@@ -6522,6 +6890,10 @@
 			"properties": {
 				"enabled": {
 					"type": "boolean"
+				},
+				"form": {
+					"type": "boolean",
+					"description": "Also take the `ask` tool's whole form as one `form` request, instead of field by field."
 				}
 			},
 			"required": [
