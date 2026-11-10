@@ -42,7 +42,7 @@ export async function applyRpcSwitchLeaf(
 		allowAskReopen: true,
 	});
 	if (result.reopenAsk && uiContext) {
-		const reanswer = await runAskReanswer(session, result.reopenAsk.questions, uiContext);
+		const reanswer = await runAskReanswer(session, result.reopenAsk.html, uiContext);
 		if (!reanswer) return { cancelled: true };
 		result = await session.navigateTree(command.entryId, {
 			summarize: command.summarize,

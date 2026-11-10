@@ -804,7 +804,7 @@ export interface RpcSwitchLeafResult {
 	cancelled: boolean;
 	aborted?: boolean;
 	/** Set when the target is an `ask` toolResult and the caller must re-open the ask picker first (issue #5642). */
-	reopenAsk?: { toolCallId: string; questions: unknown };
+	reopenAsk?: { toolCallId: string; html: string };
 	/** Draft text/images of the target user message — restore into the composer. */
 	editorText?: string;
 	editorImages?: ImageContent[];
