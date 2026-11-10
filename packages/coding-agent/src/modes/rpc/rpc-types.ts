@@ -3954,6 +3954,14 @@ export type RpcExtensionUIRequest =
 			 * browser callback signs in first.
 			 */
 			authCodeFor?: string;
+			/**
+			 * Set on any other login prompt asked after an authorization URL, such as
+			 * an API key: the id of that `open_url` request. The login waits for this
+			 * answer, so a host must show the prompt while the `open_url` is still up.
+			 */
+			loginPromptFor?: string;
+			/** Set on a login prompt whose answer may be left blank. */
+			allowEmpty?: boolean;
 			secret?: boolean;
 	  }
 	| {

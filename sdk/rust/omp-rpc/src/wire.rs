@@ -4638,6 +4638,12 @@ pub struct InputUiRequest {
 	/// Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.
 	#[serde(rename = "authCodeFor", default, skip_serializing_if = "Option::is_none")]
 	pub auth_code_for: Option<String>,
+	/// Set on any other login prompt asked after an authorization URL, such as an API key: the id of that `open_url` request. The login waits for this answer, so a host must show the prompt while the `open_url` is still up.
+	#[serde(rename = "loginPromptFor", default, skip_serializing_if = "Option::is_none")]
+	pub login_prompt_for: Option<String>,
+	/// Set on a login prompt whose answer may be left blank.
+	#[serde(rename = "allowEmpty", default, skip_serializing_if = "Option::is_none")]
+	pub allow_empty: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub secret: Option<bool>,
 }

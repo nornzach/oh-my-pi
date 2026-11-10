@@ -816,6 +816,60 @@ export default function(pi) {
 		expect(promptTimedOut.response).not.toHaveProperty("code");
 	}, 30_000);
 
+	it("names the authorization URL on a login prompt asked after it, so a host can show both", async () => {
+		await using temp = await TempDir.create("@rpc-login-key-");
+		await using fixture = await startLoginFixture(
+			temp,
+			`
+export default function(pi) {
+  globalThis.fetch = async () => { throw new Error("Offline login fixture refuses network"); };
+  pi.registerProvider("rpc-key", {
+    baseUrl: "http://127.0.0.1:9/v1",
+    api: "openai-completions",
+    models: [{
+      id: "fixture",
+      name: "Offline fixture",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 4096,
+      maxTokens: 512,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    }],
+    oauth: {
+      name: "rpc-key",
+      login: async callbacks => {
+        await callbacks.onPrompt({ message: "Region" });
+        callbacks.onAuth({ url: "https://example.invalid/keys" });
+        return callbacks.onPrompt({ message: "Paste your key", placeholder: "sk-...", allowEmpty: true });
+      }
+    }
+  });
+}
+`,
+		);
+		const { login, idOf } = fixture;
+
+		// The host leaves the URL dialog up, as a GUI does while the user fetches the key.
+		const { response, requests } = await login("rpc-key", request =>
+			request.method === "input" ? { value: "answer" } : undefined,
+		);
+
+		expect(response).toMatchObject({ command: "login", success: true });
+		const [before, after] = requests.filter(request => request.method === "input");
+		expect(before).toMatchObject({ title: "Region" });
+		// Nothing is on screen yet for a prompt before the URL to join.
+		expect(before).not.toHaveProperty("loginPromptFor");
+		expect(before).not.toHaveProperty("allowEmpty");
+		expect(after).toMatchObject({
+			title: "Paste your key",
+			placeholder: "sk-...",
+			loginPromptFor: idOf(requests, "open_url"),
+			allowEmpty: true,
+		});
+		// Pasted-code hosts close this field when a browser signs in; a key has no browser to wait for.
+		expect(after).not.toHaveProperty("authCodeFor");
+	}, 30_000);
+
 	it("shows Anthropic's paste-code prompt with its URL dialog and closes both when the browser signs in", async () => {
 		await using temp = await TempDir.create("@rpc-login-paste-");
 		// Offline token endpoint: it accepts the codes this test hands out and

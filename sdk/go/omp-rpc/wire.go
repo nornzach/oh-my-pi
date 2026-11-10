@@ -5967,7 +5967,11 @@ type InputUiRequest struct {
 	Timeout     *int64  `json:"timeout,omitempty"`
 	// Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.
 	AuthCodeFor *string `json:"authCodeFor,omitempty"`
-	Secret      *bool   `json:"secret,omitempty"`
+	// Set on any other login prompt asked after an authorization URL, such as an API key: the id of that `open_url` request. The login waits for this answer, so a host must show the prompt while the `open_url` is still up.
+	LoginPromptFor *string `json:"loginPromptFor,omitempty"`
+	// Set on a login prompt whose answer may be left blank.
+	AllowEmpty *bool `json:"allowEmpty,omitempty"`
+	Secret     *bool `json:"secret,omitempty"`
 }
 
 func (v *InputUiRequest) UnmarshalJSON(data []byte) error {
@@ -5984,6 +5988,8 @@ func (v *InputUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("placeholder", &out.Placeholder)
 	d.optional("timeout", &out.Timeout)
 	d.optional("authCodeFor", &out.AuthCodeFor)
+	d.optional("loginPromptFor", &out.LoginPromptFor)
+	d.optional("allowEmpty", &out.AllowEmpty)
 	d.optional("secret", &out.Secret)
 	if d.err != nil {
 		return d.err

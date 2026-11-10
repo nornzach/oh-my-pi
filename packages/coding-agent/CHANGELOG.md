@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- RPC hosts can show an API-key prompt while its sign-in page dialog is up: login prompts asked after an `open_url` now name it with `loginPromptFor` and report `allowEmpty` ([gui#48](https://github.com/nornzach/oh-my-pi-gui/issues/48)).
 - Fixed plugin catalogs being lost or coming back when added or removed during a background catalog refresh
 - Fixed every omp session downloading stale plugin catalogs at the same time
 - An `omp stats` dashboard started by the GUI no longer keeps running after the app crashes or is force-quit

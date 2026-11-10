@@ -187,6 +187,11 @@ export const frameDefs = {
 			"string",
 			"Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in.",
 		),
+		"loginPromptFor?": doc(
+			"string",
+			"Set on any other login prompt asked after an authorization URL, such as an API key: the id of that `open_url` request. The login waits for this answer, so a host must show the prompt while the `open_url` is still up.",
+		),
+		"allowEmpty?": doc("boolean", "Set on a login prompt whose answer may be left blank."),
 		"secret?": "boolean",
 	},
 	EditorUiRequest: {

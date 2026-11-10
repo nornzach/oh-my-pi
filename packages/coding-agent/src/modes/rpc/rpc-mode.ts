@@ -1379,6 +1379,7 @@ export function requestRpcInput(
 	title: string,
 	placeholder?: string,
 	dialogOptions?: ExtensionUIDialogOptions,
+	loginFields?: Pick<Extract<RpcExtensionUIRequest, { method: "input" }>, "loginPromptFor" | "allowEmpty">,
 ): Promise<string | undefined> {
 	return requestRpcDialog(
 		pendingRequests,
@@ -1391,6 +1392,7 @@ export function requestRpcInput(
 			placeholder,
 			timeout: dialogOptions?.timeout,
 			...(dialogOptions?.secret !== undefined ? { secret: dialogOptions.secret } : {}),
+			...loginFields,
 		},
 		response => parseValueDialogResponse(response, dialogOptions),
 	);
@@ -4435,7 +4437,19 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 										"which is not supported in RPC mode. Use the terminal UI to log in.",
 								);
 							}
-							const value = await uiCtx.input(prompt.message, prompt.placeholder, dialogOptions);
+							// Once its URL is up, only this answer moves the login on. Naming the
+							// URL lets a host show both together, not one behind the other.
+							const value = await requestRpcInput(
+								pendingExtensionRequests,
+								output,
+								prompt.message,
+								prompt.placeholder,
+								dialogOptions,
+								{
+									...(authUrlId ? { loginPromptFor: authUrlId } : {}),
+									...(prompt.allowEmpty ? { allowEmpty: true } : {}),
+								},
+							);
 							if (value === undefined) throw promptClosed();
 							return value;
 						},

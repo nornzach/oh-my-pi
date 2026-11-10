@@ -302,6 +302,12 @@ request, so a host can show the field inside that dialog instead of as a second
 one. omp closes the prompt with a `cancel` request once the browser callback
 signs in.
 
+Any other prompt a login asks after its authorization URL, such as an API key,
+carries `loginPromptFor`, the id of that `open_url` request, plus
+`allowEmpty: true` when a blank answer is valid. The page only helps the user
+find the answer and the login waits for it, so a host must show the prompt
+while the `open_url` is still up, for example inside that dialog.
+
 `mcp_reauth` follows the same rules. Answering its `open_url` with
 `cancelled: true` cancels the reauthorization, which resolves
 `{ ok: false, error: "cancelled" }`; its pasted-code prompt carries

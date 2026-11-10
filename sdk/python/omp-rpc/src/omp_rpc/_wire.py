@@ -1591,6 +1591,10 @@ class InputUiRequest:
     timeout: int | None = None
     auth_code_for: str | None = None
     """Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in."""
+    login_prompt_for: str | None = None
+    """Set on any other login prompt asked after an authorization URL, such as an API key: the id of that `open_url` request. The login waits for this answer, so a host must show the prompt while the `open_url` is still up."""
+    allow_empty: bool | None = None
+    """Set on a login prompt whose answer may be left blank."""
     secret: bool | None = None
 
 
@@ -1692,6 +1696,10 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     placeholder: str | None = None
     auth_code_for: str | None = None
     """Set on a pasted OAuth authorization-code prompt: the id of its `open_url` request. omp closes the prompt once the browser callback signs in."""
+    login_prompt_for: str | None = None
+    """Set on any other login prompt asked after an authorization URL, such as an API key: the id of that `open_url` request. The login waits for this answer, so a host must show the prompt while the `open_url` is still up."""
+    allow_empty: bool | None = None
+    """Set on a login prompt whose answer may be left blank."""
     secret: bool | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
@@ -3126,6 +3134,8 @@ def parse_input_ui_request(value: object, path: str = "InputUiRequest") -> Input
         placeholder=optional(payload, "placeholder", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
         auth_code_for=optional(payload, "authCodeFor", decode_str, path),
+        login_prompt_for=optional(payload, "loginPromptFor", decode_str, path),
+        allow_empty=optional(payload, "allowEmpty", decode_bool, path),
         secret=optional(payload, "secret", decode_bool, path),
     )
 
@@ -3242,6 +3252,8 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         message=optional(payload, "message", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         auth_code_for=optional(payload, "authCodeFor", decode_str, path),
+        login_prompt_for=optional(payload, "loginPromptFor", decode_str, path),
+        allow_empty=optional(payload, "allowEmpty", decode_bool, path),
         secret=optional(payload, "secret", decode_bool, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
