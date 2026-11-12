@@ -4,6 +4,7 @@
 
 ### Added
 
+- RPC `set_api_key` signs in a provider with an API key the host collected itself, including providers whose login asks for a secret and so cannot complete over `login`; `get_providers` reports which providers take one (`apiKeyLogin`)
 - RPC hosts can show the `ask` tool's whole HTML form as one dialog: `set_ask_dialog` with `form: true` sends a single `form` request instead of one prompt per field.
 - RPC `discover_provider_models` lists the models an endpoint offers for a provider being configured, without saving anything ([gui#40](https://github.com/nornzach/oh-my-pi-gui/issues/40)).
 - RPC hosts can send a `/btw` answer's steering prompt to the main session with `btw_inject`: with `btw.inject` on, RPC side questions ask for the `<inject>` block, and `btw_record` frames and `get_btw_history` report whether it is `ready`, `sending` or `sent`

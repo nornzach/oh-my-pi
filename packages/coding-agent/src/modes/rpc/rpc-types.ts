@@ -333,6 +333,7 @@ export type RpcCommand =
 	// Login
 	| { id?: string; type: "get_login_providers" }
 	| { id?: string; type: "login"; providerId: string }
+	| { id?: string; type: "set_api_key"; providerId: string; apiKey: string }
 	| { id?: string; type: "get_logout_accounts"; providerId: string }
 	| { id?: string; type: "logout"; providerId: string; credentialId: number }
 
@@ -1382,6 +1383,8 @@ export interface RpcProviderInfo {
 	account?: string;
 	/** True when the provider has a registered interactive credential flow. */
 	loginAvailable: boolean;
+	/** True when `set_api_key` can sign the provider in: it also reads an API key from the environment. */
+	apiKeyLogin?: boolean;
 	/** True when the provider is disabled in settings. */
 	disabled: boolean;
 	/** Base URL override, when configured. */
@@ -3738,6 +3741,13 @@ export type RpcResponse =
 			id?: string;
 			type: "response";
 			command: "login";
+			success: true;
+			data: { providerId: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_api_key";
 			success: true;
 			data: { providerId: string };
 	  }

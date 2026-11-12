@@ -8354,6 +8354,25 @@ func (v *LoginResult) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type SetApiKeyResult struct {
+	ProviderID string `json:"providerId"`
+}
+
+func (v *SetApiKeyResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SetApiKeyResult", v.decodeFrom)
+}
+
+func (v *SetApiKeyResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SetApiKeyResult
+	d := fieldDecoder{raw: raw, owner: "SetApiKeyResult"}
+	d.required("providerId", &out.ProviderID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type GetLogoutAccountsResult struct {
 	Accounts []LogoutAccount `json:"accounts"`
 }
@@ -9212,6 +9231,19 @@ type LoginCommand struct {
 func (c Commands) Login(ctx context.Context, p LoginCommand) (string, error) {
 	var out LoginResult
 	err := c.call(ctx, "login", p, 600*time.Second, &out)
+	return out.ProviderID, err
+}
+
+// SetAPIKeyCommand holds the parameters of "set_api_key".
+type SetAPIKeyCommand struct {
+	ProviderID string `json:"providerId"`
+	APIKey     string `json:"apiKey"`
+}
+
+// SetAPIKey sends "set_api_key": Store an API key the host collected itself as the provider's login credential, without running its login flow. Works for providers whose login asks for a secret, which `login` refuses over RPC.
+func (c Commands) SetAPIKey(ctx context.Context, p SetAPIKeyCommand) (string, error) {
+	var out SetApiKeyResult
+	err := c.call(ctx, "set_api_key", p, 0, &out)
 	return out.ProviderID, err
 }
 

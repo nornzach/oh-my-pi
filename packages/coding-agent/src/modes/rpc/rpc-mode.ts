@@ -675,6 +675,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"mcp_action",
 	"mcp_add",
 	"reload_plugins",
+	"set_api_key",
 	"share_session",
 	// Terminal handlers are synchronous up to the PTY call, so backgrounded
 	// keystrokes keep their arrival order and never wait behind a slow command.
@@ -4576,6 +4577,41 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				} finally {
 					loginDone.abort();
 				}
+			}
+
+			case "set_api_key": {
+				// The key is a secret: it is never echoed in an error or a log line.
+				if (typeof command.providerId !== "string" || typeof command.apiKey !== "string") {
+					return error(id, "set_api_key", "providerId and apiKey must be strings");
+				}
+				const apiKey = command.apiKey.trim();
+				if (!apiKey) return error(id, "set_api_key", "apiKey must not be empty");
+				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
+				if (!knownProvider) {
+					return error(id, "set_api_key", `Unknown login provider: ${command.providerId}`);
+				}
+				// Same row a prompted login would store, so logout, discovery and key
+				// resolution treat both the same way.
+				const storeAs = knownProvider.storeCredentialsAs ?? knownProvider.id;
+				await session.modelRegistry.authStorage.credentials.upsert(storeAs, {
+					type: "api_key",
+					key: apiKey,
+					source: "login",
+				});
+				// The key is stored from here on. A model refresh that fails (network,
+				// rate limit) must not report the save as failed: the host would retry
+				// and store the same key a second time.
+				try {
+					await session.modelRegistry.refreshProvider(storeAs, "online");
+					await session.refreshScopedModels();
+				} catch (err: unknown) {
+					logger.warn("set_api_key: model refresh after storing the key failed", {
+						provider: storeAs,
+						error: toError(err).message,
+					});
+				}
+				emitModelCatalogUpdate();
+				return success(id, "set_api_key", { providerId: command.providerId });
 			}
 
 			case "get_logout_accounts": {

@@ -277,6 +277,7 @@ The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messa
 
 - `{ id?, type: "get_login_providers" }`
 - `{ id?, type: "login", providerId: string }`
+- `{ id?, type: "set_api_key", providerId: string, apiKey: string }` → `data: { providerId: string }`
 - `{ id?, type: "get_logout_accounts", providerId: string }` → `data: { accounts: LogoutAccount[] }`
 - `{ id?, type: "logout", providerId: string, credentialId: number }` → `data: { remainingSource?: string }`
 
@@ -286,6 +287,12 @@ failed `login` response directing the user to the terminal UI; no ordinary
 `input` request is emitted because RPC does not negotiate whether a host masks
 `secret` inputs. (Extension and tool `input` dialogs may still attach an
 unnegotiated `secret?: boolean` hint on `extension_ui_request`; see below.)
+
+`set_api_key` stores a key the host collected itself under the provider's
+credential, exactly as a prompted login would, then refreshes that provider's
+models. It is the way to sign in a provider whose login asks for a secret, which
+`login` refuses. The key is never echoed in an error response. An empty key or a
+provider with no login fails the command.
 
 Answering a login's `open_url`, or one of its prompts, with `cancelled: true`
 cancels the login: the provider stops waiting for its browser callback, open

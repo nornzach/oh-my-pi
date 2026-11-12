@@ -760,6 +760,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "set_api_key",
+				"doc": "Store an API key the host collected itself as the provider's login credential, without running its login flow. Works for providers whose login asks for a secret, which `login` refuses over RPC.",
+				"params": "SetApiKeyParams",
+				"result": "SetApiKeyResult",
+				"nullable": false,
+				"unwrap": "providerId",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_logout_accounts",
 				"doc": "List the stored credentials `logout` can remove for a provider, active first.",
 				"params": "GetLogoutAccountsParams",
@@ -7681,6 +7692,32 @@
 			]
 		},
 		"LoginResult": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"providerId"
+			]
+		},
+		"SetApiKeyParams": {
+			"type": "object",
+			"properties": {
+				"providerId": {
+					"type": "string"
+				},
+				"apiKey": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"providerId",
+				"apiKey"
+			]
+		},
+		"SetApiKeyResult": {
 			"type": "object",
 			"properties": {
 				"providerId": {

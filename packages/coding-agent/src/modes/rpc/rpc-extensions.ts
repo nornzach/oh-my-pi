@@ -4,6 +4,7 @@
  */
 
 import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
+import { listProvidersWithEnvKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { Settings } from "../../config/settings";
 import { orderedSettings } from "../../config/all-settings";
@@ -149,6 +150,8 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 	const authStorage = session.modelRegistry.authStorage;
 	const loginProviders = getOAuthProviders();
 	const loginIds = new Set(loginProviders.map(provider => provider.id));
+	// A provider that reads an API key from the environment takes one pasted in, too.
+	const apiKeyProviders = new Set(listProvidersWithEnvKey());
 	const loginNameById = new Map(loginProviders.map(provider => [provider.id, provider.name]));
 
 	// Count models per provider from the available catalog.
@@ -177,6 +180,7 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 		const authenticated = authStorage.keys.source(id) !== undefined;
 		const identity = authenticated ? authStorage.oauth.identity(id, session.sessionId) : undefined;
 		const loginAvailable = loginIds.has(id);
+		const apiKeyLogin = loginAvailable && apiKeyProviders.has(id);
 
 		// Determine auth kind.
 		let authKind: RpcProviderInfo["authKind"];
@@ -192,6 +196,7 @@ export function buildRpcProvidersResult(session: AgentSession): { providers: Rpc
 			authKind,
 			account: identity?.email ?? identity?.accountId,
 			loginAvailable,
+			apiKeyLogin,
 			disabled: disabledProviders.has(id),
 			baseUrl: session.modelRegistry.getProviderBaseUrl(id),
 			modelCount: modelCountByProvider.get(id) ?? 0,

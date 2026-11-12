@@ -2044,6 +2044,15 @@ export interface LoginResult {
 	providerId: string;
 }
 
+export interface SetApiKeyParams {
+	providerId: string;
+	apiKey: string;
+}
+
+export interface SetApiKeyResult {
+	providerId: string;
+}
+
 export interface GetLogoutAccountsParams {
 	providerId: string;
 }
@@ -2168,6 +2177,7 @@ export interface RpcWireCommands {
 	get_messages_page: { params: GetMessagesPageParams; result: MessagesPage };
 	get_login_providers: { params: undefined; result: GetLoginProvidersResult };
 	login: { params: LoginParams; result: LoginResult };
+	set_api_key: { params: SetApiKeyParams; result: SetApiKeyResult };
 	get_logout_accounts: { params: GetLogoutAccountsParams; result: GetLogoutAccountsResult };
 	logout: { params: LogoutParams; result: LogoutResult };
 	predict_word: { params: PredictWordParams; result: PredictWordResult };

@@ -1502,6 +1502,16 @@ export class RpcClient {
 		}
 	}
 
+	/**
+	 * Store an API key the host collected itself as the provider's login credential,
+	 * without running its login flow. Works for providers whose login asks for a
+	 * secret, which `login()` refuses over RPC.
+	 */
+	async setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string }> {
+		const response = await this.#send({ type: "set_api_key", providerId, apiKey });
+		return this.#getData<{ providerId: string }>(response);
+	}
+
 	/** List the stored credentials `logout()` can remove for a provider, active first. */
 	async getLogoutAccounts(providerId: string): Promise<LogoutAccount[]> {
 		const response = await this.#send({

@@ -399,6 +399,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		timeoutMs: 600_000,
 	},
 	{
+		name: "set_api_key",
+		doc: "Store an API key the host collected itself as the provider's login credential, without running its login flow. Works for providers whose login asks for a secret, which `login` refuses over RPC.",
+		params: { providerId: "string", apiKey: "string" },
+		result: { providerId: "string" },
+		unwrap: "providerId",
+	},
+	{
 		name: "get_logout_accounts",
 		doc: "List the stored credentials `logout` can remove for a provider, active first.",
 		params: { providerId: "string" },

@@ -5966,6 +5966,20 @@ pub struct LoginResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetApiKeyParams {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetApiKeyResult {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetLogoutAccountsParams {
 	#[serde(rename = "providerId")]
 	pub provider_id: String,
@@ -7781,6 +7795,25 @@ impl Command for LoginCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<LoginResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.provider_id)
+	}
+}
+
+/// Store an API key the host collected itself as the provider's login credential, without running its login flow. Works for providers whose login asks for a secret, which `login` refuses over RPC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetApiKeyCommand {
+	#[serde(rename = "providerId")]
+	pub provider_id: String,
+	#[serde(rename = "apiKey")]
+	pub api_key: String,
+}
+
+impl Command for SetApiKeyCommand {
+	const NAME: &'static str = "set_api_key";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = String;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SetApiKeyResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.provider_id)
 	}
 }
 

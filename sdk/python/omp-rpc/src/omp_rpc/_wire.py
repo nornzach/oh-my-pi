@@ -4117,6 +4117,13 @@ class WireClient:
         params["providerId"] = provider_id
         return required(expect_object(self._command("login", params, timeout=600), "login"), "providerId", decode_str, "login")
 
+    def set_api_key(self, provider_id: str, api_key: str) -> str:
+        """Store an API key the host collected itself as the provider's login credential, without running its login flow. Works for providers whose login asks for a secret, which `login` refuses over RPC."""
+        params: dict[str, object] = {}
+        params["providerId"] = provider_id
+        params["apiKey"] = api_key
+        return required(expect_object(self._command("set_api_key", params), "set_api_key"), "providerId", decode_str, "set_api_key")
+
     def get_logout_accounts(self, provider_id: str) -> tuple[LogoutAccount, ...]:
         """List the stored credentials `logout` can remove for a provider, active first."""
         params: dict[str, object] = {}
