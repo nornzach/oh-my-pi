@@ -43,6 +43,7 @@ describe("buildRpcContextReport", () => {
 			systemToolsTokens: 5_000,
 			systemContextTokens: 1_000,
 			skillsTokens: 2_000,
+			instructionFilesTokens: 1_500,
 			messagesTokens: 32_000,
 		};
 		const session = {
