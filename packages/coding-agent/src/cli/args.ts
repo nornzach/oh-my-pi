@@ -86,6 +86,9 @@ export interface Args {
 	chat?: boolean;
 	noLsp?: boolean;
 	noPty?: boolean;
+	noJudge?: boolean;
+	noSpotlight?: boolean;
+	offline?: boolean;
 	hooks?: string[];
 	extensions?: string[];
 	trustedExtensions?: string[];
@@ -376,6 +379,12 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
+		} else if (arg === "--no-judge") {
+			result.noJudge = true;
+		} else if (arg === "--no-spotlight") {
+			result.noSpotlight = true;
+		} else if (arg === "--offline") {
+			result.offline = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
 		} else if (arg === "--advisor") {

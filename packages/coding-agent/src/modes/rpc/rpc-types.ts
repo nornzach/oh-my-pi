@@ -3943,6 +3943,14 @@ export type RpcExtensionUIRequest =
 			title: string;
 			options: string[];
 			optionDetails?: RpcExtensionUISelectOptionDetail[];
+			/** Index into `options` to focus first. */
+			initialIndex?: number;
+			/** Marker style for the first `markableCount` options. */
+			selectionMarker?: "radio" | "checkbox";
+			/** For `checkbox`: indices into `options` currently checked. */
+			checkedIndices?: number[];
+			/** Leading options that get a marker; trailing ones are actions. */
+			markableCount?: number;
 			timeout?: number;
 	  }
 	| {
