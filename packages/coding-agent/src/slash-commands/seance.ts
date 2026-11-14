@@ -114,7 +114,7 @@ async function resolveSeanceCommandSource(
 	if (!seanceAgent || !isBundledSeance(seanceAgent)) {
 		throw new Error("A custom `seance` agent overrides the bundled one; rename it to use /seance.");
 	}
-	return resolveSeanceSource(selector, { cwd, sessionDirHint, includeGlobal: true });
+	return resolveSeanceSource(selector, { cwd, sessionDirHint });
 }
 
 async function chooseSeanceModel(
@@ -124,12 +124,10 @@ async function chooseSeanceModel(
 	sessionDirHint?: string,
 ): Promise<void> {
 	try {
-		const source = await resolveSeanceCommandSource(
-			ctx.session,
-			ctx.sessionManager.getCwd(),
-			selector,
+		const source = await resolveSeanceSource(selector, {
+			cwd: ctx.sessionManager.getCwd(),
 			sessionDirHint,
-		);
+		});
 		const sourceSession = source.file;
 		if (model !== undefined) {
 			void launchSeance(ctx, sourceSession, model);
