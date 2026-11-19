@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Desktop hosts can show and cancel a background handoff independently of the active reply and distinguish queued jobs in process cards. ([#1](https://github.com/nornzach/oh-my-pi/pull/1) by [@y26s4824k264](https://github.com/y26s4824k264))
+- Desktop hosts can select Ultrafast for supported models. ([#1](https://github.com/nornzach/oh-my-pi/pull/1) by [@y26s4824k264](https://github.com/y26s4824k264))
+
 ### Fixed
 
 - RPC hosts can remove a global settings override again, restoring the value from the remaining configuration layers.
