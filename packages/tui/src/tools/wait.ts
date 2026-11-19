@@ -52,6 +52,8 @@ export interface JobSnapshot {
 	id: string;
 	type: "bash" | "task" | "eval";
 	status: "running" | "completed" | "failed" | "cancelled";
+	/** True while a scheduled job is waiting for an execution slot. */
+	queued?: boolean;
 	label: string;
 	/** What the job is for, in the model's words (a process job's `label` is its command line). */
 	intent?: string;

@@ -3108,6 +3108,8 @@ pub struct SessionState {
 	pub is_streaming: bool,
 	#[serde(rename = "isCompacting", default = "default_session_state_is_compacting")]
 	pub is_compacting: bool,
+	#[serde(rename = "isBackgroundCompacting", default = "default_session_state_is_background_compacting")]
+	pub is_background_compacting: bool,
 	#[serde(rename = "steeringMode", default = "default_session_state_steering_mode")]
 	pub steering_mode: QueueMode,
 	#[serde(rename = "followUpMode", default = "default_session_state_follow_up_mode")]
@@ -3124,6 +3126,8 @@ pub struct SessionState {
 	pub fast_mode_enabled: bool,
 	#[serde(rename = "fastModeActive", default = "default_session_state_fast_mode_active")]
 	pub fast_mode_active: bool,
+	#[serde(rename = "fastModeUltrafast", default = "default_session_state_fast_mode_ultrafast")]
+	pub fast_mode_ultrafast: bool,
 	/// `/slow` applies to the active model.
 	#[serde(rename = "slowModeSupported", default = "default_session_state_slow_mode_supported")]
 	pub slow_mode_supported: bool,
@@ -3237,6 +3241,8 @@ pub struct LineRange {
 pub struct FastModeResult {
 	pub enabled: bool,
 	pub active: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ultrafast: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5613,6 +5619,8 @@ pub struct OpenSessionParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetFastModeParams {
 	pub enabled: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ultrafast: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -6480,6 +6488,24 @@ impl DictationStateEventState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelectUiRequestSelectionMarker {
+	#[serde(rename = "radio")]
+	Radio,
+	#[serde(rename = "checkbox")]
+	Checkbox,
+}
+
+impl SelectUiRequestSelectionMarker {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Radio => "radio",
+			Self::Checkbox => "checkbox",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FormSpanStyle {
 	#[serde(rename = "code")]
 	Code,
@@ -6496,24 +6522,6 @@ impl FormSpanStyle {
 			Self::Code => "code",
 			Self::Strong => "strong",
 			Self::Em => "em",
-		}
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SelectUiRequestSelectionMarker {
-	#[serde(rename = "radio")]
-	Radio,
-	#[serde(rename = "checkbox")]
-	Checkbox,
-}
-
-impl SelectUiRequestSelectionMarker {
-	/// Wire value.
-	pub fn as_str(self) -> &'static str {
-		match self {
-			Self::Radio => "radio",
-			Self::Checkbox => "checkbox",
 		}
 	}
 }
@@ -6602,6 +6610,10 @@ fn default_session_state_is_compacting() -> bool {
 	serde_json::from_str("false").expect("valid wire default")
 }
 
+fn default_session_state_is_background_compacting() -> bool {
+	serde_json::from_str("false").expect("valid wire default")
+}
+
 fn default_session_state_steering_mode() -> QueueMode {
 	serde_json::from_str("\"one-at-a-time\"").expect("valid wire default")
 }
@@ -6623,6 +6635,10 @@ fn default_session_state_fast_mode_enabled() -> bool {
 }
 
 fn default_session_state_fast_mode_active() -> bool {
+	serde_json::from_str("false").expect("valid wire default")
+}
+
+fn default_session_state_fast_mode_ultrafast() -> bool {
 	serde_json::from_str("false").expect("valid wire default")
 }
 
@@ -6819,6 +6835,21 @@ impl Command for AbortCommand {
 	}
 }
 
+/// Cancel context compaction while leaving the current turn running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AbortCompactionCommand {}
+
+impl Command for AbortCompactionCommand {
+	const NAME: &'static str = "abort_compaction";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = ();
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		let _ = data;
+		Ok(())
+	}
+}
+
 /// Abort the current run and submit a prompt; completed by its `prompt_result`.
 ///
 /// The returned value is only the acknowledgement: the work completes with a
@@ -6908,10 +6939,12 @@ impl Command for GetStateCommand {
 	}
 }
 
-/// Enable or disable fast mode for the session.
+/// Set Fast or, when the model supports it, Ultrafast serving for the session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetFastModeCommand {
 	pub enabled: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ultrafast: Option<bool>,
 }
 
 impl Command for SetFastModeCommand {

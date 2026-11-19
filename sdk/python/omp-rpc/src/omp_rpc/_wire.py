@@ -653,6 +653,7 @@ class SessionState:
     thinking_level: ThinkingLevel | None = None
     is_streaming: bool = False
     is_compacting: bool = False
+    is_background_compacting: bool = False
     steering_mode: QueueMode = "one-at-a-time"
     follow_up_mode: QueueMode = "one-at-a-time"
     interrupt_mode: InterruptMode = "immediate"
@@ -661,6 +662,7 @@ class SessionState:
     auto_compaction_enabled: bool = False
     fast_mode_enabled: bool = False
     fast_mode_active: bool = False
+    fast_mode_ultrafast: bool = False
     slow_mode_supported: bool = False
     """`/slow` applies to the active model."""
     slow_mode_enabled: bool = False
@@ -739,6 +741,7 @@ class LineRange:
 class FastModeResult:
     enabled: bool
     active: bool
+    ultrafast: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2246,6 +2249,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         is_streaming=defaulted(payload, "isStreaming", decode_bool, path, False),
         is_compacting=defaulted(payload, "isCompacting", decode_bool, path, False),
+        is_background_compacting=defaulted(payload, "isBackgroundCompacting", decode_bool, path, False),
         steering_mode=defaulted(payload, "steeringMode", _decode_queue_mode, path, "one-at-a-time"),
         follow_up_mode=defaulted(payload, "followUpMode", _decode_queue_mode, path, "one-at-a-time"),
         interrupt_mode=defaulted(payload, "interruptMode", _decode_interrupt_mode, path, "immediate"),
@@ -2254,6 +2258,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         auto_compaction_enabled=defaulted(payload, "autoCompactionEnabled", decode_bool, path, False),
         fast_mode_enabled=defaulted(payload, "fastModeEnabled", decode_bool, path, False),
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
+        fast_mode_ultrafast=defaulted(payload, "fastModeUltrafast", decode_bool, path, False),
         slow_mode_supported=defaulted(payload, "slowModeSupported", decode_bool, path, False),
         slow_mode_enabled=defaulted(payload, "slowModeEnabled", decode_bool, path, False),
         slow_mode_scope=optional(payload, "slowModeScope", _decode_slow_mode_scope, path),
@@ -2322,6 +2327,7 @@ def parse_fast_mode_result(value: object, path: str = "FastModeResult") -> FastM
     return FastModeResult(
         enabled=required(payload, "enabled", decode_bool, path),
         active=required(payload, "active", decode_bool, path),
+        ultrafast=optional(payload, "ultrafast", decode_bool, path),
     )
 
 
@@ -3790,6 +3796,11 @@ class WireClient:
         params: dict[str, object] = {}
         self._command("abort", params)
 
+    def abort_compaction(self) -> None:
+        """Cancel context compaction while leaving the current turn running."""
+        params: dict[str, object] = {}
+        self._command("abort_compaction", params)
+
     def abort_and_restore_queue(self) -> AbortAndRestoreQueueResult:
         """Withdraw queued user input, then abort the current run; returns the withdrawn input."""
         params: dict[str, object] = {}
@@ -3817,10 +3828,12 @@ class WireClient:
         params: dict[str, object] = {}
         return parse_session_state(self._command("get_state", params), "get_state")
 
-    def set_fast_mode(self, enabled: bool) -> FastModeResult:
-        """Enable or disable fast mode for the session."""
+    def set_fast_mode(self, *, enabled: bool, ultrafast: bool | None = None) -> FastModeResult:
+        """Set Fast or, when the model supports it, Ultrafast serving for the session."""
         params: dict[str, object] = {}
         params["enabled"] = enabled
+        if ultrafast is not None:
+            params["ultrafast"] = ultrafast
         return parse_fast_mode_result(self._command("set_fast_mode", params), "set_fast_mode")
 
     def set_slow_mode(self, enabled: bool) -> bool:

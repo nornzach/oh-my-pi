@@ -106,6 +106,7 @@ export const stateDefs = {
 		"thinkingLevel?": "ThinkingLevel",
 		isStreaming: absentAs("boolean", false),
 		isCompacting: absentAs("boolean", false),
+		isBackgroundCompacting: absentAs("boolean", false),
 		steeringMode: absentAs("QueueMode", "one-at-a-time"),
 		followUpMode: absentAs("QueueMode", "one-at-a-time"),
 		interruptMode: absentAs("InterruptMode", "immediate"),
@@ -115,6 +116,7 @@ export const stateDefs = {
 		autoCompactionEnabled: absentAs("boolean", false),
 		fastModeEnabled: absentAs("boolean", false),
 		fastModeActive: absentAs("boolean", false),
+		fastModeUltrafast: absentAs("boolean", false),
 		slowModeSupported: absentAs(doc("boolean", "`/slow` applies to the active model."), false),
 		slowModeEnabled: absentAs(
 			doc("boolean", "`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`."),
@@ -201,7 +203,7 @@ export const stateDefs = {
 		),
 	},
 	LineRange: { first: "number.integer", last: "number.integer" },
-	FastModeResult: { enabled: "boolean", active: "boolean" },
+	FastModeResult: { enabled: "boolean", active: "boolean", "ultrafast?": "boolean" },
 	CompactionResult: {
 		summary: "string",
 		"shortSummary?": "string",

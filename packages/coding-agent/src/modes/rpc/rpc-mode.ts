@@ -691,6 +691,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 	"tui_open",
 	"terminal_snapshot",
 	"abort_branch_summary",
+	"abort_compaction",
 ]);
 
 /**
@@ -2828,6 +2829,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				return success(id, "abort");
 			}
 
+			case "abort_compaction": {
+				session.abortCompaction(USER_INTERRUPT_LABEL);
+				return success(id, "abort_compaction");
+			}
+
 			case "abort_and_restore_queue": {
 				// Mirrors the TUI Esc restore: withdraw queued user input (including input the run
 				// dequeued but never recorded) before aborting, so neither the aborted turn nor
@@ -3037,6 +3043,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					availableThinkingLevels: [...session.getAvailableThinkingLevels()],
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
+					isBackgroundCompacting: session.isBackgroundCompacting,
 					steeringMode: session.steeringMode,
 					followUpMode: session.followUpMode,
 					interruptMode: session.interruptMode,
@@ -3059,6 +3066,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
 					fastModeActive: session.isFastModeActive(),
+					fastModeUltrafast: session.isUltrafastModeEnabled(),
 					slowModeSupported: session.isSlowModeSupported(),
 					slowModeEnabled: session.isSlowModeEnabled(),
 					slowModeScope: session.getSlowModeScope(),
@@ -3083,13 +3091,27 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "set_fast_mode": {
-				const supported = session.setFastMode(command.enabled);
+				if (
+					typeof command.enabled !== "boolean" ||
+					(command.ultrafast !== undefined && typeof command.ultrafast !== "boolean") ||
+					(command.ultrafast && !command.enabled)
+				) {
+					return error(id, "set_fast_mode", "Ultrafast requires an enabled fast mode.");
+				}
+				const supported = command.ultrafast ? session.setUltrafastMode(true) : session.setFastMode(command.enabled);
 				if (command.enabled && !supported) {
-					return error(id, "set_fast_mode", "Fast mode is unavailable for the current model.");
+					return error(
+						id,
+						"set_fast_mode",
+						command.ultrafast
+							? "Ultrafast is unavailable for the current model."
+							: "Fast mode is unavailable for the current model.",
+					);
 				}
 				return success(id, "set_fast_mode", {
 					enabled: session.isFastModeEnabled(),
 					active: session.isFastModeActive(),
+					ultrafast: session.isUltrafastModeEnabled(),
 				});
 			}
 

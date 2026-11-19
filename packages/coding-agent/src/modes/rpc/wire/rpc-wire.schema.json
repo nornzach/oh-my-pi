@@ -87,6 +87,17 @@
 				"clientOmit": []
 			},
 			{
+				"name": "abort_compaction",
+				"doc": "Cancel context compaction while leaving the current turn running.",
+				"params": null,
+				"result": null,
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "abort_and_prompt",
 				"doc": "Abort the current run and submit a prompt; completed by its `prompt_result`.",
 				"params": "AbortAndPromptParams",
@@ -143,7 +154,7 @@
 			},
 			{
 				"name": "set_fast_mode",
-				"doc": "Enable or disable fast mode for the session.",
+				"doc": "Set Fast or, when the model supports it, Ultrafast serving for the session.",
 				"params": "SetFastModeParams",
 				"result": "FastModeResult",
 				"nullable": false,
@@ -2668,6 +2679,10 @@
 					"type": "boolean",
 					"default": false
 				},
+				"isBackgroundCompacting": {
+					"type": "boolean",
+					"default": false
+				},
 				"steeringMode": {
 					"$ref": "#/$defs/QueueMode",
 					"default": "one-at-a-time"
@@ -2695,6 +2710,10 @@
 					"default": false
 				},
 				"fastModeActive": {
+					"type": "boolean",
+					"default": false
+				},
+				"fastModeUltrafast": {
 					"type": "boolean",
 					"default": false
 				},
@@ -2935,6 +2954,9 @@
 					"type": "boolean"
 				},
 				"active": {
+					"type": "boolean"
+				},
+				"ultrafast": {
 					"type": "boolean"
 				}
 			},
@@ -6907,6 +6929,9 @@
 			"type": "object",
 			"properties": {
 				"enabled": {
+					"type": "boolean"
+				},
+				"ultrafast": {
 					"type": "boolean"
 				}
 			},

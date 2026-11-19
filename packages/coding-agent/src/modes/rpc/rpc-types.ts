@@ -106,6 +106,7 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "promote_queued_message"; message: string }
 	| { id?: string; type: "abort" }
+	| { id?: string; type: "abort_compaction" }
 	| {
 			id?: string;
 			type: "abort_and_prompt";
@@ -125,7 +126,7 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
-	| { id?: string; type: "set_fast_mode"; enabled: boolean }
+	| { id?: string; type: "set_fast_mode"; enabled: boolean; ultrafast?: boolean }
 	| { id?: string; type: "set_slow_mode"; enabled: boolean }
 	| {
 			id?: string;
@@ -724,6 +725,8 @@ export interface RpcSessionState {
 	availableThinkingLevels?: ThinkingLevel[];
 	isStreaming: boolean;
 	isCompacting: boolean;
+	/** Manual compaction that prepares without blocking the current turn. */
+	isBackgroundCompacting?: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
 	interruptMode: "immediate" | "wait";
@@ -735,6 +738,7 @@ export interface RpcSessionState {
 	autoRetryEnabled: boolean;
 	fastModeEnabled: boolean;
 	fastModeActive: boolean;
+	fastModeUltrafast: boolean;
 	/** `/slow` applies to the active model (flex tier on OpenAI/Google, low priority on Claude subscriptions). */
 	slowModeSupported: boolean;
 	/** `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`. */
@@ -2441,7 +2445,7 @@ export type RpcResponse =
 			type: "response";
 			command: "set_fast_mode";
 			success: true;
-			data: { enabled: boolean; active: boolean };
+			data: { enabled: boolean; active: boolean; ultrafast: boolean };
 	  }
 	| {
 			id?: string;
@@ -2818,6 +2822,7 @@ export type RpcResponse =
 	  }
 	| { id?: string; type: "response"; command: "navigate_tree"; success: true; data: RpcNavigateTreeResult }
 	| { id?: string; type: "response"; command: "abort_branch_summary"; success: true }
+	| { id?: string; type: "response"; command: "abort_compaction"; success: true }
 	| { id?: string; type: "response"; command: "set_label"; success: true }
 	| {
 			id?: string;

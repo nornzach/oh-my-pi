@@ -495,6 +495,7 @@ export interface SessionState {
 	thinkingLevel?: ThinkingLevel;
 	isStreaming?: boolean;
 	isCompacting?: boolean;
+	isBackgroundCompacting?: boolean;
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	interruptMode?: InterruptMode;
@@ -503,6 +504,7 @@ export interface SessionState {
 	autoCompactionEnabled?: boolean;
 	fastModeEnabled?: boolean;
 	fastModeActive?: boolean;
+	fastModeUltrafast?: boolean;
 	/** `/slow` applies to the active model. */
 	slowModeSupported?: boolean;
 	/** `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`. */
@@ -577,6 +579,7 @@ export interface LineRange {
 export interface FastModeResult {
 	enabled: boolean;
 	active: boolean;
+	ultrafast?: boolean;
 }
 
 export interface CompactionResult {
@@ -1779,6 +1782,7 @@ export interface OpenSessionParams {
 
 export interface SetFastModeParams {
 	enabled: boolean;
+	ultrafast?: boolean;
 }
 
 export interface SetSlowModeParams {
@@ -2138,6 +2142,7 @@ export interface RpcWireCommands {
 	remove_queued_message: { params: RemoveQueuedMessageParams; result: RemoveQueuedMessageResult };
 	promote_queued_message: { params: PromoteQueuedMessageParams; result: PromoteQueuedMessageResult };
 	abort: { params: undefined; result: undefined };
+	abort_compaction: { params: undefined; result: undefined };
 	abort_and_prompt: { params: AbortAndPromptParams; result: undefined };
 	abort_and_restore_queue: { params: undefined; result: AbortAndRestoreQueueResult };
 	new_session: { params: NewSessionParams; result: CancellationResult };

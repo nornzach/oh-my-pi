@@ -155,6 +155,7 @@ interface TrackedJobLike {
 	id: string;
 	type: AsyncJobType;
 	status: string;
+	queued?: boolean;
 	label: string;
 	/** See {@link AsyncJob.intent}. */
 	intent?: string;
@@ -225,6 +226,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 			id: latest.id,
 			type: latest.type,
 			status: latest.status as JobSnapshot["status"],
+			...(running && latest.queued ? { queued: true } : {}),
 			label: latest.label,
 			...(latest.intent ? { intent: latest.intent } : {}),
 			durationMs: Math.max(0, (latest.endTime ?? now) - latest.startTime),
