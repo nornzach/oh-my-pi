@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { AgentProgress } from "../../task/task-details";
 import type { AgentHistorySummary } from "../../registry/agent-registry";
-import { readPersistedAgentHistory } from "../../registry/persisted-agents";
+import { readPersistedAgentHistory } from "../../registry/persisted-scan";
 import { readSessionTitle } from "../../session/session-loader";
 import type { RpcSubagentSnapshot } from "./rpc-types";
 

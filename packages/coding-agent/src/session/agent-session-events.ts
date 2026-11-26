@@ -118,7 +118,18 @@ export type AgentSessionEvent =
 	 * get_queue; advisor cards and internal steers are deliberately absent (same
 	 * filter as get_queue).
 	 */
-	| { type: "queue_update"; steering: SessionQueuedMessage[]; followUp: SessionQueuedMessage[] };
+	| {
+			type: "queue_update";
+			steering: SessionQueuedMessage[];
+			followUp: SessionQueuedMessage[];
+			display: QueueDisplaySnapshot;
+	  };
+
+export interface QueueDisplaySnapshot {
+	steering: readonly string[];
+	followUp: readonly string[];
+	liveSteered: number;
+}
 
 /**
  * What can still resume a session's run without user input once its model loop

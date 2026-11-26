@@ -36,6 +36,7 @@ import {
 	untrack,
 	useContext,
 } from "@oh-my-pi/pi-tui";
+import { holdsImage } from "@oh-my-pi/pi-tui/driver/images/anchor";
 import { type Block, defineRolePainter, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
 import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { mountNode, type ViewEntry, ViewList } from "./views";
@@ -416,6 +417,9 @@ export class Transcript {
 /** Mark `block` final: its node, and the nodes Tern receives for it. */
 function settleBlock(block: TranscriptBlock): void {
 	settle(block.node);
+	// A retired block left the transcript: no native nodes to settle (like `buildTree`, never read
+	// a disposed node's children — a list that never resolved before disposal has no value).
+	if (block.node.disposed) return;
 	for (const node of block.native()) settle(node);
 }
 
@@ -428,9 +432,12 @@ function buildTree(node: UiNode): void {
 /** SGR that fills a cell without text: a background color, or inverse video. */
 const FILLED_ROW = /\x1b\[(?:[0-9:]*;)*(?:48[;:]|7[;m])/;
 
-/** A row with nothing on it: no text and no fill (the padding rows of a bubble or an inverse notice box are not blank). */
+/**
+ * A row with nothing on it: no text, no fill (the padding rows of a bubble or an inverse notice box
+ * are not blank) and no image.
+ */
 function blankRow(row: string): boolean {
-	return stripEscapes(row).trim() === "" && !FILLED_ROW.test(row);
+	return stripEscapes(row).trim() === "" && !FILLED_ROW.test(row) && !holdsImage(row);
 }
 
 /**

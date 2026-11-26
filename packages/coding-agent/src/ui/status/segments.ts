@@ -3,14 +3,16 @@
  * native spans, icon and tone, plus its terminal look ({@link SegLook}) —
  * or nothing while it has nothing to show.
  */
-import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
-import { presetSymbols } from "@oh-my-pi/pi-tui/theme/symbols";
-import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { pathToFileURL } from "node:url";
+import type { SymbolSet } from "@oh-my-pi/pi-tui/theme/contract";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { StatusLineSegmentId } from "../../config/status-line-schema";
 import { STATUS_LINE_PRESETS } from "../../modes/view-model/status-line/presets";
 import type { StatusLineSegmentOptions, StatusLineSettings } from "../../modes/view-model/status-line/types";
 import { sanitizeStatusText } from "../../modes/view-model/chrome/shared";
+import { truncateToWidth } from "../../utils/text-width";
 import type { StatusFacts } from "./facts";
 import {
 	billingSummary,
@@ -69,14 +71,10 @@ interface SegInput {
 	readonly compactThinking: boolean;
 	/** Seed of the session accent; undefined when it is off or the session is unnamed. */
 	readonly accent: string | undefined;
-	/** The active symbol preset is the Nerd Font one. */
-	readonly nerd: boolean;
+	readonly symbols: SymbolSet;
 }
 
-/** Glyphs native spans embed, from the active preset (a native terminal draws their Nerd Font runs as `icon` spans). */
-const UNICODE = presetSymbols("unicode");
-const NERD = presetSymbols("nerd");
-const glyph = (input: SegInput, key: string): string => (input.nerd ? NERD : UNICODE)[key] ?? "";
+const glyph = (input: SegInput, key: string): string => input.symbols.symbol(key);
 
 const span = (t: string, s?: string): TspSpan => (s ? { t, s } : { t });
 
@@ -126,9 +124,22 @@ function thinkingPieces(facts: StatusFacts, s: string): [] | [IconPiece, ...Text
 	return [{ icon: `thinking.${level}`, else: level, s, space: "none" }];
 }
 
-function modelName(facts: StatusFacts): string {
-	const name = facts.model?.name || facts.model?.id || "no-model";
-	return name.startsWith("Claude ") ? name.slice(7) : name;
+/**
+ * `id` and `full` show the selector instead of the display name; `showProvider` prefixes the provider;
+ * `maxLength` cuts the end with `…`.
+ */
+function modelLabel(facts: StatusFacts, options: StatusLineSegmentOptions["model"] = {}): string {
+	const model = facts.model;
+	const id = model?.id || "no-model";
+	const raw = model?.name || id;
+	const name = raw.startsWith("Claude ") ? raw.slice(7) : raw;
+	let label = name;
+	if (options.display === "id") label = id;
+	else if (options.display === "full") label = name !== id ? `${id} (${name})` : id;
+	if (options.showProvider && model?.provider) label = `${model.provider}/${label}`;
+	// Ids and providers can come from custom configs; keep the bar on one row.
+	label = sanitizeStatusText(label);
+	return options.maxLength !== undefined ? truncateToWidth(label, options.maxLength) : label;
 }
 
 const ADVISOR_COLORS = { error: "error", quota_exhausted: "warning", running: "success", idle: "dim" } as const;
@@ -147,6 +158,7 @@ function piSeg(input: SegInput): SegView {
 			"warning",
 		);
 	}
+	const profile = input.options.pi?.showProfile !== false && facts.profile ? sanitizeStatusText(facts.profile) : "";
 	const working = facts.turnStartedAt !== undefined;
 	const piece: LookPiece = {
 		brand: working ? facts.turnStartedAt! : null,
@@ -155,9 +167,9 @@ function piSeg(input: SegInput): SegView {
 			? { fadeFrom: working ? "dim" : lookAccent(input, "accent"), fadeAt: facts.brandEdgeAt }
 			: {}),
 		...(facts.awaitingAnswer ? { awaiting: true } : {}),
-		...(facts.profile ? { profile: facts.profile } : {}),
+		...(profile ? { profile } : {}),
 	};
-	return view(input, facts.profile ? [span(facts.profile, "muted")] : [], [piece], "omp", "muted");
+	return view(input, profile ? [span(profile, "muted")] : [], [piece], "omp", "muted");
 }
 
 function statusSeg(input: SegInput): SegView | null {
@@ -175,7 +187,7 @@ function statusSeg(input: SegInput): SegView | null {
 
 function modelSeg(input: SegInput): SegView {
 	const { facts } = input;
-	const name = modelName(facts);
+	const name = modelLabel(facts, input.options.model);
 	const native = nativeAccent(input, "statusLineModel");
 	const look = lookAccent(input, "statusLineModel");
 	const showLevel = input.options.model?.showThinkingLevel !== false;
@@ -440,7 +452,7 @@ function statSeg(input: SegInput, value: number, icon: string, color: string): S
 }
 
 function costSeg(input: SegInput): SegView | null {
-	const { facts, nerd } = input;
+	const { facts, symbols } = input;
 	const own = Math.max(0, facts.usage.cost - (facts.usage.subagentCost ?? 0));
 	const text = billingSummary(
 		{
@@ -452,12 +464,7 @@ function costSeg(input: SegInput): SegView | null {
 			pricingPeriod: facts.pricingPeriod,
 			advisor: facts.advisorCost,
 		},
-		// A Nerd Font draws the billing glyphs; otherwise their text forms.
-		{
-			nerd,
-			subscription: (nerd ? NERD : UNICODE)["icon.subscription"] ?? "",
-			advisor: (nerd ? NERD : UNICODE)["icon.advisor"] ?? "",
-		},
+		symbols,
 	);
 	if (!text) return null;
 	return view(input, [span(text, "statusLineCost")], [{ t: text, s: "statusLineCost" }]);
@@ -623,29 +630,25 @@ function treeSeg(input: SegInput): SegView | null {
 		...view(
 			input,
 			[span(label, "accent")],
-			[{ icon: "cmd.tree", s: "accent" }, { t: label, s: "accent" }, { t: " " }, { t: "/tree", s: "dim" }],
+			[{ icon: "tree", s: "accent" }, { t: label, s: "accent" }, { t: " " }, { t: "/tree", s: "dim" }],
 			"tree",
 		),
 		title: `Session tree: ${facts.join(", ")}\nOpen /tree to move between branches`,
 	};
 }
 
-/**
- * The view of segment `id`, or null while it shows nothing. `nerd` says
- * whether the active symbol preset is the Nerd Font one (the glyphs native spans embed).
- */
+/** The view of segment `id` in the active theme, or null while it shows nothing. */
 export function segmentView(
 	id: StatusLineSegmentId,
 	facts: StatusFacts,
 	settings: EffectiveStatusSettings,
-	nerd = false,
 ): SegView | null {
 	const input: SegInput = {
 		facts,
 		options: settings.segmentOptions,
 		compactThinking: settings.compactThinkingLevel ?? false,
 		accent: settings.sessionAccent !== false ? facts.sessionName || undefined : undefined,
-		nerd,
+		symbols: currentTheme().symbols,
 	};
 	const usage = facts.usage;
 	switch (id) {
