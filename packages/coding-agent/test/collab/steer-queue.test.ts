@@ -16,6 +16,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { RpcCollabController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-collab";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { installTestCollabHome, uninstallTestCollabHome } from "./helpers/in-memory-relay";
 
@@ -27,7 +28,7 @@ interface RelayData {
 type RelaySocket = Bun.ServerWebSocket<RelayData>;
 
 /** Single-room relay mirroring the omp-collab-relay forwarding contract. */
-function startTestRelay(): { url: string; stop(): void } {
+function startTestRelay(): { url: string; stop(): void; closeHost(): void } {
 	let host: RelaySocket | null = null;
 	const guests = new Map<number, RelaySocket>();
 	let nextPeerId = 1;
@@ -73,7 +74,14 @@ function startTestRelay(): { url: string; stop(): void } {
 			},
 		},
 	});
-	return { url: `ws://localhost:${server.port}`, stop: () => server.stop(true) };
+	return {
+		url: `ws://localhost:${server.port}`,
+		stop: () => server.stop(true),
+		closeHost: () => {
+			if (!host) throw new Error("Relay has no host connection");
+			host.close(4001, "room closed");
+		},
+	};
 }
 
 interface CapturedPrompt {
@@ -180,6 +188,61 @@ beforeEach(() => {
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 	uninstallTestCollabHome();
+});
+
+function createRpcHost(output: (event: object) => void = () => {}): RpcCollabController {
+	const { ctx } = makeStreamingHostContext();
+	const session = Object.assign(ctx.session, {
+		settings: ctx.settings,
+		sessionManager: ctx.sessionManager,
+		getContextUsage: () => ({ tokens: 250, contextWindow: 1000, percent: 25 }),
+	});
+	const controller = new RpcCollabController({
+		session,
+		output,
+		notify: () => {},
+		select: async () => undefined,
+		edit: async () => undefined,
+	});
+	cleanups.push(() => controller.dispose());
+	return controller;
+}
+
+it("welcomes a read-only guest to an RPC-hosted room with the host's context usage", async () => {
+	const relay = startTestRelay();
+	cleanups.push(relay.stop);
+	const controller = createRpcHost();
+	const room = await controller.start(relay.url);
+	if (!room.viewLink) throw new Error("RPC host did not provide a view link");
+	const guest = await joinAsGuest(room.viewLink, "reader");
+	cleanups.push(() => guest.socket.close());
+	expect(await guest.nextFrame()).toMatchObject({
+		t: "welcome",
+		readOnly: true,
+		state: { contextUsage: { tokens: 250, contextWindow: 1000, percent: 25 } },
+	});
+});
+
+it("publishes the end of an RPC-hosted room and welcomes guests to its replacement", async () => {
+	const relay = startTestRelay();
+	cleanups.push(relay.stop);
+	const ended = Promise.withResolvers<object>();
+	let hosting = false;
+	const controller = createRpcHost(event => {
+		if (!hosting || !("type" in event) || event.type !== "collab_state") return;
+		ended.resolve(event);
+	});
+	const original = await controller.start(relay.url);
+	hosting = true;
+	relay.closeHost();
+	expect(await ended.promise).toMatchObject({ state: { role: null } });
+	expect(controller.state.role).toBeNull();
+	const replacement = await controller.start(relay.url);
+	if (!replacement.viewLink) throw new Error("Replacement room did not provide a view link");
+	expect(replacement.viewLink).not.toBe(original.viewLink);
+	const guest = await joinAsGuest(replacement.viewLink, "reader");
+	cleanups.push(() => guest.socket.close());
+	expect(await guest.nextFrame()).toMatchObject({ t: "welcome", readOnly: true });
 });
 
 describe("collab mid-turn guest prompts", () => {

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- The desktop app can host and join collaboration rooms over RPC again ([#91](https://github.com/nornzach/oh-my-pi-gui/issues/91)).
+- A collaboration room closed by the relay clears its invitation and can be reopened from the desktop app.
 - RPC clients can display highlighted text in extension forms using the generated SDKs.
 - RPC `get_usage` keeps each account's own label and merges duplicate quota reports from different routes without combining separate organizations ([#72](https://github.com/nornzach/oh-my-pi-gui/issues/72)).
 - RPC hosts can remove a global settings override again, restoring the value from the remaining configuration layers.

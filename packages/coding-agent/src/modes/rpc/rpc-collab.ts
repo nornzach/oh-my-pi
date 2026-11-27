@@ -67,7 +67,7 @@ export class RpcCollabController {
 
 	get state(): RpcCollabState {
 		const host = this.#host;
-		if (host) {
+		if (host && !host.ending) {
 			return {
 				role: "host",
 				readOnly: false,
@@ -92,10 +92,15 @@ export class RpcCollabController {
 	async start(relayUrl?: string): Promise<RpcCollabState> {
 		if (!this.isGuest) this.#guest = undefined;
 		if (this.#guest) throw new Error("Leave the current collab session before hosting");
+		if (this.#host?.ending) await this.#retireHost(this.#host);
 		if (this.#host) return this.state;
 		const configured = relayUrl?.trim() || cfgCollabRelayUrl.get(this.#options.session.settings) || "";
 		if (!configured) throw new Error("No relay configured. Set collab.relayUrl or provide a relay URL.");
-		const host = new CollabHost(this.#ctx);
+		const host: CollabHost = new CollabHost(this.#ctx, {
+			onEnded: () => {
+				if (this.#host === host) this.#publishState();
+			},
+		});
 		await host.start(normalizeRelayUrl(configured), cfgCollabWebUrl.get(this.#options.session.settings) || "");
 		this.#host = host;
 		this.#ctx.collabHost = host;
@@ -105,6 +110,7 @@ export class RpcCollabController {
 
 	async join(link: string): Promise<RpcCollabState> {
 		if (!this.isGuest) this.#guest = undefined;
+		if (this.#host?.ending) await this.#retireHost(this.#host);
 		if (this.#host) throw new Error("Stop hosting before joining another collab session");
 		if (this.#guest) return this.state;
 		const trimmed = link.trim();
@@ -163,6 +169,11 @@ export class RpcCollabController {
 		await this.leave();
 	}
 
+	async #retireHost(host: CollabHost): Promise<void> {
+		await host.stop("host stopped");
+		if (this.#host === host) this.#host = undefined;
+	}
+
 	#publishState(restored = false): void {
 		this.#options.output({ type: "collab_state", state: this.state, restored });
 	}
@@ -170,6 +181,7 @@ export class RpcCollabController {
 	#buildContext(): InteractiveModeContext {
 		const { session, eventBus } = this.#options;
 		const clearable = { clear: () => {}, disposeChildren: () => {} };
+		const pendingTools = new Map();
 		let joined: CollabGuestLink | undefined;
 		const context = {
 			session,
@@ -185,8 +197,18 @@ export class RpcCollabController {
 			},
 			statusLine: {
 				setCollabStatus: (_status: CollabStatusSegment | null) => this.#publishState(),
+				facts: () => {
+					const usage = session.getContextUsage();
+					return {
+						context: {
+							tokens: usage?.tokens ?? 0,
+							window: usage?.contextWindow ?? session.model?.contextWindow ?? 0,
+						},
+					};
+				},
 				getCachedContextBreakdown: () => session.getContextBreakdown() ?? {},
 				invalidate: () => {},
+				refresh: () => {},
 				resetActiveTime: () => {},
 				markActivityStart: () => {},
 				markActivityEnd: () => {},
@@ -200,7 +222,10 @@ export class RpcCollabController {
 			pendingMessagesContainer: clearable,
 			pendingShellContainer: clearable,
 			statusContainer: clearable,
-			pendingTools: new Map(),
+			pendingTools,
+			clearTransientSessionUi: () => pendingTools.clear(),
+			clearWorking: () => {},
+			ensureWorkingRow: () => {},
 			compactionQueuedMessages: [],
 			streamingComponent: undefined,
 			streamingMessage: undefined,
