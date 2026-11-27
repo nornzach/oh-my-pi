@@ -6622,6 +6622,8 @@ pub enum FormSpanStyle {
 	Strong,
 	#[serde(rename = "em")]
 	Em,
+	#[serde(rename = "mark")]
+	Mark,
 }
 
 impl FormSpanStyle {
@@ -6631,6 +6633,7 @@ impl FormSpanStyle {
 			Self::Code => "code",
 			Self::Strong => "strong",
 			Self::Em => "em",
+			Self::Mark => "mark",
 		}
 	}
 }

@@ -1696,7 +1696,7 @@ class AskUiRequest:
 class FormSpan:
     """A run of inline text; a newline inside `text` is a hard line break."""
     text: str
-    style: Literal["code", "strong", "em"] | None = None
+    style: Literal["code", "strong", "em", "mark"] | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -3414,7 +3414,7 @@ def parse_form_span(value: object, path: str = "FormSpan") -> FormSpan:
     payload = expect_object(value, path)
     return FormSpan(
         text=required(payload, "text", decode_str, path),
-        style=optional(payload, "style", cast('Decoder[Literal["code", "strong", "em"]]', literal(frozenset({"code", "strong", "em"}))), path),
+        style=optional(payload, "style", cast('Decoder[Literal["code", "strong", "em", "mark"]]', literal(frozenset({"code", "strong", "em", "mark"}))), path),
     )
 
 

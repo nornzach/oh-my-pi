@@ -217,7 +217,7 @@ export const frameDefs = {
 		"Every question of one extension `ui.askDialog` call; sent only after `set_ask_dialog` enables it.",
 	),
 	FormSpan: doc(
-		{ text: "string", "style?": "'code' | 'strong' | 'em'" },
+		{ text: "string", "style?": "'code' | 'strong' | 'em' | 'mark'" },
 		"A run of inline text; a newline inside `text` is a hard line break.",
 	),
 	FormChoiceOption: { value: "string", label: "FormSpan[]", checked: "boolean", disabled: "boolean" },

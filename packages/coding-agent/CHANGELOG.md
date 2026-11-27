@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- RPC clients can display highlighted text in extension forms using the generated SDKs.
 - RPC `get_usage` keeps each account's own label and merges duplicate quota reports from different routes without combining separate organizations ([#72](https://github.com/nornzach/oh-my-pi-gui/issues/72)).
 - RPC hosts can remove a global settings override again, restoring the value from the remaining configuration layers.
 - Custom compiled distributions can include their HTML session viewer so exports open without an upstream-hosted viewer release.

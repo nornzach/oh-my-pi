@@ -1465,7 +1465,7 @@ export interface AskUiRequest {
 /** A run of inline text; a newline inside `text` is a hard line break. */
 export interface FormSpan {
 	text: string;
-	style?: "code" | "strong" | "em";
+	style?: "code" | "strong" | "em" | "mark";
 }
 
 export interface FormChoiceOption {

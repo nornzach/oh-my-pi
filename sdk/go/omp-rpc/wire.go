@@ -6285,6 +6285,7 @@ const (
 	FormSpanStyleCode   FormSpanStyle = "code"
 	FormSpanStyleStrong FormSpanStyle = "strong"
 	FormSpanStyleEm     FormSpanStyle = "em"
+	FormSpanStyleMark   FormSpanStyle = "mark"
 )
 
 func (v *FormSpanStyle) UnmarshalJSON(data []byte) error {
@@ -6293,7 +6294,7 @@ func (v *FormSpanStyle) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch value := FormSpanStyle(s); value {
-	case FormSpanStyleCode, FormSpanStyleStrong, FormSpanStyleEm:
+	case FormSpanStyleCode, FormSpanStyleStrong, FormSpanStyleEm, FormSpanStyleMark:
 		*v = value
 		return nil
 	}
